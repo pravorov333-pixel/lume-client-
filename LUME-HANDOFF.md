@@ -14,6 +14,11 @@
 Build **legit only**: visuals/HUD/QoL/performance/cosmetics + launcher + license keys.
 Do **NOT** build cheats (unfair multiplayer advantage / anti-cheat bypass): KillAura, Reach, AntiKB, Velocity, Hitbox, Timer, Scaffold, ESP/Chams-through-walls, X-Ray, AutoTotem/AutoPot, Freecam, AutoFish, etc. Rendering/design techniques are fine.
 
+## Version control (added 2026-06-28)
+- **Git repo** at `C:\Users\popko\Desktop\claudecode\claudecode` (root), remote **origin = https://github.com/pravorov333-pixel/lume-client-.git**, branch `main`.
+- `.gitignore` uses an **ignore-all-except-Lume** pattern (`/*` then `!/LumeClient`, `!/LumeClient1165`, `!/LumeLauncher`, `!/LUME-HANDOFF.md`) — because the root folder ALSO holds unrelated/PRIVATE files (medical PDFs/xlsx "Pacjentki", onecrypto-cards). **Never `git add -A` carelessly; always check `git status` so private files stay out.** Build artifacts (build/, .gradle/, node_modules/) also ignored.
+- Workflow: after changes → `git add` (Lume paths only) → `git commit` → `git push`. End commit msgs with the Claude co-author line.
+
 ## Locations
 - Mod: `C:\Users\popko\Desktop\claudecode\claudecode\LumeClient`
 - Launcher: `C:\Users\popko\Desktop\claudecode\claudecode\LumeLauncher`
