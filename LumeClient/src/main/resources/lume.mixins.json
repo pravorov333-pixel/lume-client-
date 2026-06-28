@@ -1,0 +1,17 @@
+{
+  "required": true,
+  "package": "com.lume.client.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "GameRendererMixin",
+    "InGameHudMixin",
+    "KeyboardMixin",
+    "MouseMixin",
+    "TextRendererMixin",
+    "TitleScreenMixin",
+    "WorldRendererMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 0
+  }
+}

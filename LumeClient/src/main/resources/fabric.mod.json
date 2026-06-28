@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "lume",
+  "version": "${version}",
+  "name": "Lume Client",
+  "description": "A clean, glass-styled utility client for Minecraft.",
+  "authors": ["Lume"],
+  "license": "ARR",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["com.lume.client.LumeClient"]
+  },
+  "mixins": [
+    "lume.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}

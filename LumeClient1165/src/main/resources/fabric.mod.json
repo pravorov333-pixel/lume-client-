@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "lume1165",
+  "version": "${version}",
+  "name": "Lume Client 1.16.5",
+  "description": "Lume utility client — 1.16.5 build.",
+  "authors": ["Lume"],
+  "license": "ARR",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["com.lume.client1165.LumeClient1165"]
+  },
+  "depends": {
+    "fabricloader": ">=0.14.0",
+    "minecraft": "1.16.x",
+    "java": ">=8",
+    "fabric": "*"
+  }
+}

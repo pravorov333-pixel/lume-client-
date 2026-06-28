@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;" />
+<title>Lume Client</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', system-ui, sans-serif; }
+  :root { --mint:#A99BC7; --blue:#8E7FC0; --ink:#4A4133; --ink2:#8C8170; --ink3:#b0a594; }
+  html, body { height: 100%; }
+  body { background:#F2EBDD; color:var(--ink); overflow:hidden; user-select:none; position:relative; }
+
+  /* slow, softly drifting lavender glow */
+  .bg { position:fixed; inset:0; overflow:hidden; z-index:0; }
+  .blob { position:absolute; border-radius:50%; filter:blur(70px); opacity:.5; }
+  .b1 { width:440px; height:440px; background:#A99BC7; top:-130px; left:-90px; animation:drift1 14s ease-in-out infinite; }
+  .b2 { width:400px; height:400px; background:#8E7FC0; bottom:-150px; right:-70px; animation:drift2 17s ease-in-out infinite; }
+  .b3 { width:320px; height:320px; background:#C9BEE0; top:38%; left:52%; animation:drift3 15s ease-in-out infinite; }
+  @keyframes drift1 { 0%,100%{transform:translate(0,0)} 50%{transform:translate(150px,30px)} }
+  @keyframes drift2 { 0%,100%{transform:translate(0,0)} 50%{transform:translate(-140px,-30px)} }
+  @keyframes drift3 { 0%,100%{transform:translate(0,0)} 50%{transform:translate(-120px,40px)} }
+
+  .app { position:relative; z-index:1; height:100%; display:flex; flex-direction:column; }
+
+  .titlebar { height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 8px 0 14px; -webkit-app-region:drag; }
+  .brand { display:flex; align-items:center; gap:9px; font-size:15px; font-weight:700; letter-spacing:-.3px; }
+  .brand .mark { width:24px; height:24px; }
+  .brand .lume { color:var(--ink); }
+  .winbtns { -webkit-app-region:no-drag; display:flex; gap:4px; }
+  .winbtns button { width:32px; height:27px; border:none; background:transparent; border-radius:8px; color:var(--ink2); cursor:pointer; display:flex; align-items:center; justify-content:center; }
+  .winbtns button:hover { background:rgba(255,255,255,.6); }
+  .winbtns .close:hover { background:#ff6b6b; color:#fff; }
+  .winbtns svg { width:14px; height:14px; }
+
+  .stage { flex:1; position:relative; }
+
+  .card {
+    position:absolute; left:50%; top:50%; width:344px;
+    background:rgba(255,255,255,.6); backdrop-filter:blur(14px);
+    border:1px solid rgba(255,255,255,.9); border-radius:20px; padding:28px 26px; text-align:center;
+    box-shadow:0 20px 50px -20px rgba(14,59,51,.35);
+    transition:opacity .4s ease, transform .45s cubic-bezier(.2,.8,.2,1);
+    transform:translate(-50%,-50%) scale(1); opacity:1;
+  }
+  .card.home { width:430px; }
+  .card.hidden { opacity:0; transform:translate(-50%, calc(-50% + 18px)) scale(.97); pointer-events:none; }
+  .card.shake { animation:shake .4s; }
+  @keyframes shake { 0%,100%{transform:translate(-50%,-50%)} 20%,60%{transform:translate(calc(-50% - 8px),-50%)} 40%,80%{transform:translate(calc(-50% + 8px),-50%)} }
+
+  .bigmark { width:54px; height:54px; margin:0 auto 14px; display:block; }
+  h1 { font-size:20px; font-weight:700; letter-spacing:-.3px; }
+  .sub { font-size:12px; color:var(--ink2); margin:5px 0 20px; }
+
+  .field { display:flex; align-items:center; gap:9px; background:rgba(255,255,255,.35); backdrop-filter:blur(12px); border:1.5px solid rgba(255,255,255,.7); border-radius:14px; padding:12px 13px; margin-bottom:12px; box-shadow:inset 0 1.5px 2px rgba(255,255,255,.65), 0 6px 16px -8px rgba(14,59,51,.18); transition:border-color .2s, box-shadow .2s; }
+  .field:focus-within { border-color:rgba(43,212,168,.85); box-shadow:0 0 0 3px rgba(43,212,168,.2), inset 0 1.5px 2px rgba(255,255,255,.65); }
+  .field svg { width:17px; height:17px; color:var(--mint); flex:0 0 auto; }
+  .field input { -webkit-app-region:no-drag; flex:1; min-width:0; border:none; outline:none; background:transparent; font-size:13px; color:var(--ink); letter-spacing:.5px; }
+  .field input::placeholder { color:var(--ink3); letter-spacing:1px; }
+
+  .btn { -webkit-app-region:no-drag; width:100%; border:none; cursor:pointer; color:#ffffff; background:linear-gradient(135deg,var(--mint),var(--blue)); font-size:14px; font-weight:700; border-radius:14px; padding:14px; display:flex; align-items:center; justify-content:center; gap:8px; transition:transform .08s, box-shadow .25s, filter .2s; box-shadow:0 10px 24px -8px rgba(142,127,192,.7), 0 0 26px rgba(169,155,199,.55); }
+  .btn:hover { filter:brightness(1.05); box-shadow:0 12px 30px -8px rgba(142,127,192,.85), 0 0 40px rgba(169,155,199,.85); }
+  .btn:active { transform:scale(.98); }
+  .btn:disabled { filter:grayscale(.15) brightness(.97); cursor:default; box-shadow:none; }
+  .btn svg { width:16px; height:16px; color:#04342C; }
+
+  .spinner { width:15px; height:15px; border:2px solid rgba(4,52,44,.35); border-top-color:#04342C; border-radius:50%; animation:spin .7s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg) } }
+
+  .hint { font-size:11px; color:var(--ink3); margin-top:12px; }
+  .chip { background:rgba(43,212,168,.22); color:var(--ink); border-radius:6px; padding:2px 7px; font-weight:600; }
+  .err { font-size:12px; color:#c0392b; margin-top:9px; min-height:16px; transition:opacity .2s; }
+
+  .home h1 { display:flex; align-items:center; justify-content:center; gap:8px; }
+  .badge { font-size:11px; background:rgba(58,157,245,.2); color:var(--ink); border-radius:7px; padding:3px 9px; font-weight:600; text-transform:capitalize; }
+  .bar { height:7px; background:rgba(14,59,51,.1); border-radius:7px; overflow:hidden; margin-top:14px; }
+  .bar > div { height:100%; width:0%; background:linear-gradient(135deg,var(--mint),var(--blue)); border-radius:7px; transition:width .25s ease; }
+  .progrow { display:flex; justify-content:space-between; font-size:11px; color:var(--ink2); margin-top:7px; }
+  .statusbox { margin-top:10px; background:rgba(255,255,255,.7); border:1px solid rgba(0,0,0,.06); border-radius:12px; padding:10px 12px; text-align:left; font-size:11.5px; color:var(--ink2); height:90px; overflow-y:auto; white-space:pre-wrap; line-height:1.55; font-family:'Consolas',monospace; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+  <div class="bg"><div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div></div>
+
+  <svg width="0" height="0" style="position:absolute"><defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#B7AAD9"/><stop offset="1" stop-color="#8E7FC0"/></linearGradient>
+  </defs></svg>
+
+  <div class="app">
+    <div class="titlebar">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 100 100"><rect x="6" y="6" width="88" height="88" rx="26" fill="url(#g)"/><path d="M38 26 v40 a4 4 0 0 0 4 4 h22" fill="none" stroke="#fff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/><circle cx="68" cy="32" r="8" fill="#fff"/></svg>
+        <span class="lume">lume</span>
+      </div>
+      <div class="winbtns">
+        <button id="min" title="Minimize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14" stroke-linecap="round"/></svg></button>
+        <button id="close" class="close" title="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg></button>
+      </div>
+    </div>
+
+    <div class="stage">
+      <!-- Key screen -->
+      <div id="login" class="card">
+        <svg class="bigmark" viewBox="0 0 100 100"><rect x="6" y="6" width="88" height="88" rx="26" fill="url(#g)"/><path d="M38 26 v40 a4 4 0 0 0 4 4 h22" fill="none" stroke="#fff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/><circle cx="68" cy="32" r="8" fill="#fff"/></svg>
+        <h1>Sign in to Lume</h1>
+        <div class="sub">enter your license key</div>
+        <div class="field">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 19 4M16 7l2 2M14 9l1.5 1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <input id="key" type="text" placeholder="LUME-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false" />
+        </div>
+        <button id="activate" class="btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Activate</span>
+        </button>
+        <div id="loginErr" class="err"></div>
+        <div class="hint">HWID: <span id="hwid" class="chip">…</span></div>
+      </div>
+
+      <!-- Home / play screen -->
+      <div id="home" class="card home hidden">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:18px">
+          <svg class="mark" style="width:22px;height:22px" viewBox="0 0 100 100"><rect x="6" y="6" width="88" height="88" rx="26" fill="url(#g)"/><path d="M38 26 v40 a4 4 0 0 0 4 4 h22" fill="none" stroke="#fff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/><circle cx="68" cy="32" r="8" fill="#fff"/></svg>
+          <span style="font-weight:700;letter-spacing:-.3px;color:var(--ink)">lume</span>
+          <span style="font-size:11px;color:var(--ink3);letter-spacing:2px;text-transform:uppercase;margin-top:2px">client</span>
+          <span id="plan" class="badge" style="margin-left:auto">tester</span>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:14px;background:rgba(255,255,255,.7);border:1px solid rgba(0,0,0,.06);border-radius:14px;padding:12px 14px;margin-bottom:14px">
+          <div style="width:46px;height:46px;border-radius:11px;background:linear-gradient(135deg,#C9BEE0,#8E7FC0);display:flex;align-items:center;justify-content:center;overflow:hidden;flex:0 0 auto">
+            <div style="width:26px;height:26px;background:#caa07a;border-radius:5px;position:relative">
+              <div style="position:absolute;top:8px;left:5px;width:4px;height:4px;background:#3b2a20;border-radius:1px"></div>
+              <div style="position:absolute;top:8px;right:5px;width:4px;height:4px;background:#3b2a20;border-radius:1px"></div>
+            </div>
+          </div>
+          <div style="flex:1;min-width:0;text-align:left">
+            <div style="font-size:11px;color:var(--ink3);margin-bottom:3px">Nickname</div>
+            <input id="nick" type="text" value="LumePlayer" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Nickname" style="width:100%;border:none;outline:none;background:transparent;font-size:15px;font-weight:600;color:var(--ink)" />
+          </div>
+          <div style="text-align:right;flex:0 0 auto">
+            <div style="font-size:11px;color:var(--ink3)">Version</div>
+            <div style="font-size:12px;font-weight:600;color:var(--ink2)">1.21.4 · Fabric</div>
+          </div>
+        </div>
+
+        <button id="play" class="btn" style="font-size:15px;padding:14px">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14l12-7z"/></svg>
+          <span>Play</span>
+        </button>
+
+        <div class="progrow" style="margin-top:14px"><span id="progLabel">Ready to launch</span><span id="progPct"></span></div>
+        <div class="bar" style="margin-top:6px"><div id="prog"></div></div>
+        <div id="status" class="statusbox">Ready.</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "name": "lume-launcher",
+  "version": "1.0.0",
+  "description": "Lume Client — launcher",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "author": "Lume",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "electron": "^33.4.11"
+  },
+  "dependencies": {
+    "minecraft-launcher-core": "^3.18.2"
+  }
+}

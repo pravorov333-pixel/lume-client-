@@ -1,0 +1,1102 @@
+package com.lume.client.gui;
+
+import com.lume.client.LumeClient;
+import com.lume.client.module.Category;
+import com.lume.client.module.Module;
+import com.lume.client.fthw.EventManager;
+import com.lume.client.module.modules.cosmetic.CustomCrosshair;
+import com.lume.client.module.modules.fthw.ServerHelper;
+import com.lume.client.module.modules.qol.Waypoints;
+import com.lume.client.module.setting.BoolSetting;
+import com.lume.client.module.setting.ColorSetting;
+import com.lume.client.module.setting.ModeSetting;
+import com.lume.client.module.setting.Setting;
+import com.lume.client.module.setting.SliderSetting;
+import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.text.Text;
+import net.minecraft.util.math.RotationAxis;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * Lume ClickGUI — original card-grid layout (not a sidebar, not Pulse).
+ * Centred header (logo + theme), full-width search, a segmented category pill,
+ * and a grid of module CARDS where the whole card is the toggle and the name is
+ * centred. Cream/lavender liquid glass, native-resolution, hover light-follow.
+ */
+public class ClickGuiScreen extends Screen {
+
+    private static final int WIN_W = 520;
+    private static final int WIN_H = 356;
+    private static final int GRID_TOP = 118;
+    private static final int CARD_H = 38;
+    private static final int CARD_GAP = 8;
+
+    private final long openTime = System.currentTimeMillis();
+    private static int selectedCat = 0;   // persists across menu open/close
+    private String search = "";
+
+    private int scale = 1;
+    private int[] segX = new int[0];
+    private int[] segW = new int[0];
+    private int segY = 0, segH = 0;
+    private int[] themeBtn = new int[]{0, 0, 0, 0};
+
+    // Per-element animation state: key -> {hover, enable, press 1→0, expand}.
+    private final Map<String, float[]> anim = new HashMap<>();
+    private long lastFrame = System.currentTimeMillis();
+
+    // Smooth vertical scroll of the module grid (native px).
+    private float scroll = 0f;
+    private float scrollTarget = 0f;
+
+    // Which module cards are expanded to show their settings.
+    private final Set<String> expanded = new HashSet<>();
+
+    // Clickable regions recorded during render (absolute native coords).
+    private final List<CHit> cHits = new ArrayList<>();
+    private final List<SHit> sHits = new ArrayList<>();
+    private SHit activeSlider = null;
+    private int lastClipTop = 0, lastClipBot = 0;
+
+    // Window move/resize (session-only) + drag state.
+    private static int winOffX = 0, winOffY = 0;   // GUI px
+    private static float winScale = 1f;
+    private int dragMode = 0;                       // 0 none, 1 window-move, 2 window-resize, 3 HUD-move
+    private String dragHud = null;
+    private double grabMx, grabMy;                  // GUI px at grab
+    private int grabA, grabB;                       // window/HUD offset at grab
+    private float grabScale;
+    private float curTotal = 1f;                    // window scale×anim this frame (for scissor)
+    private static String selectedHud = null;       // HUD element whose size slider is shown
+    private int[] hudSliderTrack = null;            // {x,y,w,h} GUI px of the selected element's size slider
+    private long lastFrameClickT = 0;
+    private String lastFrameClickName = null;
+
+    // Binds tab
+    private Module bindingModule = null;             // module currently capturing a key
+    private final List<Object[]> bindHits = new ArrayList<>();   // {Module, x, y, w, h}
+
+    // GUI text fields (Waypoints manager + search). focusedField: "search"/"name"/"x"/"y"/"z"/null
+    private String focusedField = null;
+    private int[] searchBox = new int[]{0, 0, 0, 0};
+    private String wpName = "", wpX = "", wpY = "", wpZ = "";
+    private final List<Object[]> wpHits = new ArrayList<>();      // {String kind, int x, y, w, h}
+
+    private int[] serverToggle = new int[]{0, 0, 0, 0};
+
+    private boolean isBindsTab() { return search.isEmpty() && selectedCat == Category.values().length; }
+    private boolean isServerTab() { return search.isEmpty() && selectedCat == Category.values().length + 1; }
+
+    private String tabTitle(int i) {
+        Category[] c = Category.values();
+        String en = i < c.length ? c[i].title : (i == c.length ? "Binds" : "Server");
+        return com.lume.client.Lang.tCat(en);
+    }
+
+    private String keyDisplay(int code) {
+        if (code < 0) return "None";
+        try { return net.minecraft.client.util.InputUtil.Type.KEYSYM.createFromCode(code).getLocalizedText().getString(); }
+        catch (Exception e) { return "Key" + code; }
+    }
+
+    public ClickGuiScreen() { super(Text.literal("Lume")); }
+
+    private float[] animFor(String key) { return anim.computeIfAbsent(key, k -> new float[5]); }
+
+    // --- window state access (for config persistence) ---
+    public static int getWinOffX() { return winOffX; }
+    public static int getWinOffY() { return winOffY; }
+    public static float getWinScale() { return winScale; }
+    public static void setWindow(int x, int y, float s) {
+        winOffX = x; winOffY = y; winScale = Math.max(0.6f, Math.min(1.8f, s));
+    }
+
+    @Override
+    public void close() {
+        com.lume.client.Config.save();   // persist GUI edits when the menu closes
+        super.close();
+    }
+
+    /** A module card's clickable header + (optional) settings arrow. */
+    private static final class CHit {
+        Module m; int hx, hy, hw, hh; boolean hasArrow; int ax, ay, aw, ah;
+    }
+
+    /** A settings control's clickable region. kind: 0 bool, 1 slider, 2 colour-accent, 3 colour-channel. */
+    private static final class SHit {
+        Setting s; int kind; int x, y, w, h; int trackX, trackW; int channel;
+    }
+
+    /** Frame-rate independent easing toward a target. */
+    private static float approach(float cur, float target, float rate, float dt) {
+        return cur + (target - cur) * Math.min(1f, rate * dt);
+    }
+
+    private int sf() { return (int) Math.max(1, this.client.getWindow().getScaleFactor()); }
+
+    private void text(DrawContext ctx, String s, int x, int y, int color, float vis) {
+        RenderUtil.text(ctx, this.textRenderer, s, x, y, color, false, vis * scale);
+    }
+    private int width(String s, float vis) { return RenderUtil.width(this.textRenderer, s, vis * scale); }
+
+    private void glass(DrawContext ctx, int x, int y, int w, int h, int r, int fill, int rimW) {
+        RenderUtil.roundedRect(ctx, x, y, w, h, r, Theme.rim());
+        RenderUtil.roundedRect(ctx, x + rimW, y + rimW, w - 2 * rimW, h - 2 * rimW, Math.max(2, r - rimW), fill);
+    }
+
+    private float anim() {
+        float p = (System.currentTimeMillis() - openTime) / 200f;
+        if (p > 1f) p = 1f;
+        return 1f - (1f - p) * (1f - p);
+    }
+
+    private List<Module> modules() {
+        List<Module> out = new ArrayList<>();
+        if (!search.isEmpty()) {
+            String q = search.toLowerCase();
+            for (Module m : LumeClient.MODULES.getModules())
+                if (m.getName().toLowerCase().contains(q) || com.lume.client.Lang.tName(m.getName()).toLowerCase().contains(q)) out.add(m);
+        } else if (selectedCat < Category.values().length) {
+            for (Module m : LumeClient.MODULES.getModules(Category.values()[selectedCat]))
+                if (!m.getName().equals("Server Helper")) out.add(m);   // managed in the Server tab
+        }
+        return out;
+    }
+
+    @Override
+    public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
+        super.render(ctx, mouseX, mouseY, delta);
+        ctx.fill(0, 0, this.width, this.height, Theme.backdrop());
+
+        long now = System.currentTimeMillis();
+        float dt = Math.min(0.05f, (now - lastFrame) / 1000f);
+        lastFrame = now;
+
+        int S = sf();
+        this.scale = S;
+        int sw = this.width * S, sh = this.height * S;
+
+        // HUD editor frames (screen space) — draggable element placeholders
+        drawHudFrames(ctx, S, mouseX, mouseY);
+
+        // Window transform: open-anim × user scale, shifted by user offset.
+        double cx = sw / 2.0, cy = sh / 2.0;
+        float p = anim();
+        float total = (0.96f + 0.04f * p) * winScale;
+        this.curTotal = total;
+        int mx = (int) Math.round((mouseX * S - winOffX * S - cx) / total + cx); // local mouse
+        int my = (int) Math.round((mouseY * S - winOffY * S - cy) / total + cy);
+
+        var mtx = ctx.getMatrices();
+        mtx.push();
+        mtx.scale(1f / S, 1f / S, 1f);
+        mtx.translate(winOffX * S, winOffY * S, 0.0);
+        mtx.translate(cx, cy, 0.0);
+        mtx.scale(total, total, 1.0f);
+        mtx.translate(-cx, -cy, 0.0);
+
+        int W = WIN_W * S, H = WIN_H * S;
+        int x = (sw - W) / 2, y = (sh - H) / 2;
+        int r = 18 * S;
+
+        // Panel
+        RenderUtil.roundedRect(ctx, x + 3 * S, y + 7 * S, W - 6 * S, H, r, Theme.shadow());
+        RenderUtil.glow(ctx, x, y, W, H, r, Theme.accentRgb(), 5);
+        glass(ctx, x, y, W, H, r, Theme.winBg(), 2 * S);
+        RenderUtil.roundedRect(ctx, x + 16 * S, y + 2 * S, W - 32 * S, Math.max(1, S), 1 * S, Theme.border());
+
+        // Header: logo + wordmark
+        RenderUtil.drawLogo(ctx, x + 20 * S, y + 15 * S, 22 * S);
+        text(ctx, "lume", x + 20 * S + 28 * S, y + 17 * S, Theme.accent(), 0.6f);
+        text(ctx, "client", x + 20 * S + 28 * S + width("lume", 0.6f) + 6 * S, y + 18 * S, Theme.txtDim(), 0.6f);
+
+        // Theme toggle (right) — animated hover + press pulse
+        int tbw = 56 * S, tbh = 22 * S, tbx = x + W - tbw - 20 * S, tby = y + 14 * S;
+        boolean tbHov = inside(mx, my, tbx, tby, tbw, tbh);
+        float[] ta = animFor("_theme");
+        ta[0] = approach(ta[0], tbHov ? 1f : 0f, 12f, dt);
+        ta[2] = Math.max(0f, ta[2] - dt * 5f);
+        var mt = ctx.getMatrices();
+        mt.push();
+        float tps = 1f - 0.07f * ta[2];
+        mt.translate(tbx + tbw / 2.0, tby + tbh / 2.0, 0.0);
+        mt.scale(tps, tps, 1f);
+        mt.translate(-(tbx + tbw / 2.0), -(tby + tbh / 2.0), 0.0);
+        glass(ctx, tbx, tby, tbw, tbh, 11 * S, Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), ta[0]), S);
+        if (ta[0] > 0.01f) RenderUtil.containedGlow(ctx, tbx + S, tby + S, tbw - 2 * S, tbh - 2 * S, (tbx + tbw / 2), (tby + tbh / 2), 20 * S, Theme.colorLerp(0xFFFFFF, Theme.accentRgb(), 0.4f), ta[0]);
+        String tl = Theme.isDark() ? "Dark" : "Light";
+        RenderUtil.textCentered(ctx, this.textRenderer, tl, tbx, tby, tbw, tbh, Theme.txt(), 0.5f * scale);
+        mt.pop();
+        themeBtn = new int[]{ tbx, tby, tbw, tbh };
+
+        // Search (full width) — click to focus; vanilla font so any text renders
+        int sx = x + 20 * S, sy = y + 46 * S, swid = W - 40 * S, shei = 26 * S;
+        searchBox = new int[]{ sx, sy, swid, shei };
+        boolean searchFocused = "search".equals(focusedField);
+        glass(ctx, sx, sy, swid, shei, 10 * S, searchFocused ? Theme.glassHov() : Theme.glassRow(), S);
+        if (searchFocused) RenderUtil.roundedRect(ctx, sx, sy + shei - Math.max(1, S), swid, Math.max(1, S), 1, Theme.accent());
+        boolean empty = search.isEmpty() && !searchFocused;
+        String shown = empty ? "Search modules…" : search + (searchFocused ? "_" : "");
+        RenderUtil.vanillaText(ctx, this.textRenderer, shown, sx + 12 * S, sy + (shei - 8 * S) / 2.0, empty ? Theme.txtDim() : Theme.txt(), S);
+
+        // Category segmented pill (categories + a "Binds" tab)
+        int tabs = Category.values().length + 2;
+        segX = new int[tabs];
+        segW = new int[tabs];
+        segH = 26 * S;
+        segY = y + 82 * S;
+        int padSeg = 11 * S;
+        int segTotal = 0;
+        int[] ww = new int[tabs];
+        for (int i = 0; i < tabs; i++) { ww[i] = width(tabTitle(i), 0.5f) + padSeg * 2; segTotal += ww[i]; }
+        int barX = x + (W - segTotal) / 2;
+        glass(ctx, barX - 4 * S, segY - 3 * S, segTotal + 8 * S, segH + 6 * S, 13 * S, Theme.glassRow(), S);
+        int cx2 = barX;
+        for (int i = 0; i < tabs; i++) {
+            segX[i] = cx2; segW[i] = ww[i];
+            boolean sel = i == selectedCat && search.isEmpty();
+            if (sel) {
+                RenderUtil.glow(ctx, cx2, segY, ww[i], segH, 12 * S, Theme.accentRgb(), 4);
+                RenderUtil.gradientRoundedRect(ctx, cx2, segY, ww[i], segH, 12 * S, Theme.accent(), Theme.accent2());
+            }
+            int tw = width(tabTitle(i), 0.5f);
+            text(ctx, tabTitle(i), cx2 + (ww[i] - tw) / 2, segY + 8 * S, sel ? 0xFFFFFFFF : Theme.txtDim(), 0.5f);
+            cx2 += ww[i];
+        }
+
+        // Binds tab — list every module with its toggle key
+        if (isBindsTab()) {
+            renderBinds(ctx, x, y, W, H, S, mx, my, dt);
+            int gripX = x + W - 14 * S, gripY = y + H - 14 * S;
+            boolean gripHov = inside(mx, my, gripX, gripY, 14 * S, 14 * S);
+            for (int i = 0; i < 3; i++) {
+                int o = (3 - i) * 3 * S;
+                RenderUtil.roundedRect(ctx, x + W - o - 2 * S, y + H - 5 * S, o, 2 * S, S, gripHov ? Theme.accent() : Theme.txtDim());
+            }
+            mtx.pop();
+            return;
+        }
+        if (isServerTab()) {
+            renderServer(ctx, x, y, W, H, S, mx, my);
+            mtx.pop();
+            return;
+        }
+
+        // Module cards grid (2 columns, scrollable, cards expand to show settings)
+        List<Module> mods = modules();
+        int margin = 20 * S, gap = CARD_GAP * S;
+        int cardW = (W - margin * 2 - gap) / 2;
+        int gx0 = x + margin, gx1 = x + margin + cardW + gap;
+        int gy = y + GRID_TOP * S;
+        int clipTop = gy - 2 * S, clipBot = y + H - 12 * S;
+        int visH = clipBot - gy;
+        int headerH = CARD_H * S;
+        lastClipTop = clipTop; lastClipBot = clipBot;
+
+        // animate expand + measure each card's height
+        int n = mods.size();
+        int[] cardH = new int[n];
+        for (int i = 0; i < n; i++) {
+            Module mm = mods.get(i);
+            float[] an = animFor(mm.getName());
+            boolean exp = expanded.contains(mm.getName()) && mm.hasSettings();
+            an[3] = approach(an[3], exp ? 1f : 0f, 11f, dt);
+            int panelH = mm.hasSettings() ? panelHeight(mm, S) : 0;
+            cardH[i] = headerH + Math.round(an[3] * panelH);
+        }
+        int rowsN = (n + 1) / 2;
+        int[] rowTop = new int[rowsN];
+        int contentH = 0;
+        for (int rr = 0, cum = 0; rr < rowsN; rr++) {
+            int hgt = cardH[rr * 2];
+            if (rr * 2 + 1 < n) hgt = Math.max(hgt, cardH[rr * 2 + 1]);
+            rowTop[rr] = cum;
+            cum += hgt + CARD_GAP * S;
+            contentH = cum - CARD_GAP * S;
+        }
+
+        int maxScroll = Math.max(0, contentH - visH);
+        scrollTarget = Math.max(0f, Math.min(scrollTarget, maxScroll));
+        scroll = approach(scroll, scrollTarget, 16f, dt);
+        if (Math.abs(scroll - scrollTarget) < 0.5f) scroll = scrollTarget;
+        int scrollI = Math.round(scroll);
+
+        cHits.clear();
+        sHits.clear();
+        wpHits.clear();
+
+        winScissor(ctx, x, clipTop, x + W, clipBot);
+        for (int i = 0; i < n; i++) {
+            Module m = mods.get(i);
+            int col = i % 2, row = i / 2;
+            int rx = col == 0 ? gx0 : gx1;
+            int cy0 = gy + rowTop[row] - scrollI;   // card top
+            int ch = cardH[i];
+
+            float[] ca = animFor(m.getName());
+            if (cy0 + ch < clipTop || cy0 > clipBot) {           // off-screen: keep easing sane
+                ca[0] = approach(ca[0], 0f, 14f, dt);
+                ca[2] = Math.max(0f, ca[2] - dt * 4.5f);
+                ca[4] = approach(ca[4], 0f, 14f, dt);
+                continue;
+            }
+
+            boolean inClip = my >= clipTop && my <= clipBot;
+            boolean hov = inside(mx, my, rx, cy0, cardW, headerH) && inClip;          // header → toggle
+            boolean cardHov = inside(mx, my, rx, cy0, cardW, ch) && inClip;           // whole card → glow
+            boolean en = m.isToggleable() && m.isEnabled();   // non-toggleable cards stay neutral
+            ca[0] = approach(ca[0], hov ? 1f : 0f, 14f, dt);
+            ca[1] = approach(ca[1], en ? 1f : 0f, 11f, dt);
+            ca[2] = Math.max(0f, ca[2] - dt * 4.5f);
+            ca[4] = approach(ca[4], cardHov ? 1f : 0f, 14f, dt);
+            float ha = ca[0], ea = ca[1], pa = ca[2], ex = ca[3], gha = ca[4];
+
+            int e = Math.round(ha * S * (1f - ex));   // hover lift (off while expanded)
+            int dx = rx - e, dy = cy0 - e, dw = cardW + 2 * e, dh = ch + 2 * e;
+
+            var mc2 = ctx.getMatrices();
+            mc2.push();
+            float ps = 1f - 0.06f * pa;                 // press pulse around the header
+            mc2.translate(dx + dw / 2.0, dy + headerH / 2.0, 0.0);
+            mc2.scale(ps, ps, 1f);
+            mc2.translate(-(dx + dw / 2.0), -(dy + headerH / 2.0), 0.0);
+
+            RenderUtil.roundedRect(ctx, dx + 1 * S, dy + 2 * S, dw, dh, 11 * S, Theme.shadow());
+            if (ea > 0.01f) RenderUtil.glow(ctx, dx, dy, dw, dh, 11 * S, Theme.accentRgb(), Math.max(1, Math.round(4 * ea)));
+
+            int base = Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), ha);
+            int onFill = withAlpha(Theme.accentRgb(), Theme.isDark() ? 0x4D : 0x40);
+            int fill = Theme.colorLerp(base, onFill, ea);
+            glass(ctx, dx, dy, dw, dh, 11 * S, fill, S);
+            RenderUtil.roundedRect(ctx, dx + 8 * S, dy + 1 * S, dw - 16 * S, Math.max(1, S), 1 * S, Theme.border());
+
+            // contained hover glow following the cursor across the WHOLE card
+            // (header + expanded settings area), clipped to the card
+            if (gha > 0.01f) {
+                int hx = (int) Math.max(dx + 10 * S, Math.min(mx, dx + dw - 10 * S));
+                int hyc = (int) Math.max(dy + 10 * S, Math.min(my, dy + dh - 10 * S));
+                int glowCol = Theme.colorLerp(0xFFFFFF, Theme.accentRgb(), 0.35f);
+                RenderUtil.containedGlow(ctx, dx + 2 * S, dy + 2 * S, dw - 4 * S, dh - 4 * S, hx, hyc, 30 * S, glowCol, gha);
+            }
+
+            if (pa > 0.01f) RenderUtil.roundedRect(ctx, dx, dy, dw, headerH, 11 * S, withAlpha(0xFFFFFF, Math.round(pa * 55)));
+
+            // centred name (leave room on the right for the settings arrow)
+            int col2 = Theme.colorLerp(Theme.txt(), Theme.isDark() ? 0xFFFFFFFF : 0xFF3A3147, ea);
+            int nameRightPad = m.hasSettings() ? 20 * S : 0;
+            RenderUtil.textCentered(ctx, this.textRenderer, com.lume.client.Lang.tName(m.getName()), dx, dy, dw - nameRightPad, headerH, col2, 0.52f * scale);
+
+            // on-indicator dot (top-right)
+            if (ea > 0.02f) {
+                int ds = Math.max(1, Math.round(4 * S * ea));
+                RenderUtil.roundedRect(ctx, dx + dw - 9 * S, dy + 6 * S + (4 * S - ds) / 2, ds, ds, ds / 2,
+                        withAlpha(Theme.accentRgb(), Math.round(255 * ea)));
+            }
+
+            // settings arrow + record click regions
+            CHit chit = new CHit();
+            chit.m = m; chit.hx = rx; chit.hy = cy0; chit.hw = cardW; chit.hh = headerH;
+            if (m.hasSettings()) {
+                chevron(ctx, dx + dw - 13 * S, dy + headerH / 2, 8 * S, ex, Theme.txtDim());
+                chit.hasArrow = true; chit.ax = dx + dw - 24 * S; chit.ay = dy; chit.aw = 24 * S; chit.ah = headerH;
+            }
+            cHits.add(chit);
+
+            // expanded settings (revealed by the growing card via a nested scissor)
+            if (ex > 0.01f && m.hasSettings()) {
+                winScissor(ctx, dx, dy, dx + dw, dy + dh);
+                renderSettings(ctx, m, dx, cy0 + headerH, dw, S, mx, my);
+                ctx.disableScissor();
+            }
+
+            mc2.pop();
+        }
+        ctx.disableScissor();
+
+        // Scrollbar
+        if (maxScroll > 0) {
+            int sbW = 3 * S;
+            int sbX = x + W - margin / 2 - sbW;
+            RenderUtil.roundedRect(ctx, sbX, gy, sbW, visH, sbW, Theme.glassRow());
+            int thumbH = Math.max(14 * S, Math.round(visH * (visH / (float) contentH)));
+            int thumbY = gy + Math.round((visH - thumbH) * (scroll / maxScroll));
+            RenderUtil.roundedRect(ctx, sbX, thumbY, sbW, thumbH, sbW, Theme.accent());
+        }
+
+        // Resize grip (bottom-right corner) — drag to scale the whole window
+        int gripX = x + W - 14 * S, gripY = y + H - 14 * S;
+        boolean gripHov = inside(mx, my, gripX, gripY, 14 * S, 14 * S);
+        for (int i = 0; i < 3; i++) {
+            int o = (3 - i) * 3 * S;
+            RenderUtil.roundedRect(ctx, x + W - o - 2 * S, y + H - 5 * S, o, 2 * S, S, gripHov ? Theme.accent() : Theme.txtDim());
+        }
+
+        mtx.pop();
+    }
+
+    // ---- Server tab (FT/HW helper) ----------------------------------------
+
+    private void renderServer(DrawContext ctx, int x, int y, int W, int H, int S, int mx, int my) {
+        int margin = 20 * S, gy = y + GRID_TOP * S;
+        lastClipTop = gy; lastClipBot = y + H - 12 * S;
+        int sx = x + margin, w = W - margin * 2, yy = gy;
+
+        com.lume.client.fthw.ServerType st = com.lume.client.fthw.ServerType.current();
+        boolean supported = st != com.lume.client.fthw.ServerType.UNKNOWN;
+        Module sh = LumeClient.MODULES.getByName("Server Helper");
+        boolean on = sh != null && sh.isEnabled();
+
+        if (!supported) {
+            // not on a supported server: can't enable, show only the note (module auto-disables on tick)
+            serverToggle = new int[]{0, 0, 0, 0};
+            RenderUtil.vanillaText(ctx, this.textRenderer, "Клиент поддерживает только FunTime и HolyWorld.", sx + 2 * S, yy, Theme.txtDim(), S);
+            return;
+        }
+
+        // supported: show just the enable toggle (no note)
+        int pw = 46 * S, ph = 20 * S, px = sx + w - pw, py = yy;
+        RenderUtil.roundedRect(ctx, px, py, pw, ph, ph / 2, on ? Theme.accent() : Theme.pillOff());
+        int kd = ph - 4 * S, kx = on ? px + pw - kd - 2 * S : px + 2 * S;
+        RenderUtil.roundedRect(ctx, kx, py + 2 * S, kd, kd, kd / 2, 0xFFFFFFFF);
+        serverToggle = new int[]{ px, py, pw, ph };
+
+        if (!on) return; // off: nothing else to show
+        yy += ph + 12 * S;
+
+        // status card
+        int cardH = 50 * S;
+        RenderUtil.roundedRect(ctx, sx, yy, w, cardH, 9 * S, Theme.winBg());
+        RenderUtil.roundedRect(ctx, sx, yy, 3 * S, cardH, 2 * S, 0xFF6FCF7F);
+        RenderUtil.vanillaText(ctx, this.textRenderer, "Сервер: " + st.display(), sx + 12 * S, yy + 10 * S, Theme.txt(), S);
+        RenderUtil.vanillaText(ctx, this.textRenderer, "Статус: Активно", sx + 12 * S, yy + 26 * S, 0xFF6FCF7F, S);
+        yy += cardH + 8 * S;
+
+        // events — learned schedule (was / ETA)
+        RenderUtil.vanillaText(ctx, this.textRenderer, "Расписание ивентов (учится по чату):", sx + 2 * S, yy, Theme.txt(), S);
+        yy += 14 * S;
+        for (com.lume.client.fthw.EventRule r : EventManager.rules) {
+            int left = -1;
+            for (EventManager.Active a : EventManager.active) if (a.rule == r) { left = a.secondsLeft(); break; }
+            int col;
+            String line;
+            if (left >= 0) { col = 0xFF6FCF7F; line = "● " + r.name + " — идёт, " + left + "с"; }
+            else {
+                long eta = r.etaSec(), ago = r.agoSec();
+                if (eta > 0) { col = 0xFFE8C15A; line = "◷ " + r.name + " — ≈ через " + fmtDur(eta); }
+                else if (ago >= 0) { col = Theme.txtDim(); line = "○ " + r.name + " — был " + fmtDur(ago) + " назад"; }
+                else { col = Theme.txtDim(); line = "○ " + r.name + " — ещё не видел"; }
+            }
+            RenderUtil.vanillaText(ctx, this.textRenderer, line, sx + 6 * S, yy, col, S);
+            yy += 13 * S;
+        }
+    }
+
+    private static String fmtDur(long sec) {
+        if (sec < 0) return "—";
+        if (sec < 90) return sec + "с";
+        long m = sec / 60;
+        if (m < 90) return m + "м";
+        return (m / 60) + "ч " + (m % 60) + "м";
+    }
+
+    // ---- Binds tab --------------------------------------------------------
+
+    private void renderBinds(DrawContext ctx, int x, int y, int W, int H, int S, int mx, int my, float dt) {
+        int margin = 20 * S;
+        int gy = y + GRID_TOP * S;
+        int clipTop = gy - 2 * S, clipBot = y + H - 12 * S, visH = clipBot - gy;
+        lastClipTop = clipTop; lastClipBot = clipBot;
+
+        int rowH = 22 * S, gapr = 6 * S, listW = W - margin * 2, rx = x + margin;
+        List<Module> binds = new ArrayList<>();
+        for (Module m : LumeClient.MODULES.getModules()) if (m.isBindable()) binds.add(m);
+        int contentH = Math.max(0, binds.size() * (rowH + gapr) - gapr);
+        int maxScroll = Math.max(0, contentH - visH);
+        scrollTarget = Math.max(0f, Math.min(scrollTarget, maxScroll));
+        scroll = approach(scroll, scrollTarget, 16f, dt);
+        if (Math.abs(scroll - scrollTarget) < 0.5f) scroll = scrollTarget;
+        int scrollI = Math.round(scroll);
+
+        bindHits.clear();
+        winScissor(ctx, x + margin - 2 * S, clipTop, x + W - margin + 2 * S, clipBot);
+        for (int i = 0; i < binds.size(); i++) {
+            Module m = binds.get(i);
+            int ry = gy + i * (rowH + gapr) - scrollI;
+            if (ry + rowH < clipTop || ry > clipBot) continue;
+            boolean binding = m == bindingModule;
+            boolean hov = inside(mx, my, rx, ry, listW, rowH) && my >= clipTop && my <= clipBot;
+            RenderUtil.roundedRect(ctx, rx, ry, listW, rowH, 8 * S, (hov || binding) ? Theme.glassHov() : Theme.glassRow());
+            RenderUtil.textVCentered(ctx, this.textRenderer, com.lume.client.Lang.tName(m.getName()), rx + 12 * S, ry, rowH, Theme.txt(), 0.5f * S);
+            int chipY = ry + (rowH - 15 * S) / 2;
+            // key chip (rightmost)
+            String kd = binding ? "press a key…" : keyDisplay(m.getKey());
+            int kw = RenderUtil.width(this.textRenderer, kd, 0.46f * S);
+            int chipW = kw + 16 * S, chipX = rx + listW - chipW - 8 * S;
+            RenderUtil.roundedRect(ctx, chipX, chipY, chipW, 15 * S, 7 * S, binding ? withAlpha(Theme.accentRgb(), 0x66) : Theme.pillOff());
+            RenderUtil.textVCentered(ctx, this.textRenderer, kd, chipX + 8 * S, chipY, 15 * S, binding ? 0xFFFFFFFF : Theme.accent(), 0.46f * S);
+            // mode chip (HOLD / TOGGLE), left of the key chip
+            String md = m.getBindMode() == Module.BindMode.HOLD ? "HOLD" : "TOGGLE";
+            int mw = RenderUtil.width(this.textRenderer, md, 0.4f * S);
+            int modeW = mw + 12 * S, modeX = chipX - modeW - 6 * S;
+            RenderUtil.roundedRect(ctx, modeX, chipY, modeW, 15 * S, 7 * S, Theme.pillOff());
+            RenderUtil.textVCentered(ctx, this.textRenderer, md, modeX + 6 * S, chipY, 15 * S, Theme.txtDim(), 0.4f * S);
+            bindHits.add(new Object[]{ m, rx, ry, listW, rowH, modeX, modeW, chipY });
+        }
+        ctx.disableScissor();
+
+        if (maxScroll > 0) {
+            int sbW = 3 * S, sbX = x + W - margin / 2 - sbW;
+            RenderUtil.roundedRect(ctx, sbX, gy, sbW, visH, sbW, Theme.glassRow());
+            int thumbH = Math.max(14 * S, Math.round(visH * (visH / (float) contentH)));
+            int thumbY = gy + Math.round((visH - thumbH) * (scroll / maxScroll));
+            RenderUtil.roundedRect(ctx, sbX, thumbY, sbW, thumbH, sbW, Theme.accent());
+        }
+    }
+
+    // ---- HUD editor (drag elements while the menu is open) ----------------
+
+    /** Movable HUD elements: name + base rect (GUI px) given screen size. */
+    private List<int[]> hudFrames(int sw, int sh, List<String> names) {
+        List<int[]> rects = new ArrayList<>();
+        addFrame(rects, names, "HUD", 6, 6, 134, 60, sw, sh);
+        addFrame(rects, names, "Potion HUD", sw - 150, 6, 144, 18, sw, sh);
+        addFrame(rects, names, "Module List", sw - 110, 6, 106, 40, sw, sh);
+        addFrame(rects, names, "Target HUD", sw / 2 - 95, 10, 190, 44, sw, sh);
+        addFrame(rects, names, "Block Info", sw / 2 - 70, 10, 140, 32, sw, sh);
+        addFrame(rects, names, "Keystrokes", 12, sh - 150, 70, 70, sw, sh);
+        addFrame(rects, names, "Inventory HUD", sw / 2 - 85, sh - 80, 170, 58, sw, sh);
+        addFrame(rects, names, "Armor HUD", sw / 2 + 87, sh - 22, 84, 20, sw, sh);
+        addFrame(rects, names, "Totem Counter", sw / 2 - 138, sh - 22, 46, 20, sw, sh);
+        return rects;
+    }
+
+    private void addFrame(List<int[]> rects, List<String> names, String name, int bx, int by, int w, int h, int sw, int sh) {
+        Module m = LumeClient.MODULES.getByName(name);
+        if (m == null || !m.isEnabled()) return;
+        int[] off = HudLayout.get(name);
+        rects.add(new int[]{ bx + off[0], by + off[1], w, h });
+        names.add(name);
+    }
+
+    private void drawHudFrames(DrawContext ctx, int S, int mouseX, int mouseY) {
+        List<String> names = new ArrayList<>();
+        List<int[]> rects = hudFrames(this.width, this.height, names);
+        hudSliderTrack = null;
+        var m = ctx.getMatrices();
+        m.push();
+        m.scale(1f / S, 1f / S, 1f);
+        for (int i = 0; i < rects.size(); i++) {
+            int[] rc = rects.get(i);
+            String label = names.get(i);
+            boolean sel = label.equals(selectedHud);
+            boolean hov = sel || (dragMode == 3 && label.equals(dragHud))
+                    || (mouseX >= rc[0] && mouseX <= rc[0] + rc[2] && mouseY >= rc[1] && mouseY <= rc[1] + rc[3]);
+            int rx = rc[0] * S, ry = rc[1] * S, rw = rc[2] * S, rh = rc[3] * S;
+            RenderUtil.roundedRect(ctx, rx, ry, rw, rh, 5 * S, withAlpha(Theme.accentRgb(), hov ? 0x55 : 0x22));
+            RenderUtil.roundedRect(ctx, rx, ry, rw, Math.max(1, S), 1, sel ? Theme.accent() : withAlpha(Theme.accentRgb(), 0x88));
+            if (sel) RenderUtil.roundedRect(ctx, rx, ry, rw, rh, 5 * S, withAlpha(0xFFFFFF, 0x14));
+            int tw = RenderUtil.width(this.textRenderer, label, 0.42f * S);
+            RenderUtil.textVCentered(ctx, this.textRenderer, label, rx + (rw - tw) / 2, ry, rh, hov ? 0xFFFFFFFF : Theme.txt(), 0.42f * S);
+
+            // size slider + reset hint for the selected element
+            if (sel) {
+                int slX = rc[0], slY = rc[1] + rc[3] + 5, slW = Math.max(70, rc[2]), slH = 6;
+                hudSliderTrack = new int[]{ slX, slY, slW, slH };
+                int tx = slX * S, ty = slY * S, tW = slW * S, tH = slH * S;
+                RenderUtil.roundedRect(ctx, tx, ty, tW, tH, tH / 2, withAlpha(0x000000, 0x99));
+                float frac = (HudLayout.getScale(label) - 0.5f) / 1.5f;
+                int fw = Math.max(tH, Math.round(tW * frac));
+                RenderUtil.roundedRect(ctx, tx, ty, fw, tH, tH / 2, Theme.accent());
+                int kd = 10 * S, kx = tx + Math.round(tW * frac);
+                RenderUtil.roundedRect(ctx, Math.min(tx + tW - kd, Math.max(tx, kx - kd / 2)), ty + tH / 2 - kd / 2, kd, kd, kd / 2, 0xFFFFFFFF);
+                String hint = "double-click to reset  ·  " + String.format("%.2fx", HudLayout.getScale(label));
+                RenderUtil.text(ctx, this.textRenderer, hint, tx, ty + tH + 3 * S, withAlpha(0xFFFFFF, 0xAA), true, 0.36f * S);
+            }
+        }
+        m.pop();
+    }
+
+    // ---- settings panel rendering -----------------------------------------
+
+    private static final int PREVIEW_H = 46;
+
+    private int settingHeight(Setting s, int S) {
+        if (s instanceof SliderSetting) return 22 * S;
+        if (s instanceof ModeSetting) return 15 * S;
+        if (s instanceof ColorSetting cs) return 15 * S + (cs.accent ? 0 : 3 * 14 * S);
+        return 15 * S; // bool
+    }
+
+    private int panelHeight(Module m, int S) {
+        int h = 4 * S;
+        if (m instanceof CustomCrosshair) h += PREVIEW_H * S + 4 * S;
+        for (Setting s : m.getSettings()) h += settingHeight(s, S);
+        if (m instanceof Waypoints) h += wpManagerHeight(S);
+        if (m instanceof ServerHelper) h += (EventManager.rules.size() + 1) * 12 * S + 6 * S;
+        return h + 8 * S;
+    }
+
+    private int wpManagerHeight(int S) {
+        return 6 * S + 18 * S + 6 * S + Waypoints.list.size() * 16 * S;
+    }
+
+    private void renderSettings(DrawContext ctx, Module m, int x0, int yTop, int w, int S, int mx, int my) {
+        RenderUtil.roundedRect(ctx, x0 + 10 * S, yTop, w - 20 * S, Math.max(1, S), S, Theme.border()); // separator
+        int sx = x0 + 14 * S, swid = w - 28 * S;
+        int yy = yTop + 4 * S;
+
+        // live crosshair preview
+        if (m instanceof CustomCrosshair) {
+            int ph = PREVIEW_H * S;
+            RenderUtil.roundedRect(ctx, sx, yy, swid, ph, 8 * S, 0x55000000);
+            winScissor(ctx, sx, yy, sx + swid, yy + ph);
+            HudRenderer.drawCrosshair(ctx, sx + swid / 2, yy + ph / 2, S);
+            ctx.disableScissor();
+            yy += ph + 4 * S;
+        }
+
+        for (Setting s : m.getSettings()) {
+            int h = settingHeight(s, S);
+            if (s instanceof BoolSetting bs) renderBool(ctx, bs, sx, yy, swid, h, S);
+            else if (s instanceof SliderSetting ss) renderSlider(ctx, ss, sx, yy, swid, h, S);
+            else if (s instanceof ModeSetting ms) renderMode(ctx, ms, sx, yy, swid, h, S);
+            else if (s instanceof ColorSetting cs) renderColor(ctx, cs, sx, yy, swid, S);
+            yy += h;
+        }
+        if (m instanceof Waypoints) renderWaypointManager(ctx, sx, yy + 4 * S, swid, S);
+        if (m instanceof ServerHelper) renderEventList(ctx, sx, yy + 4 * S, swid, S);
+    }
+
+    /** Read-only list of configured FT/HW events (with live countdown if active). Cyrillic → vanilla font. */
+    private void renderEventList(DrawContext ctx, int sx, int yy, int swid, int S) {
+        RenderUtil.vanillaText(ctx, this.textRenderer, "Ивенты (FunTime):", sx, yy, Theme.txtDim(), S);
+        int ly = yy + 12 * S;
+        for (EventRuleName er : eventRows()) {
+            int col = er.left >= 0 ? 0xFF6FCF7F : Theme.txt();
+            String line = er.left >= 0 ? er.name + " — " + er.left + "с" : er.name;
+            RenderUtil.vanillaText(ctx, this.textRenderer, line, sx + 4 * S, ly, col, S);
+            ly += 12 * S;
+        }
+    }
+
+    private record EventRuleName(String name, int left) {}
+
+    private List<EventRuleName> eventRows() {
+        List<EventRuleName> out = new ArrayList<>();
+        for (com.lume.client.fthw.EventRule r : EventManager.rules) {
+            int left = -1;
+            for (EventManager.Active a : EventManager.active) if (a.rule == r) { left = a.secondsLeft(); break; }
+            out.add(new EventRuleName(r.name, left));
+        }
+        return out;
+    }
+
+    // ---- Waypoints manager (GUI input fields) -----------------------------
+
+    private String bufGet(String id) {
+        return switch (id) { case "name" -> wpName; case "x" -> wpX; case "y" -> wpY; default -> wpZ; };
+    }
+    private void bufSet(String id, String v) {
+        switch (id) { case "name" -> wpName = v; case "x" -> wpX = v; case "y" -> wpY = v; case "z" -> wpZ = v; }
+    }
+
+    private void field(DrawContext ctx, String id, int x, int y, int w, int h, String placeholder, int S) {
+        boolean foc = id.equals(focusedField);
+        RenderUtil.roundedRect(ctx, x, y, w, h, 5 * S, foc ? Theme.glassHov() : Theme.glassRow());
+        if (foc) RenderUtil.roundedRect(ctx, x, y + h - Math.max(1, S), w, Math.max(1, S), 1, Theme.accent());
+        String txt = bufGet(id);
+        String show = txt.isEmpty() && !foc ? placeholder : txt + (foc ? "_" : "");
+        RenderUtil.textVCentered(ctx, this.textRenderer, show, x + 5 * S, y, h, txt.isEmpty() && !foc ? Theme.txtDim() : Theme.txt(), 0.42f * S);
+        wpHits.add(new Object[]{ id, x, y, w, h });
+    }
+
+    private void renderWaypointManager(DrawContext ctx, int sx, int yy, int swid, int S) {
+        int rh = 15 * S, addW = 32 * S;
+        int nameW = Math.round(swid * 0.30f);
+        int numW = (swid - nameW - addW - 4 * 4 * S) / 3;
+        int fx = sx;
+        field(ctx, "name", fx, yy, nameW, rh, "name", S); fx += nameW + 4 * S;
+        field(ctx, "x", fx, yy, numW, rh, "x", S); fx += numW + 4 * S;
+        field(ctx, "y", fx, yy, numW, rh, "y", S); fx += numW + 4 * S;
+        field(ctx, "z", fx, yy, numW, rh, "z", S);
+        int addX = sx + swid - addW;
+        RenderUtil.roundedRect(ctx, addX, yy, addW, rh, 5 * S, Theme.accent());
+        int aw = RenderUtil.width(this.textRenderer, "Add", 0.42f * S);
+        RenderUtil.textVCentered(ctx, this.textRenderer, "Add", addX + (addW - aw) / 2, yy, rh, 0xFFFFFFFF, 0.42f * S);
+        wpHits.add(new Object[]{ "add", addX, yy, addW, rh });
+
+        int ly = yy + 18 * S + 6 * S;
+        for (int i = 0; i < Waypoints.list.size(); i++) {
+            Waypoints.WP w = Waypoints.list.get(i);
+            int ry = ly + i * 16 * S, hh = 14 * S;
+            RenderUtil.roundedRect(ctx, sx, ry, swid, hh, 4 * S, Theme.glassRow());
+            RenderUtil.roundedRect(ctx, sx + 4 * S, ry + (hh - 8 * S) / 2, 8 * S, 8 * S, 2 * S, w.color);
+            wpHits.add(new Object[]{ "color:" + i, sx + 2 * S, ry, 16 * S, hh });
+            String t = w.name + "  " + (int) w.x + " " + (int) w.y + " " + (int) w.z;
+            RenderUtil.textVCentered(ctx, this.textRenderer, t, sx + 18 * S, ry, hh, Theme.txt(), 0.4f * S);
+            int dx = sx + swid - 14 * S;
+            RenderUtil.textVCentered(ctx, this.textRenderer, "X", dx, ry, hh, 0xFFE05656, 0.45f * S);
+            wpHits.add(new Object[]{ "del:" + i, dx - 3 * S, ry, 16 * S, hh });
+        }
+    }
+
+    private void wpAdd() {
+        double px, py, pz;
+        boolean coords = !wpX.isEmpty() && !wpY.isEmpty() && !wpZ.isEmpty();
+        if (coords) {
+            try { px = Double.parseDouble(wpX); py = Double.parseDouble(wpY); pz = Double.parseDouble(wpZ); }
+            catch (Exception e) { return; }
+        } else if (this.client.player != null) {
+            px = this.client.player.getX(); py = this.client.player.getY(); pz = this.client.player.getZ();
+        } else return;
+        String name = wpName.isEmpty() ? "WP" + (Waypoints.list.size() + 1) : wpName;
+        Waypoints.add(name, px, py, pz, Waypoints.nextColor());
+        wpName = wpX = wpY = wpZ = ""; focusedField = null;
+        com.lume.client.Config.save();
+    }
+
+    private void handleWpHit(String kind) {
+        if (kind.equals("add")) { wpAdd(); return; }
+        if (kind.startsWith("del:")) {
+            int i = Integer.parseInt(kind.substring(4));
+            if (i >= 0 && i < Waypoints.list.size()) { Waypoints.list.remove(i); com.lume.client.Config.save(); }
+            return;
+        }
+        if (kind.startsWith("color:")) {
+            int i = Integer.parseInt(kind.substring(6));
+            if (i >= 0 && i < Waypoints.list.size()) { Waypoints.list.get(i).color = Waypoints.nextColor(); com.lume.client.Config.save(); }
+            return;
+        }
+        focusedField = kind;   // a text field
+    }
+
+    private void renderMode(DrawContext ctx, ModeSetting ms, int x, int y, int w, int h, int S) {
+        RenderUtil.textVCentered(ctx, this.textRenderer, ms.name, x, y, h, Theme.txt(), 0.42f * S);
+        String disp = "‹ " + ms.get() + " ›";
+        int dw = RenderUtil.width(this.textRenderer, disp, 0.42f * S);
+        RenderUtil.textVCentered(ctx, this.textRenderer, disp, x + w - dw, y, h, Theme.accent(), 0.42f * S);
+        SHit hit = new SHit(); hit.s = ms; hit.kind = 4; hit.x = x; hit.y = y; hit.w = w; hit.h = h; sHits.add(hit);
+    }
+
+    private void renderBool(DrawContext ctx, BoolSetting bs, int x, int y, int w, int h, int S) {
+        RenderUtil.textVCentered(ctx, this.textRenderer, bs.name, x, y, h, Theme.txt(), 0.42f * S);
+        int pw = 18 * S, ph = 10 * S, px = x + w - pw, py = y + (h - ph) / 2;
+        RenderUtil.roundedRect(ctx, px, py, pw, ph, ph / 2, bs.value ? Theme.accent() : Theme.pillOff());
+        int kd = ph - 4 * S, kx = bs.value ? px + pw - kd - 2 * S : px + 2 * S;
+        RenderUtil.roundedRect(ctx, kx, py + 2 * S, kd, kd, kd / 2, 0xFFFFFFFF);
+        SHit hit = new SHit(); hit.s = bs; hit.kind = 0; hit.x = x; hit.y = y; hit.w = w; hit.h = h; sHits.add(hit);
+    }
+
+    private void renderSlider(DrawContext ctx, SliderSetting ss, int x, int y, int w, int h, int S) {
+        RenderUtil.textVCentered(ctx, this.textRenderer, ss.name, x, y, 12 * S, Theme.txt(), 0.42f * S);
+        String val = ss.display();
+        int vw = RenderUtil.width(this.textRenderer, val, 0.42f * S);
+        RenderUtil.textVCentered(ctx, this.textRenderer, val, x + w - vw, y, 12 * S, Theme.accent(), 0.42f * S);
+        int ty = y + 14 * S, th = 4 * S;
+        RenderUtil.roundedRect(ctx, x, ty, w, th, th / 2, Theme.pillOff());
+        int fw = Math.round(w * (float) ss.fraction());
+        if (fw > 0) RenderUtil.roundedRect(ctx, x, ty, Math.max(th, fw), th, th / 2, Theme.accent());
+        int kd = 8 * S, kx = x + Math.round(w * (float) ss.fraction());
+        RenderUtil.roundedRect(ctx, Math.min(x + w - kd, Math.max(x, kx - kd / 2)), ty + th / 2 - kd / 2, kd, kd, kd / 2, 0xFFFFFFFF);
+        SHit hit = new SHit(); hit.s = ss; hit.kind = 1; hit.x = x; hit.y = y; hit.w = w; hit.h = h; hit.trackX = x; hit.trackW = w; sHits.add(hit);
+    }
+
+    private void renderColor(DrawContext ctx, ColorSetting cs, int x, int y, int w, int S) {
+        int row = 15 * S;
+        RenderUtil.textVCentered(ctx, this.textRenderer, cs.name, x, y, row, Theme.txt(), 0.42f * S);
+        int pw = 18 * S, ph = 10 * S, px = x + w - pw, py = y + (row - ph) / 2;
+        RenderUtil.roundedRect(ctx, px, py, pw, ph, ph / 2, cs.accent ? Theme.accent() : Theme.pillOff());
+        int kd = ph - 4 * S, kx = cs.accent ? px + pw - kd - 2 * S : px + 2 * S;
+        RenderUtil.roundedRect(ctx, kx, py + 2 * S, kd, kd, kd / 2, 0xFFFFFFFF);
+        int swx = px - 16 * S, swatch = cs.accent ? Theme.accent() : (0xFF000000 | cs.rgb());
+        RenderUtil.roundedRect(ctx, swx, py, 12 * S, ph, 3 * S, swatch);
+        SHit at = new SHit(); at.s = cs; at.kind = 2; at.x = px; at.y = y; at.w = pw; at.h = row; sHits.add(at);
+
+        if (!cs.accent) {
+            int yy = y + row;
+            channel(ctx, cs, 0, "R", 0xFFE05656, x, yy, w, S); yy += 14 * S;
+            channel(ctx, cs, 1, "G", 0xFF6FCF7F, x, yy, w, S); yy += 14 * S;
+            channel(ctx, cs, 2, "B", 0xFF6F9CE0, x, yy, w, S);
+        }
+    }
+
+    private void channel(DrawContext ctx, ColorSetting cs, int idx, String label, int chCol, int x, int y, int w, int S) {
+        int h = 14 * S;
+        RenderUtil.textVCentered(ctx, this.textRenderer, label, x, y, h, Theme.txtDim(), 0.4f * S);
+        int tx = x + 12 * S, tw = w - 12 * S, ty = y + (h - 4 * S) / 2, th = 4 * S;
+        RenderUtil.roundedRect(ctx, tx, ty, tw, th, th / 2, Theme.pillOff());
+        int val = idx == 0 ? cs.r : idx == 1 ? cs.g : cs.b;
+        float frac = val / 255f;
+        if (frac > 0) RenderUtil.roundedRect(ctx, tx, ty, Math.max(th, Math.round(tw * frac)), th, th / 2, chCol);
+        int kd = 8 * S, kx = tx + Math.round(tw * frac);
+        RenderUtil.roundedRect(ctx, Math.min(tx + tw - kd, Math.max(tx, kx - kd / 2)), ty + th / 2 - kd / 2, kd, kd, kd / 2, 0xFFFFFFFF);
+        SHit hit = new SHit(); hit.s = cs; hit.kind = 3; hit.channel = idx; hit.x = x; hit.y = y; hit.w = w; hit.h = h; hit.trackX = tx; hit.trackW = tw; sHits.add(hit);
+    }
+
+    /** Small chevron that rotates from ▶ (collapsed) to ▼ (expanded) by {@code ex}. */
+    private void chevron(DrawContext ctx, int cx, int cy, int size, float ex, int color) {
+        var m = ctx.getMatrices();
+        m.push();
+        m.translate(cx, cy, 0);
+        m.multiply(RotationAxis.POSITIVE_Z.rotationDegrees(-90f * (1f - ex)));
+        int wdt = size, hgt = Math.max(2, size / 2);
+        for (int r = 0; r < hgt; r++) {
+            float t = r / (float) hgt;
+            int half = Math.round(wdt / 2f * (1f - t));
+            ctx.fill(-half, -hgt / 2 + r, half, -hgt / 2 + r + 1, color);
+        }
+        m.pop();
+    }
+
+    private static int withAlpha(int rgb, int alpha) { return (alpha << 24) | (rgb & 0xFFFFFF); }
+
+    private boolean inside(double mx, double my, int x, int y, int w, int h) {
+        return mx >= x && mx <= x + w && my >= y && my <= y + h;
+    }
+
+    /**
+     * enableScissor for a rectangle given in LOCAL native coords, transformed to
+     * screen-logical coords so it follows the window's move/scale (scissor itself
+     * ignores the matrix, hence this manual mapping).
+     */
+    private void winScissor(DrawContext ctx, int nx1, int ny1, int nx2, int ny2) {
+        int S = scale;
+        double cx = this.width / 2.0, cy = this.height / 2.0, t = curTotal;
+        int x1 = (int) Math.floor(cx + ((double) nx1 / S - cx) * t + winOffX);
+        int y1 = (int) Math.floor(cy + ((double) ny1 / S - cy) * t + winOffY);
+        int x2 = (int) Math.ceil(cx + ((double) nx2 / S - cx) * t + winOffX);
+        int y2 = (int) Math.ceil(cy + ((double) ny2 / S - cy) * t + winOffY);
+        ctx.enableScissor(x1, y1, x2, y2);
+    }
+
+    /** Local (window-space) mouse X, undoing the window move/scale transform. */
+    private double localMx(double mouseX) {
+        int S = sf();
+        double cx = this.width * S / 2.0;
+        return (mouseX * S - winOffX * S - cx) / winScale + cx;
+    }
+    private double localMy(double mouseY) {
+        int S = sf();
+        double cy = this.height * S / 2.0;
+        return (mouseY * S - winOffY * S - cy) / winScale + cy;
+    }
+
+    @Override
+    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (button == 0) {
+            int S = sf();
+            double mlx = localMx(mouseX), mly = localMy(mouseY);
+            int W = WIN_W * S, H = WIN_H * S;
+            int wx = (this.width * S - W) / 2, wy = (this.height * S - H) / 2;
+            boolean inWindow = mlx >= wx && mlx <= wx + W && mly >= wy && mly <= wy + H;
+            focusedField = null;   // any click defocuses; specific handlers below re-focus
+
+            // search box → focus it
+            if (inWindow && inside(mlx, mly, searchBox[0], searchBox[1], searchBox[2], searchBox[3])) {
+                focusedField = "search";
+                return true;
+            }
+
+            // resize grip (bottom-right)
+            if (inside(mlx, mly, wx + W - 14 * S, wy + H - 14 * S, 14 * S, 14 * S)) {
+                dragMode = 2; grabMx = mouseX; grabMy = mouseY; grabScale = winScale; return true;
+            }
+
+            if (inWindow) {
+                if (inside(mlx, mly, themeBtn[0], themeBtn[1], themeBtn[2], themeBtn[3])) { Theme.toggle(); animFor("_theme")[2] = 1f; return true; }
+                for (int i = 0; i < segX.length; i++) {
+                    if (inside(mlx, mly, segX[i], segY - 3 * S, segW[i], segH + 6 * S)) { selectedCat = i; search = ""; scroll = scrollTarget = 0f; bindingModule = null; return true; }
+                }
+                if (isBindsTab()) {
+                    if (mly >= lastClipTop && mly <= lastClipBot) {
+                        for (Object[] h : bindHits) {
+                            Module m = (Module) h[0];
+                            int modeX = (int) h[5], modeW = (int) h[6], chipY = (int) h[7];
+                            if (inside(mlx, mly, modeX, chipY, modeW, 15 * S)) {   // mode chip → switch HOLD/TOGGLE
+                                m.setBindMode(m.getBindMode() == Module.BindMode.HOLD ? Module.BindMode.TOGGLE : Module.BindMode.HOLD);
+                                com.lume.client.Config.save();
+                                return true;
+                            }
+                            if (inside(mlx, mly, (int) h[1], (int) h[2], (int) h[3], (int) h[4])) {
+                                bindingModule = (bindingModule == m) ? null : m;   // click again to cancel
+                                return true;
+                            }
+                        }
+                        bindingModule = null;
+                        return true;
+                    }
+                    // header area → fall through to window drag
+                }
+                if (isServerTab()) {
+                    if (inside(mlx, mly, serverToggle[0], serverToggle[1], serverToggle[2], serverToggle[3])) {
+                        Module sh = LumeClient.MODULES.getByName("Server Helper");
+                        if (sh != null) { sh.toggle(); com.lume.client.Config.save(); }
+                        return true;
+                    }
+                    if (mly >= lastClipTop && mly <= lastClipBot) return true;   // consume content clicks
+                    // header → fall through to window drag
+                }
+                if (mly >= lastClipTop && mly <= lastClipBot) {
+                    for (Object[] h : wpHits) {
+                        if (inside(mlx, mly, (int) h[1], (int) h[2], (int) h[3], (int) h[4])) { handleWpHit((String) h[0]); return true; }
+                    }
+                    for (SHit h : sHits) {
+                        if (inside(mlx, mly, h.x, h.y, h.w, h.h)) { handleSettingClick(h, mlx); return true; }
+                    }
+                    for (CHit c : cHits) {
+                        if (c.hasArrow && inside(mlx, mly, c.ax, c.ay, c.aw, c.ah)) { toggleExpanded(c.m); return true; }
+                        if (inside(mlx, mly, c.hx, c.hy, c.hw, c.hh)) {
+                            if (c.m.isToggleable()) { c.m.toggle(); animFor(c.m.getName())[2] = 1f; }
+                            else toggleExpanded(c.m);   // settings-only card → expand
+                            return true;
+                        }
+                    }
+                }
+                // header area (top row, not on a control) → drag the window
+                if (mly <= wy + 42 * S) { dragMode = 1; grabMx = mouseX; grabMy = mouseY; grabA = winOffX; grabB = winOffY; return true; }
+                return true; // consume other clicks inside the window
+            }
+
+            // outside the window → HUD editor
+
+            // 1) size slider of the selected element
+            if (selectedHud != null && hudSliderTrack != null
+                    && inside(mouseX, mouseY, hudSliderTrack[0], hudSliderTrack[1], hudSliderTrack[2], hudSliderTrack[3] + 4)) {
+                dragMode = 5;
+                updateHudSize(mouseX);
+                return true;
+            }
+
+            // 2) a HUD element frame: select + (double-click resets) + start move
+            List<String> names = new ArrayList<>();
+            List<int[]> rects = hudFrames(this.width, this.height, names);
+            for (int i = rects.size() - 1; i >= 0; i--) {
+                int[] rc = rects.get(i);
+                if (mouseX >= rc[0] && mouseX <= rc[0] + rc[2] && mouseY >= rc[1] && mouseY <= rc[1] + rc[3]) {
+                    String name = names.get(i);
+                    long now = System.currentTimeMillis();
+                    if (name.equals(lastFrameClickName) && now - lastFrameClickT < 350) {
+                        HudLayout.reset(name);            // double-click → reset position + size
+                        lastFrameClickT = 0;
+                        return true;
+                    }
+                    lastFrameClickT = now;
+                    lastFrameClickName = name;
+                    selectedHud = name;
+                    dragMode = 3; dragHud = name;
+                    int[] off = HudLayout.get(name);
+                    grabA = off[0]; grabB = off[1]; grabMx = mouseX; grabMy = mouseY;
+                    return true;
+                }
+            }
+            selectedHud = null;   // clicked empty space → deselect
+        }
+        return super.mouseClicked(mouseX, mouseY, button);
+    }
+
+    private void updateHudSize(double mouseX) {
+        if (selectedHud == null || hudSliderTrack == null) return;
+        double frac = (mouseX - hudSliderTrack[0]) / (double) hudSliderTrack[2];
+        frac = Math.max(0, Math.min(1, frac));
+        HudLayout.setScale(selectedHud, (float) (0.5 + frac * 1.5));
+    }
+
+    private void handleSettingClick(SHit h, double mxNative) {
+        switch (h.kind) {
+            case 0 -> ((BoolSetting) h.s).value = !((BoolSetting) h.s).value;
+            case 2 -> ((ColorSetting) h.s).accent = !((ColorSetting) h.s).accent;
+            case 1, 3 -> { activeSlider = h; updateSlider(h, mxNative); }
+            case 4 -> ((ModeSetting) h.s).cycle(mxNative < h.x + h.w / 2.0 ? -1 : 1);
+        }
+    }
+
+    private void updateSlider(SHit h, double mxNative) {
+        double frac = h.trackW > 0 ? (mxNative - h.trackX) / h.trackW : 0;
+        frac = Math.max(0, Math.min(1, frac));
+        if (h.kind == 1) {
+            ((SliderSetting) h.s).setFraction(frac);
+        } else {
+            ColorSetting cs = (ColorSetting) h.s;
+            int v = (int) Math.round(frac * 255);
+            if (h.channel == 0) cs.r = v; else if (h.channel == 1) cs.g = v; else cs.b = v;
+        }
+    }
+
+    private void toggleExpanded(Module m) {
+        String k = m.getName();
+        if (!expanded.remove(k)) expanded.add(k);
+    }
+
+    @Override
+    public boolean mouseDragged(double mouseX, double mouseY, int button, double dx, double dy) {
+        if (button == 0) {
+            switch (dragMode) {
+                case 1 -> { winOffX = grabA + (int) Math.round(mouseX - grabMx); winOffY = grabB + (int) Math.round(mouseY - grabMy); return true; }
+                case 2 -> { winScale = Math.max(0.6f, Math.min(1.8f, grabScale + (float) ((mouseY - grabMy) * 0.006))); return true; }
+                case 3 -> { if (dragHud != null) HudLayout.set(dragHud, grabA + (int) Math.round(mouseX - grabMx), grabB + (int) Math.round(mouseY - grabMy)); return true; }
+                case 5 -> { updateHudSize(mouseX); return true; }
+            }
+            if (activeSlider != null) { updateSlider(activeSlider, localMx(mouseX)); return true; }
+        }
+        return super.mouseDragged(mouseX, mouseY, button, dx, dy);
+    }
+
+    @Override
+    public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        if (button == 0) { dragMode = 0; dragHud = null; activeSlider = null; }
+        return super.mouseReleased(mouseX, mouseY, button);
+    }
+
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double horizontalAmount, double verticalAmount) {
+        scrollTarget -= (float) verticalAmount * 30 * sf();
+        return true;
+    }
+
+    @Override
+    public boolean charTyped(char chr, int modifiers) {
+        if (bindingModule != null) return true;             // consume while capturing a bind
+        if (!(chr >= 32 && chr != 127)) return super.charTyped(chr, modifiers);
+        if ("search".equals(focusedField)) { search += chr; scroll = scrollTarget = 0f; return true; }
+        if (focusedField != null) {                         // waypoint fields
+            boolean numeric = !focusedField.equals("name");
+            if (!numeric || (chr >= '0' && chr <= '9') || chr == '-' || chr == '.')
+                bufSet(focusedField, bufGet(focusedField) + chr);
+            return true;
+        }
+        return super.charTyped(chr, modifiers);             // nothing focused → don't capture
+    }
+
+    @Override
+    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        // capturing a module bind on the Binds tab
+        if (bindingModule != null) {
+            bindingModule.setKey(keyCode == 256 ? -1 : keyCode);   // Esc = unbind
+            bindingModule = null;
+            com.lume.client.Config.save();
+            return true;
+        }
+        if ("search".equals(focusedField)) {
+            if (keyCode == 256) { focusedField = null; return true; }                                   // Esc
+            if (keyCode == 259 && !search.isEmpty()) { search = search.substring(0, search.length() - 1); scroll = scrollTarget = 0f; }
+            return true;
+        }
+        if (focusedField != null) {                         // waypoint fields
+            if (keyCode == 256) { focusedField = null; return true; }
+            if (keyCode == 257 || keyCode == 335) { wpAdd(); return true; }
+            if (keyCode == 259) { String c = bufGet(focusedField); if (!c.isEmpty()) bufSet(focusedField, c.substring(0, c.length() - 1)); return true; }
+            return true;
+        }
+        return super.keyPressed(keyCode, scanCode, modifiers);
+    }
+
+    @Override
+    public boolean shouldPause() { return false; }
+}

@@ -1,0 +1,35 @@
+# ── Lume repo ─────────────────────────────────────────────
+# This folder also holds unrelated/private files. Ignore EVERYTHING
+# at the root by default, then re-include only the Lume project.
+/*
+
+# Re-include the Lume project + meta files
+!/.gitignore
+!/LUME-HANDOFF.md
+!/LumeClient/
+!/LumeClient1165/
+!/LumeLauncher/
+
+# ── Build artifacts / dependencies (don't commit) ────────────
+# Gradle (mod projects)
+LumeClient/build/
+LumeClient/.gradle/
+LumeClient/bin/
+LumeClient/.idea/
+LumeClient/run/
+LumeClient1165/build/
+LumeClient1165/.gradle/
+LumeClient1165/bin/
+LumeClient1165/.idea/
+LumeClient1165/run/
+
+# Electron launcher
+LumeLauncher/node_modules/
+LumeLauncher/dist/
+LumeLauncher/out/
+
+# ── OS / editor junk ─────────────────────────────────────────
+*.log
+.DS_Store
+Thumbs.db
+*.swp
