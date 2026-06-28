@@ -5,7 +5,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { checkKey } = require('./keys');
-const { launchGame } = require('./launcher');
+const { launchGame, cancelLaunch } = require('./launcher');
 
 let win;
 
@@ -46,9 +46,13 @@ ipcMain.handle('window-min', () => win && win.minimize());
 
 ipcMain.handle('launch', async (_e, payload) => {
   try {
-    await launchGame(win, payload || {});
-    return { ok: true };
+    const res = await launchGame(win, payload || {});
+    return res || { ok: true };
   } catch (err) {
-    return { ok: false, error: String(err && err.message ? err.message : err) };
+    const msg = String(err && err.message ? err.message : err);
+    if (msg === 'cancelled') return { cancelled: true };
+    return { ok: false, error: msg };
   }
 });
+
+ipcMain.handle('cancel-launch', () => cancelLaunch());

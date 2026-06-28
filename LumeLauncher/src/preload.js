@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('lume', {
   checkKey: (key) => ipcRenderer.invoke('check-key', key),
   getHwid: () => ipcRenderer.invoke('get-hwid'),
   launch: (payload) => ipcRenderer.invoke('launch', payload),
+  cancelLaunch: () => ipcRenderer.invoke('cancel-launch'),
   closeWindow: () => ipcRenderer.invoke('window-close'),
   minWindow: () => ipcRenderer.invoke('window-min'),
   onStatus: (cb) => ipcRenderer.on('status', (_e, d) => cb(d)),

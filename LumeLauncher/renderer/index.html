@@ -62,6 +62,9 @@
   .btn:active { transform:scale(.98); }
   .btn:disabled { filter:grayscale(.15) brightness(.97); cursor:default; box-shadow:none; }
   .btn svg { width:16px; height:16px; color:#04342C; }
+  .btn.cancel { background:linear-gradient(135deg,#e98a8a,#d65b5b); box-shadow:0 10px 24px -8px rgba(214,91,91,.6), 0 0 22px rgba(214,91,91,.45); }
+  .btn.cancel:hover { filter:brightness(1.05); box-shadow:0 12px 30px -8px rgba(214,91,91,.8), 0 0 36px rgba(214,91,91,.7); }
+  .btn.cancel svg { color:#fff; }
 
   .spinner { width:15px; height:15px; border:2px solid rgba(4,52,44,.35); border-top-color:#04342C; border-radius:50%; animation:spin .7s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg) } }

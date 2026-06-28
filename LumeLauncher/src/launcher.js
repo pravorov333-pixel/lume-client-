@@ -25,6 +25,18 @@ const VERSIONS = {
 };
 const DEFAULT_VERSION = '1.21.4';
 
+// --- Launch cancellation ----------------------------------------------------
+let installerProc = null;   // fabric installer child process (if running)
+let gameProc = null;        // mclc game process (once started)
+let cancelled = false;      // user pressed Cancel during this launch
+
+/** Abort the current launch: stop the installer / game process and flag the run. */
+function cancelLaunch() {
+  cancelled = true;
+  try { if (installerProc) installerProc.kill(); } catch (e) {}
+  try { if (gameProc) gameProc.kill(); } catch (e) {}
+}
+
 function resolveVersion(v) {
   return VERSIONS[v] ? v : DEFAULT_VERSION;
 }
@@ -108,9 +120,12 @@ function ensureFabricInstalled(win, cfg) {
       '-dir', dir,
       '-noprofile',
     ]);
+    installerProc = p;
     p.stdout.on('data', (d) => send(win, 'log', { text: d.toString() }));
     p.stderr.on('data', (d) => send(win, 'log', { text: d.toString() }));
     p.on('close', (code) => {
+      installerProc = null;
+      if (cancelled) { reject(new Error('cancelled')); return; }
       if (code === 0) { status(win, 'Fabric installed.'); resolve(); }
       else reject(new Error('Fabric installer exited with code ' + code));
     });
@@ -166,9 +181,14 @@ async function launchGame(win, { username, memory, version }) {
     throw new Error(`Java for ${ver} not found at: ${cfg.java}`);
   }
 
+  cancelled = false;   // fresh run
+  const abort = () => { if (cancelled) { status(win, 'Отменено.'); return true; } return false; };
+
   await ensureFabricInstalled(win, cfg);
+  if (abort()) return { cancelled: true };
   ensureMods(win, cfg, ver);
   writeOptions(win, ver);
+  if (abort()) return { cancelled: true };
 
   const ram = (memory || 4) + 'G';
   const launcher = new Client();
@@ -185,7 +205,7 @@ async function launchGame(win, { username, memory, version }) {
 
   let hidden = false;
   const hideLauncher = () => {
-    if (!hidden && win && !win.isDestroyed()) { hidden = true; win.hide(); }
+    if (!cancelled && !hidden && win && !win.isDestroyed()) { hidden = true; win.hide(); }
   };
 
   launcher.on('progress', (e) => send(win, 'progress', e));
@@ -198,8 +218,12 @@ async function launchGame(win, { username, memory, version }) {
   });
 
   status(win, `Launching Minecraft ${cfg.mc}…`);
-  await launcher.launch(opts);
+  const proc = await launcher.launch(opts);
+  gameProc = proc || null;
+  // if the user cancelled while assets were downloading, kill the freshly-started game
+  if (cancelled && gameProc) { try { gameProc.kill(); } catch (e) {} return { cancelled: true }; }
   status(win, 'Minecraft is starting…');
+  return { ok: true };
 }
 
-module.exports = { launchGame, rootDir, profileDir };
+module.exports = { launchGame, cancelLaunch, rootDir, profileDir };

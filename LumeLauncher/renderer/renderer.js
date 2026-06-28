@@ -75,9 +75,18 @@ function log(text) {
   statusBox.scrollTop = statusBox.scrollHeight;
 }
 
-function setPlaying(on) {
-  playBtn.disabled = on;
-  playBtn.innerHTML = on ? '<span class="spinner"></span><span>Launching…</span>' : playHTML;
+// While launching, the Play button becomes a red Cancel button so the user can abort.
+let launching = false;
+function setLaunching(on) {
+  launching = on;
+  playBtn.disabled = false;
+  if (on) {
+    playBtn.classList.add('cancel');
+    playBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg><span>Отмена</span>';
+  } else {
+    playBtn.classList.remove('cancel');
+    playBtn.innerHTML = playHTML;
+  }
 }
 
 window.lume.onStatus((d) => { statusBox.textContent = d.text; progLabel.textContent = d.text; });
@@ -93,18 +102,29 @@ window.lume.onProgress((d) => {
 window.lume.onGameClosed((d) => {
   log('Game closed (code ' + d.code + ').');
   progLabel.textContent = 'Closed';
-  setPlaying(false);
+  setLaunching(false);
 });
 
 playBtn.onclick = async () => {
-  setPlaying(true);
+  if (launching) {                       // button is acting as Cancel
+    window.lume.cancelLaunch();
+    setLaunching(false);
+    progLabel.textContent = 'Отменено';
+    prog.style.width = '0%';
+    progPct.textContent = '';
+    log('Отменено пользователем.');
+    return;
+  }
+  setLaunching(true);
   statusBox.textContent = 'Preparing…';
   prog.style.width = '0%';
   progPct.textContent = '';
   const res = await window.lume.launch({ username: $('nick').value.trim() || 'LumePlayer', memory: 4, version: selectedVersion });
-  if (!res.ok) {
-    log('ERROR: ' + res.error);
+  if (res && res.cancelled) { setLaunching(false); return; }
+  if (!res || !res.ok) {
+    log('ERROR: ' + (res && res.error));
     progLabel.textContent = 'Error';
-    setPlaying(false);
+    setLaunching(false);
   }
+  // on success the game starts (launcher hides); onGameClosed restores the Play button
 };
