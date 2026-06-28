@@ -110,7 +110,12 @@ public final class HudRenderer {
         if (on("Keystrokes")) transform(ctx, "Keystrokes", sizeOf("Keystrokes"), 12 * S, nsh, S, () -> renderKeystrokes(ctx, mc, tr, S));
         if (on("Custom Crosshair")) renderCrosshair(ctx, mc, S);
         if (on("Waypoints")) renderWaypoints(ctx, mc, tr, S);
-        if (on("Server Helper")) { renderServerHelper(ctx, mc, tr, S); renderItemHelper(ctx, mc, tr, S); }
+        if (on("Server Helper")) {
+            ServerHelper shm = (ServerHelper) LumeClient.MODULES.getByName("Server Helper");
+            if (shm == null || shm.eventsHud.value) renderServerHelper(ctx, mc, tr, S);
+            if (shm == null || shm.itemHelper.value) renderItemHelper(ctx, mc, tr, S);
+            if (shm == null || shm.effects.value) renderEffects(ctx, mc, tr, S);
+        }
         Notifications.render(ctx, tr, S, nsw);
         if (on("Module List")) transform(ctx, "Module List", sizeOf("Module List"), nsw, 6 * S, S, () -> renderArrayList(ctx, mc, tr, S));
         if (target != null) {
@@ -519,19 +524,70 @@ public final class HudRenderer {
         try { cd = mc.player.getItemCooldownManager().getCooldownProgress(held, 0f); } catch (Exception ignored) {}
 
         int sw = mc.getWindow().getScaledWidth() * S, sh = mc.getWindow().getScaledHeight() * S;
-        String line = name + (rule.radius > 0 ? "  ·  R" + (int) rule.radius : "");
+        // title line: name + radius + (live cooldown seconds when on cooldown, else "готов")
+        StringBuilder lb = new StringBuilder(name);
+        if (rule.radius > 0) lb.append("  ·  R").append((int) rule.radius);
+        if (rule.cooldownSec > 0) {
+            if (cd > 0f) lb.append("  ·  ").append((int) Math.ceil(cd * rule.cooldownSec)).append("с");
+            else lb.append("  ·  готов");
+        }
+        String line = lb.toString();
         int pw = Math.max(RenderUtil.vanillaWidth(tr, line, S), RenderUtil.vanillaWidth(tr, rule.note, S)) + 20 * S;
         int ph = 30 * S;
         int x = sw / 2 - pw / 2, y = sh - 64 * S;
         RenderUtil.roundedRect(ctx, x, y, pw, ph, 7 * S, Theme.winBg());
         RenderUtil.roundedRect(ctx, x, y, 3 * S, ph, 2 * S, rule.color);
-        RenderUtil.vanillaText(ctx, tr, line, x + 10 * S, y + 5 * S, rule.color, S);
+        RenderUtil.vanillaText(ctx, tr, line, x + 10 * S, y + 5 * S, cd > 0f ? Theme.txtDim() : rule.color, S);
         RenderUtil.vanillaText(ctx, tr, rule.note, x + 10 * S, y + 17 * S, Theme.txtDim(), S);
         if (cd > 0f) {   // cooldown bar (cd: 1 = just used → 0 = ready)
             int bx = x + 10 * S, by = y + ph - 4 * S, bw = pw - 20 * S;
             RenderUtil.roundedRect(ctx, bx, by, bw, 2 * S, S, 0x66000000);
             RenderUtil.roundedRect(ctx, bx, by, Math.round(bw * cd), 2 * S, S, rule.color);
         }
+    }
+
+    /**
+     * "Effects on you" — your own active status effects with live countdowns,
+     * negative effects (the ones FT items inflict) highlighted. Legit: reads only
+     * your own potion effects. Left-middle of the screen, vanilla font (Cyrillic).
+     */
+    private static void renderEffects(DrawContext ctx, MinecraftClient mc, TextRenderer tr, int S) {
+        if (mc.player == null) return;
+        var fx = mc.player.getStatusEffects();
+        if (fx.isEmpty()) return;
+
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        java.util.List<Integer> cols = new java.util.ArrayList<>();
+        for (StatusEffectInstance e : fx) {
+            String nm = e.getEffectType().value().getName().getString();
+            int amp = e.getAmplifier() + 1;
+            int d = e.getDuration();
+            String dur = d >= 32767 ? "∞" : fmtTicks(d);
+            lines.add(nm + (amp > 1 ? " " + amp : "") + "  " + dur);
+            boolean bad = e.getEffectType().value().getCategory()
+                    == net.minecraft.entity.effect.StatusEffectCategory.HARMFUL;
+            cols.add(bad ? 0xFFE06666 : 0xFF7FD08A);
+        }
+
+        int x = 6 * S, y = mc.getWindow().getScaledHeight() * S / 2 - lines.size() * 6 * S, pad = 6 * S, lineH = 11 * S;
+        int pw = 0;
+        for (String l : lines) pw = Math.max(pw, RenderUtil.vanillaWidth(tr, l, S));
+        pw += pad * 2 + 4 * S;
+        int h = lines.size() * lineH + pad * 2;
+        RenderUtil.roundedRect(ctx, x, y, pw, h, 7 * S, Theme.winBg());
+        RenderUtil.roundedRect(ctx, x, y, 3 * S, h, 2 * S, Theme.accent());
+        int ty = y + pad;
+        for (int i = 0; i < lines.size(); i++) {
+            RenderUtil.vanillaText(ctx, tr, lines.get(i), x + pad + 3 * S, ty, cols.get(i), S);
+            ty += lineH;
+        }
+    }
+
+    /** Format a duration given in ticks as m:ss or s. */
+    private static String fmtTicks(int ticks) {
+        int sec = ticks / 20;
+        if (sec >= 60) return (sec / 60) + ":" + String.format("%02d", sec % 60);
+        return sec + "с";
     }
 
     /** Dotted ring on the ground (radius blocks) around the player, projected to screen. */

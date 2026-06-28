@@ -116,6 +116,22 @@ public final class Config {
             }
             root.add("events", events);
 
+            // FT/HW items — user-verified "present" flag + tuned radius/cooldown
+            JsonObject items = new JsonObject();
+            for (com.lume.client.fthw.ItemRule it : com.lume.client.fthw.ItemRules.rules) {
+                JsonObject o = new JsonObject();
+                o.addProperty("present", it.present);
+                o.addProperty("radius", it.radius);
+                o.addProperty("cooldown", it.cooldownSec);
+                items.add(it.name, o);
+            }
+            root.add("ftItems", items);
+
+            // FT/HW helper sub-function keybinds
+            JsonObject hbinds = new JsonObject();
+            for (BoolSetting b : com.lume.client.fthw.HelperBinds.bound) hbinds.addProperty(b.name, b.key);
+            root.add("helperBinds", hbinds);
+
             Files.createDirectories(file().getParent());
             Files.writeString(file(), GSON.toJson(root));
         } catch (Exception e) {
@@ -195,6 +211,23 @@ public final class Config {
                     r.lastSeen = o.get("seen").getAsLong();
                     r.intervalSec = o.get("interval").getAsLong();
                 }
+            }
+
+            if (root.has("ftItems")) {
+                JsonObject items = root.getAsJsonObject("ftItems");
+                for (com.lume.client.fthw.ItemRule it : com.lume.client.fthw.ItemRules.rules) {
+                    if (!items.has(it.name)) continue;
+                    JsonObject o = items.getAsJsonObject(it.name);
+                    if (o.has("present")) it.present = o.get("present").getAsBoolean();
+                    if (o.has("radius")) it.radius = o.get("radius").getAsDouble();
+                    if (o.has("cooldown")) it.cooldownSec = o.get("cooldown").getAsInt();
+                }
+            }
+
+            if (root.has("helperBinds")) {
+                JsonObject hb = root.getAsJsonObject("helperBinds");
+                for (BoolSetting b : com.lume.client.fthw.HelperBinds.bound)
+                    if (hb.has(b.name)) b.key = hb.get(b.name).getAsInt();
             }
         } catch (Exception e) {
             System.out.println("[Lume] config load failed: " + e);

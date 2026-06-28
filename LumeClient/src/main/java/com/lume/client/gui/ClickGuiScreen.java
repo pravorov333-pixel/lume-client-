@@ -4,6 +4,8 @@ import com.lume.client.LumeClient;
 import com.lume.client.module.Category;
 import com.lume.client.module.Module;
 import com.lume.client.fthw.EventManager;
+import com.lume.client.fthw.ItemRule;
+import com.lume.client.fthw.ItemRules;
 import com.lume.client.module.modules.cosmetic.CustomCrosshair;
 import com.lume.client.module.modules.fthw.ServerHelper;
 import com.lume.client.module.modules.qol.Waypoints;
@@ -90,6 +92,11 @@ public class ClickGuiScreen extends Screen {
     private final List<Object[]> wpHits = new ArrayList<>();      // {String kind, int x, y, w, h}
 
     private int[] serverToggle = new int[]{0, 0, 0, 0};
+
+    // Server tab: scrollable encyclopedia + sub-function binds
+    private BoolSetting bindingSetting = null;                    // sub-function capturing a key
+    private final List<Object[]> serverHits = new ArrayList<>();  // {String kind, int x, y, w, h, Object ref}
+    private int serverContentH = 0;
 
     private boolean isBindsTab() { return search.isEmpty() && selectedCat == Category.values().length; }
     private boolean isServerTab() { return search.isEmpty() && selectedCat == Category.values().length + 1; }
@@ -295,7 +302,13 @@ public class ClickGuiScreen extends Screen {
             return;
         }
         if (isServerTab()) {
-            renderServer(ctx, x, y, W, H, S, mx, my);
+            renderServer(ctx, x, y, W, H, S, mx, my, dt);
+            int gripX2 = x + W - 14 * S, gripY2 = y + H - 14 * S;
+            boolean gripHov2 = inside(mx, my, gripX2, gripY2, 14 * S, 14 * S);
+            for (int i = 0; i < 3; i++) {
+                int o = (3 - i) * 3 * S;
+                RenderUtil.roundedRect(ctx, x + W - o - 2 * S, y + H - 5 * S, o, 2 * S, S, gripHov2 ? Theme.accent() : Theme.txtDim());
+            }
             mtx.pop();
             return;
         }
@@ -454,58 +467,146 @@ public class ClickGuiScreen extends Screen {
 
     // ---- Server tab (FT/HW helper) ----------------------------------------
 
-    private void renderServer(DrawContext ctx, int x, int y, int W, int H, int S, int mx, int my) {
-        int margin = 20 * S, gy = y + GRID_TOP * S;
-        lastClipTop = gy; lastClipBot = y + H - 12 * S;
-        int sx = x + margin, w = W - margin * 2, yy = gy;
-
-        com.lume.client.fthw.ServerType st = com.lume.client.fthw.ServerType.current();
-        boolean supported = st != com.lume.client.fthw.ServerType.UNKNOWN;
-        Module sh = LumeClient.MODULES.getByName("Server Helper");
-        boolean on = sh != null && sh.isEnabled();
-
-        if (!supported) {
-            // not on a supported server: can't enable, show only the note (module auto-disables on tick)
-            serverToggle = new int[]{0, 0, 0, 0};
-            RenderUtil.vanillaText(ctx, this.textRenderer, "Клиент поддерживает только FunTime и HolyWorld.", sx + 2 * S, yy, Theme.txtDim(), S);
-            return;
-        }
-
-        // supported: show just the enable toggle (no note)
-        int pw = 46 * S, ph = 20 * S, px = sx + w - pw, py = yy;
+    /** Small toggle pill used across the Server tab. */
+    private void serverPill(DrawContext ctx, boolean on, int px, int py, int pw, int ph, int S) {
         RenderUtil.roundedRect(ctx, px, py, pw, ph, ph / 2, on ? Theme.accent() : Theme.pillOff());
         int kd = ph - 4 * S, kx = on ? px + pw - kd - 2 * S : px + 2 * S;
         RenderUtil.roundedRect(ctx, kx, py + 2 * S, kd, kd, kd / 2, 0xFFFFFFFF);
-        serverToggle = new int[]{ px, py, pw, ph };
+    }
 
-        if (!on) return; // off: nothing else to show
-        yy += ph + 12 * S;
+    private void renderServer(DrawContext ctx, int x, int y, int W, int H, int S, int mx, int my, float dt) {
+        int margin = 20 * S, gy = y + GRID_TOP * S;
+        int clipTop = gy - 2 * S, clipBot = y + H - 12 * S, visH = clipBot - gy;
+        lastClipTop = clipTop; lastClipBot = clipBot;
+        int sx = x + margin, w = W - margin * 2;
+        serverHits.clear();
 
-        // status card
-        int cardH = 50 * S;
-        RenderUtil.roundedRect(ctx, sx, yy, w, cardH, 9 * S, Theme.winBg());
-        RenderUtil.roundedRect(ctx, sx, yy, 3 * S, cardH, 2 * S, 0xFF6FCF7F);
-        RenderUtil.vanillaText(ctx, this.textRenderer, "Сервер: " + st.display(), sx + 12 * S, yy + 10 * S, Theme.txt(), S);
-        RenderUtil.vanillaText(ctx, this.textRenderer, "Статус: Активно", sx + 12 * S, yy + 26 * S, 0xFF6FCF7F, S);
-        yy += cardH + 8 * S;
+        com.lume.client.fthw.ServerType st = com.lume.client.fthw.ServerType.current();
+        boolean supported = st != com.lume.client.fthw.ServerType.UNKNOWN;
+        ServerHelper sh = (ServerHelper) LumeClient.MODULES.getByName("Server Helper");
+        boolean on = sh != null && sh.isEnabled();
 
-        // events — learned schedule (was / ETA)
-        RenderUtil.vanillaText(ctx, this.textRenderer, "Расписание ивентов (учится по чату):", sx + 2 * S, yy, Theme.txt(), S);
-        yy += 14 * S;
-        for (com.lume.client.fthw.EventRule r : EventManager.rules) {
-            int left = -1;
-            for (EventManager.Active a : EventManager.active) if (a.rule == r) { left = a.secondsLeft(); break; }
-            int col;
-            String line;
-            if (left >= 0) { col = 0xFF6FCF7F; line = "● " + r.name + " — идёт, " + left + "с"; }
-            else {
-                long eta = r.etaSec(), ago = r.agoSec();
-                if (eta > 0) { col = 0xFFE8C15A; line = "◷ " + r.name + " — ≈ через " + fmtDur(eta); }
-                else if (ago >= 0) { col = Theme.txtDim(); line = "○ " + r.name + " — был " + fmtDur(ago) + " назад"; }
-                else { col = Theme.txtDim(); line = "○ " + r.name + " — ещё не видел"; }
+        if (!supported) {
+            serverToggle = new int[]{0, 0, 0, 0};
+            RenderUtil.vanillaText(ctx, this.textRenderer, "Клиент поддерживает только FunTime и HolyWorld.", sx + 2 * S, gy, Theme.txtDim(), S);
+            return;
+        }
+
+        // scroll bookkeeping (content height measured last frame)
+        int maxScroll = Math.max(0, serverContentH - visH);
+        scrollTarget = Math.max(0f, Math.min(scrollTarget, maxScroll));
+        scroll = approach(scroll, scrollTarget, 16f, dt);
+        if (Math.abs(scroll - scrollTarget) < 0.5f) scroll = scrollTarget;
+        int scrollI = Math.round(scroll);
+
+        winScissor(ctx, x, clipTop, x + W, clipBot);
+        int cur = 0;
+
+        // master enable toggle
+        {
+            int ry = gy + cur - scrollI;
+            RenderUtil.vanillaText(ctx, this.textRenderer, "Включить хелпер", sx + 2 * S, ry + 6 * S, Theme.txt(), S);
+            int pw = 40 * S, ph = 18 * S, px = sx + w - pw, py = ry;
+            serverPill(ctx, on, px, py, pw, ph, S);
+            serverToggle = new int[]{ px, py, pw, ph };
+            serverHits.add(new Object[]{ "master", px, py, pw, ph, null });
+            cur += 26 * S;
+        }
+
+        if (on) {
+            RenderUtil.vanillaText(ctx, this.textRenderer, "Сервер: " + st.display() + "  ·  Активно", sx + 2 * S, gy + cur - scrollI, 0xFF6FCF7F, S);
+            cur += 16 * S;
+
+            // sub-functions (toggle + optional keybind chip)
+            RenderUtil.vanillaText(ctx, this.textRenderer, "Функции (клик по чипу = бинд клавиши):", sx + 2 * S, gy + cur - scrollI, Theme.txtDim(), S);
+            cur += 14 * S;
+            BoolSetting[] subs = { sh.itemHelper, sh.effects, sh.eventsHud, sh.showServer };
+            for (BoolSetting bs : subs) {
+                int ry = gy + cur - scrollI, rh = 17 * S;
+                if (ry + rh >= clipTop && ry <= clipBot) {
+                    RenderUtil.vanillaText(ctx, this.textRenderer, bs.name, sx + 6 * S, ry + 4 * S, Theme.txt(), S);
+                    int pw = 30 * S, ph = 14 * S, px = sx + w - pw, py = ry + S;
+                    serverPill(ctx, bs.value, px, py, pw, ph, S);
+                    serverHits.add(new Object[]{ "subToggle", px, py, pw, ph, bs });
+                    if (com.lume.client.fthw.HelperBinds.bound.contains(bs)) {
+                        boolean cap = bs == bindingSetting;
+                        String kd = cap ? "клавиша…" : keyDisplay(bs.key);
+                        int kw = RenderUtil.vanillaWidth(this.textRenderer, kd, S);
+                        int chipW = kw + 12 * S, chipX = px - chipW - 8 * S;
+                        RenderUtil.roundedRect(ctx, chipX, py, chipW, ph, ph / 2, cap ? withAlpha(Theme.accentRgb(), 0x66) : Theme.pillOff());
+                        RenderUtil.vanillaText(ctx, this.textRenderer, kd, chipX + 6 * S, py + 3 * S, cap ? 0xFFFFFFFF : Theme.accent(), S);
+                        serverHits.add(new Object[]{ "subBind", chipX, py, chipW, ph, bs });
+                    }
+                }
+                cur += rh;
             }
-            RenderUtil.vanillaText(ctx, this.textRenderer, line, sx + 6 * S, yy, col, S);
-            yy += 13 * S;
+            cur += 6 * S;
+
+            // item encyclopedia — per-item "present" verify
+            RenderUtil.vanillaText(ctx, this.textRenderer, "Предметы — отметь что есть на сервере:", sx + 2 * S, gy + cur - scrollI, Theme.txtDim(), S);
+            cur += 14 * S;
+            String[] catNames = { "Активные", "Сферы", "Талисманы" };
+            ItemRule.Cat[] cats = { ItemRule.Cat.ACTIVE, ItemRule.Cat.SPHERE, ItemRule.Cat.TALISMAN };
+            for (int ci = 0; ci < cats.length; ci++) {
+                int ryh = gy + cur - scrollI;
+                if (ryh + 12 * S >= clipTop && ryh <= clipBot)
+                    RenderUtil.vanillaText(ctx, this.textRenderer, catNames[ci], sx + 4 * S, ryh, Theme.accent(), S);
+                cur += 13 * S;
+                for (ItemRule it : ItemRules.byCat(cats[ci])) {
+                    int ry = gy + cur - scrollI, rh = 16 * S;
+                    if (ry + rh >= clipTop && ry <= clipBot) {
+                        int cb = 11 * S, cbx = sx + 4 * S, cby = ry + (rh - cb) / 2;
+                        RenderUtil.roundedRect(ctx, cbx, cby, cb, cb, 3 * S, it.present ? it.color : Theme.pillOff());
+                        if (it.present) RenderUtil.roundedRect(ctx, cbx + (cb - 4 * S) / 2, cby + (cb - 4 * S) / 2, 4 * S, 4 * S, S, 0xFFFFFFFF);
+                        serverHits.add(new Object[]{ "present", cbx, ry, w, rh, it });
+                        RenderUtil.vanillaText(ctx, this.textRenderer, it.name, cbx + cb + 6 * S, ry + 4 * S, it.present ? Theme.txt() : Theme.txtDim(), S);
+                        StringBuilder rb = new StringBuilder();
+                        if (it.radius > 0) rb.append("R").append((int) it.radius).append(" ");
+                        if (it.cooldownSec > 0) rb.append(it.cooldownSec).append("с");
+                        if (rb.length() > 0) {
+                            int rw = RenderUtil.vanillaWidth(this.textRenderer, rb.toString(), S);
+                            RenderUtil.vanillaText(ctx, this.textRenderer, rb.toString(), sx + w - rw, ry + 4 * S, Theme.txtDim(), S);
+                        }
+                    }
+                    cur += 16 * S;
+                }
+                cur += 2 * S;
+            }
+
+            // events — learned schedule
+            cur += 4 * S;
+            int rye = gy + cur - scrollI;
+            if (rye + 12 * S >= clipTop && rye <= clipBot)
+                RenderUtil.vanillaText(ctx, this.textRenderer, "Расписание ивентов (учится по чату):", sx + 2 * S, rye, Theme.txtDim(), S);
+            cur += 14 * S;
+            for (com.lume.client.fthw.EventRule r : EventManager.rules) {
+                int ry = gy + cur - scrollI;
+                if (ry + 12 * S >= clipTop && ry <= clipBot) {
+                    int left = -1;
+                    for (EventManager.Active a : EventManager.active) if (a.rule == r) { left = a.secondsLeft(); break; }
+                    int col; String line;
+                    if (left >= 0) { col = 0xFF6FCF7F; line = "● " + r.name + " — идёт, " + left + "с"; }
+                    else {
+                        long eta = r.etaSec(), ago = r.agoSec();
+                        if (eta > 0) { col = 0xFFE8C15A; line = "◷ " + r.name + " — ≈ через " + fmtDur(eta); }
+                        else if (ago >= 0) { col = Theme.txtDim(); line = "○ " + r.name + " — был " + fmtDur(ago) + " назад"; }
+                        else { col = Theme.txtDim(); line = "○ " + r.name + " — ещё не видел"; }
+                    }
+                    RenderUtil.vanillaText(ctx, this.textRenderer, line, sx + 6 * S, ry, col, S);
+                }
+                cur += 13 * S;
+            }
+        }
+
+        ctx.disableScissor();
+        serverContentH = cur;
+
+        if (maxScroll > 0) {
+            int sbW = 3 * S, sbX = x + W - margin / 2 - sbW;
+            RenderUtil.roundedRect(ctx, sbX, gy, sbW, visH, sbW, Theme.glassRow());
+            int thumbH = Math.max(14 * S, Math.round(visH * (visH / (float) serverContentH)));
+            int thumbY = gy + Math.round((visH - thumbH) * (scroll / maxScroll));
+            RenderUtil.roundedRect(ctx, sbX, thumbY, sbW, thumbH, sbW, Theme.accent());
         }
     }
 
@@ -923,7 +1024,7 @@ public class ClickGuiScreen extends Screen {
             if (inWindow) {
                 if (inside(mlx, mly, themeBtn[0], themeBtn[1], themeBtn[2], themeBtn[3])) { Theme.toggle(); animFor("_theme")[2] = 1f; return true; }
                 for (int i = 0; i < segX.length; i++) {
-                    if (inside(mlx, mly, segX[i], segY - 3 * S, segW[i], segH + 6 * S)) { selectedCat = i; search = ""; scroll = scrollTarget = 0f; bindingModule = null; return true; }
+                    if (inside(mlx, mly, segX[i], segY - 3 * S, segW[i], segH + 6 * S)) { selectedCat = i; search = ""; scroll = scrollTarget = 0f; bindingModule = null; bindingSetting = null; return true; }
                 }
                 if (isBindsTab()) {
                     if (mly >= lastClipTop && mly <= lastClipBot) {
@@ -946,12 +1047,24 @@ public class ClickGuiScreen extends Screen {
                     // header area → fall through to window drag
                 }
                 if (isServerTab()) {
-                    if (inside(mlx, mly, serverToggle[0], serverToggle[1], serverToggle[2], serverToggle[3])) {
-                        Module sh = LumeClient.MODULES.getByName("Server Helper");
-                        if (sh != null) { sh.toggle(); com.lume.client.Config.save(); }
-                        return true;
+                    if (mly >= lastClipTop && mly <= lastClipBot) {
+                        for (Object[] h : serverHits) {
+                            if (!inside(mlx, mly, (int) h[1], (int) h[2], (int) h[3], (int) h[4])) continue;
+                            String kind = (String) h[0];
+                            switch (kind) {
+                                case "master" -> {
+                                    Module shm = LumeClient.MODULES.getByName("Server Helper");
+                                    if (shm != null) { shm.toggle(); com.lume.client.Config.save(); }
+                                }
+                                case "subToggle" -> { BoolSetting bs = (BoolSetting) h[5]; bs.value = !bs.value; com.lume.client.Config.save(); }
+                                case "subBind" -> { BoolSetting bs = (BoolSetting) h[5]; bindingSetting = (bindingSetting == bs) ? null : bs; }
+                                case "present" -> { ItemRule it = (ItemRule) h[5]; it.present = !it.present; com.lume.client.Config.save(); }
+                            }
+                            return true;
+                        }
+                        bindingSetting = null;
+                        return true;   // consume content clicks
                     }
-                    if (mly >= lastClipTop && mly <= lastClipBot) return true;   // consume content clicks
                     // header → fall through to window drag
                 }
                 if (mly >= lastClipTop && mly <= lastClipBot) {
@@ -1073,7 +1186,7 @@ public class ClickGuiScreen extends Screen {
 
     @Override
     public boolean charTyped(char chr, int modifiers) {
-        if (bindingModule != null) return true;             // consume while capturing a bind
+        if (bindingModule != null || bindingSetting != null) return true;   // consume while capturing a bind
         if (!(chr >= 32 && chr != 127)) return super.charTyped(chr, modifiers);
         if ("search".equals(focusedField)) { search += chr; scroll = scrollTarget = 0f; return true; }
         if (focusedField != null) {                         // waypoint fields
@@ -1091,6 +1204,13 @@ public class ClickGuiScreen extends Screen {
         if (bindingModule != null) {
             bindingModule.setKey(keyCode == 256 ? -1 : keyCode);   // Esc = unbind
             bindingModule = null;
+            com.lume.client.Config.save();
+            return true;
+        }
+        // capturing a sub-function bind on the Server tab
+        if (bindingSetting != null) {
+            bindingSetting.key = keyCode == 256 ? -1 : keyCode;    // Esc = unbind
+            bindingSetting = null;
             com.lume.client.Config.save();
             return true;
         }

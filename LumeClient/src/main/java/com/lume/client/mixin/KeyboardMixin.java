@@ -20,6 +20,7 @@ public class KeyboardMixin {
         if (action == GLFW.GLFW_PRESS) {
             if (mc.currentScreen != null || mc.player == null) return;
             LumeClient.MODULES.onKey(key, true);
+            com.lume.client.fthw.HelperBinds.onKey(key);   // FT/HW helper sub-function binds
             MacroManager.onKey(key);
         } else if (action == GLFW.GLFW_RELEASE) {
             LumeClient.MODULES.onKey(key, false);   // always release HOLD binds
