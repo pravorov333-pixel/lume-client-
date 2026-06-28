@@ -3,6 +3,9 @@ package com.lume.client1165.module;
 import com.lume.client1165.module.modules.player.AutoSprint;
 import com.lume.client1165.module.modules.render.FullBright;
 import com.lume.client1165.module.modules.render.Zoom;
+import com.lume.client1165.module.modules.visual.Coords;
+import com.lume.client1165.module.modules.visual.Hud;
+import com.lume.client1165.module.modules.visual.Keystrokes;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -13,8 +16,14 @@ public class ModuleManager {
     private final List<Module> modules = new ArrayList<Module>();
 
     public void init() {
+        // Visuals
+        register(new Hud());
+        register(new Coords());
+        register(new Keystrokes());
+        // Render
         register(new FullBright());
         register(new Zoom());
+        // Player
         register(new AutoSprint());
     }
 
