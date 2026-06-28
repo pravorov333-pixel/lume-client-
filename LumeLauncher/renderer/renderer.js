@@ -20,20 +20,46 @@ function rejectKey(reason) {
   activateBtn.disabled = false;
 }
 
+const activateHTML = activateBtn.innerHTML;
+const loader = $('loader');
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
 async function activate() {
   loginErr.textContent = '';
   activateBtn.disabled = true;
+  // verifying state on the button (this is also where the online check goes in stage 2)
+  activateBtn.innerHTML = '<span class="spinner"></span><span>Verifying…</span>';
   const res = await window.lume.checkKey(keyInput.value);
-  if (res.ok) {
-    $('plan').textContent = res.plan || 'standard';
-    loginCard.classList.add('hidden');
-    $('home').classList.remove('hidden');
-  } else {
+  if (!res.ok) {
+    activateBtn.innerHTML = activateHTML;
     rejectKey(res.reason);
+    return;
   }
+
+  // Valid → play a loading transition before revealing the play screen.
+  $('plan').textContent = res.plan || 'standard';
+  loginCard.classList.add('hidden');
+  await sleep(180);                     // let the key card fade out
+  loader.classList.add('show');         // pulsing logo + indeterminate bar
+  await sleep(1100);                    // loading beat
+  loader.classList.remove('show');
+  await sleep(300);                     // loader fades out
+  $('home').classList.remove('hidden'); // play screen fades in
+  activateBtn.innerHTML = activateHTML;
+  activateBtn.disabled = false;
 }
 activateBtn.onclick = activate;
 keyInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') activate(); });
+
+// --- Version selector (home screen) ---
+let selectedVersion = '1.21.4';
+$('vers').querySelectorAll('button').forEach((b) => {
+  b.onclick = () => {
+    selectedVersion = b.dataset.v;
+    $('vers').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+  };
+});
 
 // --- Play / launch ---
 const playBtn = $('play');
@@ -75,7 +101,7 @@ playBtn.onclick = async () => {
   statusBox.textContent = 'Preparing…';
   prog.style.width = '0%';
   progPct.textContent = '';
-  const res = await window.lume.launch({ username: $('nick').value.trim() || 'LumePlayer', memory: 4 });
+  const res = await window.lume.launch({ username: $('nick').value.trim() || 'LumePlayer', memory: 4, version: selectedVersion });
   if (!res.ok) {
     log('ERROR: ' + res.error);
     progLabel.textContent = 'Error';

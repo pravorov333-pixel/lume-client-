@@ -141,6 +141,17 @@ public class ClickGuiScreen extends Screen {
 
     private int sf() { return (int) Math.max(1, this.client.getWindow().getScaleFactor()); }
 
+    /**
+     * Auto-fit factor so the window never overflows the screen at large GUI scales.
+     * The window is WIN_W×WIN_H GUI-logical units; if the screen (this.width/height,
+     * also GUI-logical) is smaller, shrink to fit with a small margin. ≤1 always.
+     */
+    private float fitScale() {
+        float fw = this.width  / (float) (WIN_W + 24);
+        float fh = this.height / (float) (WIN_H + 24);
+        return Math.min(1f, Math.min(fw, fh));
+    }
+
     private void text(DrawContext ctx, String s, int x, int y, int color, float vis) {
         RenderUtil.text(ctx, this.textRenderer, s, x, y, color, false, vis * scale);
     }
@@ -186,10 +197,10 @@ public class ClickGuiScreen extends Screen {
         // HUD editor frames (screen space) — draggable element placeholders
         drawHudFrames(ctx, S, mouseX, mouseY);
 
-        // Window transform: open-anim × user scale, shifted by user offset.
+        // Window transform: open-anim × user scale × auto-fit, shifted by user offset.
         double cx = sw / 2.0, cy = sh / 2.0;
         float p = anim();
-        float total = (0.96f + 0.04f * p) * winScale;
+        float total = (0.96f + 0.04f * p) * winScale * fitScale();
         this.curTotal = total;
         int mx = (int) Math.round((mouseX * S - winOffX * S - cx) / total + cx); // local mouse
         int my = (int) Math.round((mouseY * S - winOffY * S - cy) / total + cy);
@@ -862,30 +873,30 @@ public class ClickGuiScreen extends Screen {
     }
 
     /**
-     * enableScissor for a rectangle given in LOCAL native coords, transformed to
-     * screen-logical coords so it follows the window's move/scale (scissor itself
-     * ignores the matrix, hence this manual mapping).
+     * enableScissor for a rectangle given in LOCAL native coords.
+     *
+     * <p>Since MC 1.21.4, {@code DrawContext.enableScissor} transforms the rect by
+     * the <b>current matrix</b> (matrices.peek().getPositionMatrix()). All scissor
+     * calls here happen while the window's native-res matrix (scale 1/S + move +
+     * scale) is active, so we pass the native coords straight through and let that
+     * matrix map them to screen space — exactly where the content is drawn. (In
+     * 1.21.1 enableScissor did NOT transform, which is why this used to map by hand.)
      */
     private void winScissor(DrawContext ctx, int nx1, int ny1, int nx2, int ny2) {
-        int S = scale;
-        double cx = this.width / 2.0, cy = this.height / 2.0, t = curTotal;
-        int x1 = (int) Math.floor(cx + ((double) nx1 / S - cx) * t + winOffX);
-        int y1 = (int) Math.floor(cy + ((double) ny1 / S - cy) * t + winOffY);
-        int x2 = (int) Math.ceil(cx + ((double) nx2 / S - cx) * t + winOffX);
-        int y2 = (int) Math.ceil(cy + ((double) ny2 / S - cy) * t + winOffY);
-        ctx.enableScissor(x1, y1, x2, y2);
+        ctx.enableScissor(nx1, ny1, nx2, ny2);
     }
 
-    /** Local (window-space) mouse X, undoing the window move/scale transform. */
+    /** Local (window-space) mouse X, undoing the window move/scale transform.
+     *  Uses {@link #curTotal} (anim × winScale × fit) so clicks match what's drawn. */
     private double localMx(double mouseX) {
         int S = sf();
         double cx = this.width * S / 2.0;
-        return (mouseX * S - winOffX * S - cx) / winScale + cx;
+        return (mouseX * S - winOffX * S - cx) / curTotal + cx;
     }
     private double localMy(double mouseY) {
         int S = sf();
         double cy = this.height * S / 2.0;
-        return (mouseY * S - winOffY * S - cy) / winScale + cy;
+        return (mouseY * S - winOffY * S - cy) / curTotal + cy;
     }
 
     @Override

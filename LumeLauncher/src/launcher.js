@@ -7,15 +7,32 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
-// --- Fixed coordinates for this build (match the LumeClient mod) ---
-const MC_VERSION = '1.21.4';
-const LOADER_VERSION = '0.16.10';
-const FABRIC_VERSION_ID = `fabric-loader-${LOADER_VERSION}-${MC_VERSION}`;
+// --- Supported versions ----------------------------------------------------
+// Each entry: the MC + Fabric loader coords, which bundled jars to install, and
+// which Java to run with (1.16.5 needs Java 8; 1.21.4 needs Java 17+).
+const JAVA21 = 'C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.11.10-hotspot\\bin\\java.exe';
+const JAVA8 = 'C:\\Program Files\\Java\\jre-1.8\\bin\\java.exe';
 
-// Java 21 (installed via winget). Adjust if the path differs.
-const JAVA_PATH = 'C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.11.10-hotspot\\bin\\java.exe';
+const VERSIONS = {
+  '1.21.4': {
+    mc: '1.21.4', loader: '0.16.10', java: JAVA21,
+    fabricApi: 'fabric-api.jar', lume: 'lume-client.jar', perf: 'perf-mods',
+  },
+  '1.16.5': {
+    mc: '1.16.5', loader: '0.16.10', java: JAVA8,
+    fabricApi: 'fabric-api-1165.jar', lume: 'lume-client-1165.jar', perf: null,
+  },
+};
+const DEFAULT_VERSION = '1.21.4';
 
-// Aikar's GC flags — smoother frametimes, fewer GC stutters.
+function resolveVersion(v) {
+  return VERSIONS[v] ? v : DEFAULT_VERSION;
+}
+function fabricId(cfg) {
+  return `fabric-loader-${cfg.loader}-${cfg.mc}`;
+}
+
+// Aikar's GC flags — smoother frametimes, fewer GC stutters. (Valid on Java 8 & 21.)
 const JVM_FLAGS = [
   '-XX:+UseG1GC',
   '-XX:+ParallelRefProcEnabled',
@@ -37,14 +54,18 @@ const JVM_FLAGS = [
   '-XX:MaxTenuringThreshold=1',
 ];
 
-// Isolated game directory — fully self-contained, independent of TLauncher.
-function gameDir() {
+// Shared root: vanilla assets/libraries/versions live here (no per-version dupes).
+function rootDir() {
   return path.join(app.getPath('appData'), '.lumeclient');
+}
+// Per-version run directory: mods/, options.txt, saves — isolated so each version
+// only sees its own (incompatible) mods.
+function profileDir(version) {
+  return path.join(rootDir(), 'profiles', version);
 }
 
 // Bundled files shipped with the launcher (resources/).
 function resourcesDir() {
-  // In dev: <project>/resources. When packaged: process.resourcesPath/resources.
   const dev = path.join(__dirname, '..', 'resources');
   if (fs.existsSync(dev)) return dev;
   return path.join(process.resourcesPath, 'resources');
@@ -53,43 +74,37 @@ function resourcesDir() {
 function send(win, channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
 }
-
-function status(win, text) {
-  send(win, 'status', { text });
-}
+function status(win, text) { send(win, 'status', { text }); }
 
 // Offline auth object (TLauncher-style — no Mojang account needed).
 function offlineAuth(username) {
   const hash = crypto.createHash('md5').update('OfflinePlayer:' + username).digest();
-  hash[6] = (hash[6] & 0x0f) | 0x30; // version 3
-  hash[8] = (hash[8] & 0x3f) | 0x80; // variant
+  hash[6] = (hash[6] & 0x0f) | 0x30;
+  hash[8] = (hash[8] & 0x3f) | 0x80;
   const hex = hash.toString('hex');
   const uuid = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   return {
-    access_token: '0',
-    client_token: '0',
-    uuid,
-    name: username,
-    user_properties: '{}',
-    meta: { type: 'mojang', demo: false },
+    access_token: '0', client_token: '0', uuid, name: username,
+    user_properties: '{}', meta: { type: 'mojang', demo: false },
   };
 }
 
-function ensureFabricInstalled(win) {
+function ensureFabricInstalled(win, cfg) {
   return new Promise((resolve, reject) => {
-    const dir = gameDir();
-    const versionJson = path.join(dir, 'versions', FABRIC_VERSION_ID, `${FABRIC_VERSION_ID}.json`);
+    const dir = rootDir();
+    const id = fabricId(cfg);
+    const versionJson = path.join(dir, 'versions', id, `${id}.json`);
     if (fs.existsSync(versionJson)) {
-      status(win, 'Fabric already installed.');
+      status(win, `Fabric ${cfg.mc} already installed.`);
       return resolve();
     }
     fs.mkdirSync(dir, { recursive: true });
     const installer = path.join(resourcesDir(), 'fabric-installer.jar');
-    status(win, 'Installing Fabric loader…');
-    const p = spawn(JAVA_PATH, [
+    status(win, `Installing Fabric for ${cfg.mc}…`);
+    const p = spawn(cfg.java, [
       '-jar', installer, 'client',
-      '-mcversion', MC_VERSION,
-      '-loader', LOADER_VERSION,
+      '-mcversion', cfg.mc,
+      '-loader', cfg.loader,
       '-dir', dir,
       '-noprofile',
     ]);
@@ -103,43 +118,38 @@ function ensureFabricInstalled(win) {
   });
 }
 
-function ensureMods(win) {
-  const modsDir = path.join(gameDir(), 'mods');
+function ensureMods(win, cfg, version) {
+  const modsDir = path.join(profileDir(version), 'mods');
+  // fresh mods each launch so a version never inherits another's jars
+  fs.rmSync(modsDir, { recursive: true, force: true });
   fs.mkdirSync(modsDir, { recursive: true });
   const res = resourcesDir();
 
-  // Core mods
-  const files = ['fabric-api.jar', 'lume-client.jar'];
-  for (const f of files) {
+  for (const f of [cfg.fabricApi, cfg.lume]) {
     const src = path.join(res, f);
     if (fs.existsSync(src)) fs.copyFileSync(src, path.join(modsDir, f));
   }
 
-  // Bundled performance mods (Sodium, Lithium, FerriteCore, Indium, ...)
-  const perfDir = path.join(res, 'perf-mods');
-  if (fs.existsSync(perfDir)) {
-    for (const f of fs.readdirSync(perfDir)) {
-      if (f.endsWith('.jar')) fs.copyFileSync(path.join(perfDir, f), path.join(modsDir, f));
+  if (cfg.perf) {
+    const perfDir = path.join(res, cfg.perf);
+    if (fs.existsSync(perfDir)) {
+      for (const f of fs.readdirSync(perfDir)) {
+        if (f.endsWith('.jar')) fs.copyFileSync(path.join(perfDir, f), path.join(modsDir, f));
+      }
     }
   }
-  status(win, 'Mods & performance pack ready.');
+  status(win, 'Mods ready.');
 }
 
 // Write tuned video settings on first run only (never overrides the user's own).
-function writeOptions(win) {
-  const f = path.join(gameDir(), 'options.txt');
+function writeOptions(win, version) {
+  const f = path.join(profileDir(version), 'options.txt');
   if (fs.existsSync(f)) return;
+  fs.mkdirSync(path.dirname(f), { recursive: true });
   const opts = [
-    'renderDistance:8',
-    'simulationDistance:6',
-    'maxFps:260',
-    'graphicsMode:0',
-    'particles:1',
-    'entityShadows:false',
-    'mipmapLevels:2',
-    'enableVsync:false',
-    'gamma:1.0',
-    'guiScale:0',
+    'renderDistance:8', 'simulationDistance:6', 'maxFps:260', 'graphicsMode:0',
+    'particles:1', 'entityShadows:false', 'mipmapLevels:2', 'enableVsync:false',
+    'gamma:1.0', 'guiScale:0',
   ].join('\n') + '\n';
   fs.writeFileSync(f, opts);
   status(win, 'Optimised settings applied.');
@@ -148,24 +158,28 @@ function writeOptions(win) {
 /**
  * Set up (if needed) and launch the game. Resolves when the game process starts.
  */
-async function launchGame(win, { username, memory }) {
-  if (!fs.existsSync(JAVA_PATH)) {
-    throw new Error('Java 21 not found at: ' + JAVA_PATH);
+async function launchGame(win, { username, memory, version }) {
+  const ver = resolveVersion(version);
+  const cfg = VERSIONS[ver];
+
+  if (!fs.existsSync(cfg.java)) {
+    throw new Error(`Java for ${ver} not found at: ${cfg.java}`);
   }
 
-  await ensureFabricInstalled(win);
-  ensureMods(win);
-  writeOptions(win);
+  await ensureFabricInstalled(win, cfg);
+  ensureMods(win, cfg, ver);
+  writeOptions(win, ver);
 
   const ram = (memory || 4) + 'G';
   const launcher = new Client();
   const opts = {
     authorization: Promise.resolve(offlineAuth(username || 'LumePlayer')),
-    root: gameDir(),
-    version: { number: MC_VERSION, type: 'release', custom: FABRIC_VERSION_ID },
-    // min == max so AlwaysPreTouch reserves the heap up-front (smoother FPS).
+    root: rootDir(),
+    // mods/options/saves live in a per-version profile dir
+    overrides: { gameDirectory: profileDir(ver) },
+    version: { number: cfg.mc, type: 'release', custom: fabricId(cfg) },
     memory: { max: ram, min: ram },
-    javaPath: JAVA_PATH,
+    javaPath: cfg.java,
     customArgs: JVM_FLAGS,
   };
 
@@ -179,14 +193,13 @@ async function launchGame(win, { username, memory }) {
   launcher.on('data', (line) => { send(win, 'log', { text: String(line) }); hideLauncher(); });
   launcher.on('debug', (line) => send(win, 'log', { text: String(line) }));
   launcher.on('close', (code) => {
-    // Game closed -> bring the launcher back to the front.
     if (win && !win.isDestroyed()) { win.show(); win.focus(); }
     send(win, 'game-closed', { code });
   });
 
-  status(win, 'Downloading game files & launching…');
+  status(win, `Launching Minecraft ${cfg.mc}…`);
   await launcher.launch(opts);
   status(win, 'Minecraft is starting…');
 }
 
-module.exports = { launchGame, gameDir };
+module.exports = { launchGame, rootDir, profileDir };
