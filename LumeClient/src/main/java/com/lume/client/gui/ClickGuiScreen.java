@@ -193,14 +193,20 @@ public class ClickGuiScreen extends Screen {
         super.render(ctx, mouseX, mouseY, delta);
         ctx.fill(0, 0, this.width, this.height, Theme.backdrop());
 
-        // --- NanoVG PROTOTYPE (branch nanovg-ui): smooth test panel, top-left ---
-        // If NanoVG loads, you'll see a buttery-smooth lavender card with a soft
-        // inner highlight + a circle (perfect AA curves) that nothing else can match.
-        // Drawn in framebuffer pixels via OpenGL, independent of GUI scale.
+        // --- NanoVG PROTOTYPE (branch nanovg-ui): toolkit demo, top-left ---
+        // Shows the full smooth toolkit: soft shadow, gradient glass card, bright
+        // rim, anti-aliased text (Latin via Poppins + Cyrillic via NotoSans fallback)
+        // and a perfect circle. All at framebuffer resolution, independent of GUI scale.
         com.lume.client.nanovg.NanoVgRenderer.frame(vg -> {
-            com.lume.client.nanovg.NanoVgRenderer.roundedRect(vg, 40, 40, 360, 130, 22, 0xEE2A2438);
-            com.lume.client.nanovg.NanoVgRenderer.roundedRect(vg, 52, 52, 336, 40, 14, 0x66B7AAD9);
-            com.lume.client.nanovg.NanoVgRenderer.roundedRect(vg, 300, 104, 84, 56, 28, 0xCC8E7FC0);
+            float x = 40, y = 40, w = 380, h = 150, r = 22;
+            com.lume.client.nanovg.NanoVgRenderer.shadow(vg, x, y, w, h, r, 26, 0x80000000);
+            com.lume.client.nanovg.NanoVgRenderer.gradientRoundedRect(vg, x, y, w, h, r, 0xF0322B40, 0xF01E1A28);
+            com.lume.client.nanovg.NanoVgRenderer.strokeRoundedRect(vg, x + 0.75f, y + 0.75f, w - 1.5f, h - 1.5f, r, 1.5f, 0x55FFFFFF);
+            com.lume.client.nanovg.NanoVgRenderer.gradientRoundedRect(vg, x + 16, y + 16, w - 32, 40, 14, 0xFFB7AAD9, 0xFF8E7FC0);
+            com.lume.client.nanovg.NanoVgRenderer.text(vg, x + 24, y + 28, 26, 0xFFFFFFFF, com.lume.client.nanovg.NanoVgRenderer.ALIGN_MIDDLE, "Lume · NanoVG");
+            com.lume.client.nanovg.NanoVgRenderer.text(vg, x + 24, y + 78, 22, 0xFFEDE6D6, com.lume.client.nanovg.NanoVgRenderer.ALIGN_LEFT, "Гладкий рендер ✓ кириллица ✓");
+            com.lume.client.nanovg.NanoVgRenderer.text(vg, x + 24, y + 108, 18, 0xFFB7AAD9, com.lume.client.nanovg.NanoVgRenderer.ALIGN_LEFT, "framebuffer-res · anti-aliased");
+            com.lume.client.nanovg.NanoVgRenderer.circle(vg, x + w - 40, y + h - 40, 24, 0xCC8E7FC0);
         });
 
         long now = System.currentTimeMillis();
