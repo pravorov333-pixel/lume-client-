@@ -145,6 +145,14 @@ function ensureMods(win, cfg, version) {
     if (fs.existsSync(src)) fs.copyFileSync(src, path.join(modsDir, f));
   }
 
+  // DEV override: a jar dropped at <root>/override/<lume jar> replaces the bundled
+  // Lume mod — lets a fresh build be tested with just a relaunch (no exe rebuild).
+  const override = path.join(rootDir(), 'override', cfg.lume);
+  if (fs.existsSync(override)) {
+    fs.copyFileSync(override, path.join(modsDir, cfg.lume));
+    status(win, 'Using override Lume jar.');
+  }
+
   if (cfg.perf) {
     const perfDir = path.join(res, cfg.perf);
     if (fs.existsSync(perfDir)) {
