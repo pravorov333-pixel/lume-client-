@@ -50,6 +50,9 @@ public final class NanoVgRenderer {
 
     public static boolean ready() { return vg != 0L; }
 
+    /** Initialise NanoVG if not yet done (so {@link #ready()} is accurate before a frame). */
+    public static void ensureInit() { ensure(); }
+
     private static void ensure() {
         if (vg != 0L || failed) return;
         try {

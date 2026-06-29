@@ -6,6 +6,7 @@ import com.lume.client.module.Module;
 import com.lume.client.fthw.EventManager;
 import com.lume.client.fthw.ItemRule;
 import com.lume.client.fthw.ItemRules;
+import com.lume.client.nanovg.NanoVgRenderer;
 import com.lume.client.module.modules.cosmetic.CustomCrosshair;
 import com.lume.client.module.modules.fthw.ServerHelper;
 import com.lume.client.module.modules.qol.Waypoints;
@@ -193,22 +194,6 @@ public class ClickGuiScreen extends Screen {
         super.render(ctx, mouseX, mouseY, delta);
         ctx.fill(0, 0, this.width, this.height, Theme.backdrop());
 
-        // --- NanoVG PROTOTYPE (branch nanovg-ui): toolkit demo, top-left ---
-        // Shows the full smooth toolkit: soft shadow, gradient glass card, bright
-        // rim, anti-aliased text (Latin via Poppins + Cyrillic via NotoSans fallback)
-        // and a perfect circle. All at framebuffer resolution, independent of GUI scale.
-        com.lume.client.nanovg.NanoVgRenderer.frame(vg -> {
-            float x = 40, y = 40, w = 380, h = 150, r = 22;
-            com.lume.client.nanovg.NanoVgRenderer.shadow(vg, x, y, w, h, r, 26, 0x80000000);
-            com.lume.client.nanovg.NanoVgRenderer.gradientRoundedRect(vg, x, y, w, h, r, 0xF0322B40, 0xF01E1A28);
-            com.lume.client.nanovg.NanoVgRenderer.strokeRoundedRect(vg, x + 0.75f, y + 0.75f, w - 1.5f, h - 1.5f, r, 1.5f, 0x55FFFFFF);
-            com.lume.client.nanovg.NanoVgRenderer.gradientRoundedRect(vg, x + 16, y + 16, w - 32, 40, 14, 0xFFB7AAD9, 0xFF8E7FC0);
-            com.lume.client.nanovg.NanoVgRenderer.text(vg, x + 24, y + 28, 26, 0xFFFFFFFF, com.lume.client.nanovg.NanoVgRenderer.ALIGN_MIDDLE, "Lume · NanoVG");
-            com.lume.client.nanovg.NanoVgRenderer.text(vg, x + 24, y + 78, 22, 0xFFEDE6D6, com.lume.client.nanovg.NanoVgRenderer.ALIGN_LEFT, "Гладкий рендер ✓ кириллица ✓");
-            com.lume.client.nanovg.NanoVgRenderer.text(vg, x + 24, y + 108, 18, 0xFFB7AAD9, com.lume.client.nanovg.NanoVgRenderer.ALIGN_LEFT, "framebuffer-res · anti-aliased");
-            com.lume.client.nanovg.NanoVgRenderer.circle(vg, x + w - 40, y + h - 40, 24, 0xCC8E7FC0);
-        });
-
         long now = System.currentTimeMillis();
         float dt = Math.min(0.05f, (now - lastFrame) / 1000f);
         lastFrame = now;
@@ -216,6 +201,14 @@ public class ClickGuiScreen extends Screen {
         int S = sf();
         this.scale = S;
         int sw = this.width * S, sh = this.height * S;
+
+        // NanoVG-rendered main view (smooth). Binds/Server tabs still use the old
+        // DrawContext path for now. Falls back to DrawContext if NanoVG is unavailable.
+        NanoVgRenderer.ensureInit();
+        if (!isBindsTab() && !isServerTab() && NanoVgRenderer.ready()) {
+            renderNvgMain(ctx, mouseX, mouseY, dt, S);
+            return;
+        }
 
         // HUD editor frames (screen space) — draggable element placeholders
         drawHudFrames(ctx, S, mouseX, mouseY);
@@ -479,6 +472,176 @@ public class ClickGuiScreen extends Screen {
         }
 
         mtx.pop();
+    }
+
+    // ======================================================================
+    //  NanoVG main view (smooth) — window, header, search, tabs, module cards
+    //  Reuses the exact same layout/coords as the old renderer so the existing
+    //  mouseClicked hit-testing (segX/segW/themeBtn/searchBox/cHits) keeps working.
+    //  Settings-expansion + Binds/Server tabs still use the DrawContext path.
+    // ======================================================================
+    private void renderNvgMain(DrawContext ctx, int mouseX, int mouseY, float dt, int S) {
+        int sw = this.width * S, sh = this.height * S;
+        drawHudFrames(ctx, S, mouseX, mouseY);   // HUD editor frames (DrawContext, behind)
+
+        double cx = sw / 2.0, cy = sh / 2.0;
+        float p = anim();
+        float total = (0.96f + 0.04f * p) * winScale * fitScale();
+        this.curTotal = total;
+        int mx = (int) Math.round((mouseX * S - winOffX * S - cx) / total + cx);
+        int my = (int) Math.round((mouseY * S - winOffY * S - cy) / total + cy);
+
+        final int W = WIN_W * S, H = WIN_H * S;
+        final int x = (sw - W) / 2, y = (sh - H) / 2;
+        final int r = 18 * S;
+        final int mxF = mx, myF = my;
+
+        // layout/anim that needs to persist to hit-testing is computed here (outside the lambda)
+        List<Module> mods = modules();
+        int margin = 20 * S, gap = CARD_GAP * S;
+        int cardW = (W - margin * 2 - gap) / 2;
+        int gx0 = x + margin, gx1 = x + margin + cardW + gap;
+        int gy = y + GRID_TOP * S;
+        int clipTop = gy - 2 * S, clipBot = y + H - 12 * S, visH = clipBot - gy;
+        int headerH = CARD_H * S;
+        lastClipTop = clipTop; lastClipBot = clipBot;
+        int n = mods.size(), rowsN = (n + 1) / 2;
+        int contentH = Math.max(0, rowsN * (headerH + gap) - gap);
+        int maxScroll = Math.max(0, contentH - visH);
+        scrollTarget = Math.max(0f, Math.min(scrollTarget, maxScroll));
+        scroll = approach(scroll, scrollTarget, 16f, dt);
+        if (Math.abs(scroll - scrollTarget) < 0.5f) scroll = scrollTarget;
+        final int scrollI = Math.round(scroll);
+        cHits.clear(); sHits.clear(); wpHits.clear();
+
+        final int fMaxScroll = maxScroll, fContentH = contentH, fVisH = visH;
+
+        NanoVgRenderer.frame(vg -> {
+            NanoVgRenderer.translate(vg, winOffX * S, winOffY * S);
+            NanoVgRenderer.translate(vg, (float) cx, (float) cy);
+            NanoVgRenderer.scale(vg, total, total);
+            NanoVgRenderer.translate(vg, (float) -cx, (float) -cy);
+
+            // panel: soft dark shadow + faint accent glow + gradient glass + rim
+            NanoVgRenderer.shadow(vg, x, y, W, H, r, 22 * S, 0x70000000);
+            NanoVgRenderer.shadow(vg, x, y, W, H, r, 30 * S, withAlpha(Theme.accentRgb(), 0x33));
+            NanoVgRenderer.gradientRoundedRect(vg, x, y, W, H, r, Theme.winTop(), Theme.winBot());
+            NanoVgRenderer.strokeRoundedRect(vg, x + 0.75f * S, y + 0.75f * S, W - 1.5f * S, H - 1.5f * S, r, 1.2f * S, Theme.rim());
+
+            // header: logo + wordmark
+            nvgLogo(vg, x + 20 * S, y + 15 * S, 22 * S);
+            float hcy = y + 15 * S + 11 * S;
+            NanoVgRenderer.text(vg, x + 52 * S, hcy, 15 * S, Theme.accent(), NanoVgRenderer.ALIGN_MIDDLE, "lume");
+            float lw = NanoVgRenderer.textWidth(vg, 15 * S, "lume");
+            NanoVgRenderer.text(vg, x + 52 * S + lw + 6 * S, hcy, 10 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, "client");
+
+            // theme toggle
+            int tbw = 56 * S, tbh = 22 * S, tbx = x + W - tbw - 20 * S, tby = y + 14 * S;
+            boolean tbHov = inside(mxF, myF, tbx, tby, tbw, tbh);
+            float[] ta = animFor("_theme");
+            ta[0] = approach(ta[0], tbHov ? 1f : 0f, 12f, dt);
+            NanoVgRenderer.roundedRect(vg, tbx, tby, tbw, tbh, 11 * S, Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), ta[0]));
+            NanoVgRenderer.strokeRoundedRect(vg, tbx + 0.5f * S, tby + 0.5f * S, tbw - S, tbh - S, 11 * S, S, Theme.rim());
+            NanoVgRenderer.text(vg, tbx + tbw / 2f, tby + tbh / 2f, 10 * S, Theme.txt(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, Theme.isDark() ? "Dark" : "Light");
+            themeBtn = new int[]{ tbx, tby, tbw, tbh };
+
+            // search
+            int sx = x + 20 * S, sy = y + 46 * S, swid = W - 40 * S, shei = 26 * S;
+            searchBox = new int[]{ sx, sy, swid, shei };
+            boolean searchFocused = "search".equals(focusedField);
+            NanoVgRenderer.roundedRect(vg, sx, sy, swid, shei, 10 * S, searchFocused ? Theme.glassHov() : Theme.glassRow());
+            if (searchFocused) NanoVgRenderer.roundedRect(vg, sx + 4 * S, sy + shei - 2 * S, swid - 8 * S, Math.max(1, S), S, Theme.accent());
+            boolean empty = search.isEmpty() && !searchFocused;
+            String shown = empty ? "Поиск модулей…" : search + (searchFocused ? "|" : "");
+            NanoVgRenderer.text(vg, sx + 12 * S, sy + shei / 2f, 11 * S, empty ? Theme.txtDim() : Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, shown);
+
+            // category tabs
+            int tabs = Category.values().length + 2;
+            segX = new int[tabs]; segW = new int[tabs];
+            segH = 26 * S; segY = y + 82 * S;
+            int padSeg = 11 * S, segTotal = 0;
+            int[] ww = new int[tabs];
+            for (int i = 0; i < tabs; i++) { ww[i] = (int) NanoVgRenderer.textWidth(vg, 11 * S, tabTitle(i)) + padSeg * 2; segTotal += ww[i]; }
+            int barX = x + (W - segTotal) / 2;
+            NanoVgRenderer.roundedRect(vg, barX - 4 * S, segY - 3 * S, segTotal + 8 * S, segH + 6 * S, 13 * S, Theme.glassRow());
+            int cx2 = barX;
+            for (int i = 0; i < tabs; i++) {
+                segX[i] = cx2; segW[i] = ww[i];
+                boolean sel = i == selectedCat && search.isEmpty();
+                if (sel) NanoVgRenderer.gradientRoundedRect(vg, cx2, segY, ww[i], segH, 12 * S, Theme.accent(), Theme.accent2());
+                NanoVgRenderer.text(vg, cx2 + ww[i] / 2f, segY + segH / 2f, 11 * S, sel ? 0xFFFFFFFF : Theme.txtDim(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, tabTitle(i));
+                cx2 += ww[i];
+            }
+
+            // module cards (2 columns, scroll)
+            NanoVgRenderer.save(vg);
+            NanoVgRenderer.scissor(vg, x, clipTop, W, clipBot);
+            for (int i = 0; i < n; i++) {
+                Module m = mods.get(i);
+                int col = i % 2, row = i / 2;
+                int rx = col == 0 ? gx0 : gx1;
+                int cy0 = gy + row * (headerH + gap) - scrollI;
+                float[] ca = animFor(m.getName());
+                if (cy0 + headerH < clipTop || cy0 > clipBot) {
+                    ca[0] = approach(ca[0], 0f, 14f, dt);
+                    ca[1] = approach(ca[1], (m.isToggleable() && m.isEnabled()) ? 1f : 0f, 11f, dt);
+                    continue;
+                }
+                boolean inClip = myF >= clipTop && myF <= clipBot;
+                boolean hov = inside(mxF, myF, rx, cy0, cardW, headerH) && inClip;
+                boolean en = m.isToggleable() && m.isEnabled();
+                ca[0] = approach(ca[0], hov ? 1f : 0f, 14f, dt);
+                ca[1] = approach(ca[1], en ? 1f : 0f, 11f, dt);
+                float ha = ca[0], ea = ca[1];
+
+                int e = Math.round(ha * 2 * S);
+                int dx = rx - e, dy = cy0 - e, dw = cardW + 2 * e, dh = headerH + 2 * e;
+
+                NanoVgRenderer.shadow(vg, dx, dy + S, dw, dh, 11 * S, 8 * S, 0x55000000);
+                if (ea > 0.01f) NanoVgRenderer.shadow(vg, dx, dy, dw, dh, 11 * S, (10 + 6 * ea) * S, withAlpha(Theme.accentRgb(), Math.round(0x55 * ea)));
+                int base = Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), ha);
+                int onFill = withAlpha(Theme.accentRgb(), Theme.isDark() ? 0x4D : 0x40);
+                int fill = Theme.colorLerp(base, onFill, ea);
+                NanoVgRenderer.roundedRect(vg, dx, dy, dw, dh, 11 * S, fill);
+                NanoVgRenderer.strokeRoundedRect(vg, dx + 0.5f * S, dy + 0.5f * S, dw - S, dh - S, 11 * S, S, withAlpha(0xFFFFFF, Math.round(0x30 + 0x40 * ha)));
+
+                int nameCol = Theme.colorLerp(Theme.txt(), Theme.isDark() ? 0xFFFFFFFF : 0xFF3A3147, ea);
+                NanoVgRenderer.text(vg, dx + dw / 2f, dy + dh / 2f, 12 * S, nameCol, NanoVgRenderer.ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tName(m.getName()));
+                if (ea > 0.02f) NanoVgRenderer.circle(vg, dx + dw - 11 * S, dy + 9 * S, Math.max(1.5f, 2.5f * S * ea), withAlpha(Theme.accentRgb(), Math.round(255 * ea)));
+
+                CHit chit = new CHit();
+                chit.m = m; chit.hx = rx; chit.hy = cy0; chit.hw = cardW; chit.hh = headerH;
+                cHits.add(chit);
+            }
+            NanoVgRenderer.restore(vg);
+
+            // scrollbar
+            if (fMaxScroll > 0) {
+                int sbW = 3 * S, sbX = x + W - margin / 2 - sbW;
+                NanoVgRenderer.roundedRect(vg, sbX, gy, sbW, fVisH, sbW / 2f, Theme.glassRow());
+                int thumbH = Math.max(14 * S, Math.round(fVisH * (fVisH / (float) fContentH)));
+                int thumbY = gy + Math.round((fVisH - thumbH) * (scroll / fMaxScroll));
+                NanoVgRenderer.roundedRect(vg, sbX, thumbY, sbW, thumbH, sbW / 2f, Theme.accent());
+            }
+
+            // resize grip
+            boolean gripHov = inside(mxF, myF, x + W - 14 * S, y + H - 14 * S, 14 * S, 14 * S);
+            for (int i = 0; i < 3; i++) {
+                int o = (3 - i) * 3 * S;
+                NanoVgRenderer.roundedRect(vg, x + W - o - 2 * S, y + H - 5 * S, o, 2 * S, S, gripHov ? Theme.accent() : Theme.txtDim());
+            }
+        });
+    }
+
+    /** Lume logo mark drawn via NanoVG. */
+    private void nvgLogo(long vg, float x, float y, float s) {
+        NanoVgRenderer.gradientRoundedRect(vg, x, y, s, s, Math.max(4, s / 4), 0xFFB7AAD9, 0xFF8E7FC0);
+        float barW = Math.max(2, s / 7f);
+        float lx = x + s * 0.30f, top = y + s * 0.28f, bot = y + s * 0.72f;
+        NanoVgRenderer.roundedRect(vg, lx, top, barW, bot - top, 1, 0xFFFFFFFF);
+        NanoVgRenderer.roundedRect(vg, lx, bot - barW, s * 0.4f, barW, 1, 0xFFFFFFFF);
+        float dot = Math.max(2, s / 6f);
+        NanoVgRenderer.roundedRect(vg, x + s * 0.60f, y + s * 0.20f, dot, dot, dot / 2, 0xFFFFFFFF);
     }
 
     // ---- Server tab (FT/HW helper) ----------------------------------------
