@@ -19,6 +19,12 @@ dependencies {
 	mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
 	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	// NanoVG for smooth, anti-aliased vector UI (matches MC 1.21.4's LWJGL 3.3.3).
+	// The binding compiles against MC's bundled LWJGL core; only nanovg classes +
+	// native are added and shipped via Jar-in-Jar so the production mod is self-contained.
+	include(implementation("org.lwjgl:lwjgl-nanovg:3.3.3"))
+	include(runtimeOnly("org.lwjgl:lwjgl-nanovg:3.3.3:natives-windows"))
 }
 
 processResources {

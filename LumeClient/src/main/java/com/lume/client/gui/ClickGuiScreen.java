@@ -193,6 +193,16 @@ public class ClickGuiScreen extends Screen {
         super.render(ctx, mouseX, mouseY, delta);
         ctx.fill(0, 0, this.width, this.height, Theme.backdrop());
 
+        // --- NanoVG PROTOTYPE (branch nanovg-ui): smooth test panel, top-left ---
+        // If NanoVG loads, you'll see a buttery-smooth lavender card with a soft
+        // inner highlight + a circle (perfect AA curves) that nothing else can match.
+        // Drawn in framebuffer pixels via OpenGL, independent of GUI scale.
+        com.lume.client.nanovg.NanoVgRenderer.frame(vg -> {
+            com.lume.client.nanovg.NanoVgRenderer.roundedRect(vg, 40, 40, 360, 130, 22, 0xEE2A2438);
+            com.lume.client.nanovg.NanoVgRenderer.roundedRect(vg, 52, 52, 336, 40, 14, 0x66B7AAD9);
+            com.lume.client.nanovg.NanoVgRenderer.roundedRect(vg, 300, 104, 84, 56, 28, 0xCC8E7FC0);
+        });
+
         long now = System.currentTimeMillis();
         float dt = Math.min(0.05f, (now - lastFrame) / 1000f);
         lastFrame = now;
