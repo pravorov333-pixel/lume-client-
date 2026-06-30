@@ -136,7 +136,24 @@ public final class NanoVgRenderer {
     public static void translate(long vg, float x, float y) { nvgTranslate(vg, x, y); }
     public static void scale(long vg, float sx, float sy)   { nvgScale(vg, sx, sy); }
     public static void scissor(long vg, float x, float y, float w, float h) { nvgScissor(vg, x, y, w, h); }
+    public static void intersectScissor(long vg, float x, float y, float w, float h) { nvgIntersectScissor(vg, x, y, w, h); }
     public static void resetScissor(long vg) { nvgResetScissor(vg); }
+    public static void rotate(long vg, float radians) { nvgRotate(vg, radians); }
+
+    /** Filled triangle (perfect AA edges). */
+    public static void triangle(long vg, float x1, float y1, float x2, float y2, float x3, float y3, int argb) {
+        try (MemoryStack s = MemoryStack.stackPush()) {
+            NVGColor col = NVGColor.malloc(s);
+            color(argb, col);
+            nvgBeginPath(vg);
+            nvgMoveTo(vg, x1, y1);
+            nvgLineTo(vg, x2, y2);
+            nvgLineTo(vg, x3, y3);
+            nvgClosePath(vg);
+            nvgFillColor(vg, col);
+            nvgFill(vg);
+        }
+    }
 
     // ---- shapes -----------------------------------------------------------
 

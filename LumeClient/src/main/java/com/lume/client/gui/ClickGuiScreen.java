@@ -505,8 +505,23 @@ public class ClickGuiScreen extends Screen {
         int clipTop = gy - 2 * S, clipBot = y + H - 12 * S, visH = clipBot - gy;
         int headerH = CARD_H * S;
         lastClipTop = clipTop; lastClipBot = clipBot;
-        int n = mods.size(), rowsN = (n + 1) / 2;
-        int contentH = Math.max(0, rowsN * (headerH + gap) - gap);
+        int n = mods.size();
+
+        // masonry: each card's height grows with its expand animation; the two
+        // columns flow INDEPENDENTLY so expanding a card only pushes the cards
+        // below it in its own column.
+        final int[] cardHpx = new int[n];
+        for (int i = 0; i < n; i++) {
+            Module m = mods.get(i);
+            float[] ca = animFor(m.getName());
+            boolean exp = expanded.contains(m.getName()) && m.hasSettings();
+            ca[3] = approach(ca[3], exp ? 1f : 0f, 11f, dt);
+            int panelH = m.hasSettings() ? panelHeightNvg(m, S) : 0;
+            cardHpx[i] = headerH + Math.round(ca[3] * panelH);
+        }
+        int colA = 0, colB = 0;
+        for (int i = 0; i < n; i++) { if (i % 2 == 0) colA += cardHpx[i] + gap; else colB += cardHpx[i] + gap; }
+        int contentH = Math.max(0, Math.max(colA, colB) - gap);
         int maxScroll = Math.max(0, contentH - visH);
         scrollTarget = Math.max(0f, Math.min(scrollTarget, maxScroll));
         scroll = approach(scroll, scrollTarget, 16f, dt);
@@ -555,13 +570,20 @@ public class ClickGuiScreen extends Screen {
             String shown = empty ? "Поиск модулей…" : search + (searchFocused ? "|" : "");
             NanoVgRenderer.text(vg, sx + 12 * S, sy + shei / 2f, 11 * S, empty ? Theme.txtDim() : Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, shown);
 
-            // category tabs
+            // category tabs (auto-shrink to always fit the window width)
             int tabs = Category.values().length + 2;
             segX = new int[tabs]; segW = new int[tabs];
             segH = 26 * S; segY = y + 82 * S;
-            int padSeg = 11 * S, segTotal = 0;
-            int[] ww = new int[tabs];
-            for (int i = 0; i < tabs; i++) { ww[i] = (int) NanoVgRenderer.textWidth(vg, 11 * S, tabTitle(i)) + padSeg * 2; segTotal += ww[i]; }
+            float tFont = 11 * S; int padSeg = 11 * S;
+            int[] ww = new int[tabs]; int segTotal = 0;
+            for (int i = 0; i < tabs; i++) { ww[i] = (int) NanoVgRenderer.textWidth(vg, tFont, tabTitle(i)) + padSeg * 2; segTotal += ww[i]; }
+            int maxBarW = W - 16 * S;
+            if (segTotal > maxBarW) {
+                float ts = (float) maxBarW / segTotal;
+                tFont *= ts; padSeg = Math.max(3 * S, Math.round(padSeg * ts));
+                segTotal = 0;
+                for (int i = 0; i < tabs; i++) { ww[i] = (int) NanoVgRenderer.textWidth(vg, tFont, tabTitle(i)) + padSeg * 2; segTotal += ww[i]; }
+            }
             int barX = x + (W - segTotal) / 2;
             NanoVgRenderer.roundedRect(vg, barX - 4 * S, segY - 3 * S, segTotal + 8 * S, segH + 6 * S, 13 * S, Theme.glassRow());
             int cx2 = barX;
@@ -569,20 +591,24 @@ public class ClickGuiScreen extends Screen {
                 segX[i] = cx2; segW[i] = ww[i];
                 boolean sel = i == selectedCat && search.isEmpty();
                 if (sel) NanoVgRenderer.gradientRoundedRect(vg, cx2, segY, ww[i], segH, 12 * S, Theme.accent(), Theme.accent2());
-                NanoVgRenderer.text(vg, cx2 + ww[i] / 2f, segY + segH / 2f, 11 * S, sel ? 0xFFFFFFFF : Theme.txtDim(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, tabTitle(i));
+                NanoVgRenderer.text(vg, cx2 + ww[i] / 2f, segY + segH / 2f, tFont, sel ? 0xFFFFFFFF : Theme.txtDim(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, tabTitle(i));
                 cx2 += ww[i];
             }
 
-            // module cards (2 columns, scroll)
+            // module cards — masonry (2 independent columns), expandable settings
             NanoVgRenderer.save(vg);
-            NanoVgRenderer.scissor(vg, x, clipTop, W, clipBot);
+            NanoVgRenderer.scissor(vg, x, clipTop, W, fVisH);
+            int colYa = gy - scrollI, colYb = gy - scrollI;
             for (int i = 0; i < n; i++) {
                 Module m = mods.get(i);
-                int col = i % 2, row = i / 2;
-                int rx = col == 0 ? gx0 : gx1;
-                int cy0 = gy + row * (headerH + gap) - scrollI;
+                boolean colLeft = i % 2 == 0;
+                int rx = colLeft ? gx0 : gx1;
+                int cy0 = colLeft ? colYa : colYb;
+                int ch = cardHpx[i];
+                if (colLeft) colYa += ch + gap; else colYb += ch + gap;
+
                 float[] ca = animFor(m.getName());
-                if (cy0 + headerH < clipTop || cy0 > clipBot) {
+                if (cy0 + ch < clipTop || cy0 > clipBot) {
                     ca[0] = approach(ca[0], 0f, 14f, dt);
                     ca[1] = approach(ca[1], (m.isToggleable() && m.isEnabled()) ? 1f : 0f, 11f, dt);
                     continue;
@@ -592,10 +618,11 @@ public class ClickGuiScreen extends Screen {
                 boolean en = m.isToggleable() && m.isEnabled();
                 ca[0] = approach(ca[0], hov ? 1f : 0f, 14f, dt);
                 ca[1] = approach(ca[1], en ? 1f : 0f, 11f, dt);
-                float ha = ca[0], ea = ca[1];
+                float ha = ca[0], ea = ca[1], ex = ca[3];
+                boolean isExp = ex > 0.01f && m.hasSettings();
 
-                int e = Math.round(ha * 2 * S);
-                int dx = rx - e, dy = cy0 - e, dw = cardW + 2 * e, dh = headerH + 2 * e;
+                int e = isExp ? 0 : Math.round(ha * 2 * S);     // no hover lift while expanded
+                int dx = rx - e, dy = cy0 - e, dw = cardW + 2 * e, dh = ch + 2 * e;
 
                 NanoVgRenderer.shadow(vg, dx, dy + S, dw, dh, 11 * S, 8 * S, 0x55000000);
                 if (ea > 0.01f) NanoVgRenderer.shadow(vg, dx, dy, dw, dh, 11 * S, (10 + 6 * ea) * S, withAlpha(Theme.accentRgb(), Math.round(0x55 * ea)));
@@ -606,12 +633,24 @@ public class ClickGuiScreen extends Screen {
                 NanoVgRenderer.strokeRoundedRect(vg, dx + 0.5f * S, dy + 0.5f * S, dw - S, dh - S, 11 * S, S, withAlpha(0xFFFFFF, Math.round(0x30 + 0x40 * ha)));
 
                 int nameCol = Theme.colorLerp(Theme.txt(), Theme.isDark() ? 0xFFFFFFFF : 0xFF3A3147, ea);
-                NanoVgRenderer.text(vg, dx + dw / 2f, dy + dh / 2f, 12 * S, nameCol, NanoVgRenderer.ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tName(m.getName()));
+                int namePad = m.hasSettings() ? 20 * S : 0;
+                NanoVgRenderer.text(vg, dx + (dw - namePad) / 2f, dy + headerH / 2f, 12 * S, nameCol, NanoVgRenderer.ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tName(m.getName()));
                 if (ea > 0.02f) NanoVgRenderer.circle(vg, dx + dw - 11 * S, dy + 9 * S, Math.max(1.5f, 2.5f * S * ea), withAlpha(Theme.accentRgb(), Math.round(255 * ea)));
 
                 CHit chit = new CHit();
                 chit.m = m; chit.hx = rx; chit.hy = cy0; chit.hw = cardW; chit.hh = headerH;
+                if (m.hasSettings()) {
+                    nvgChevron(vg, dx + dw - 14 * S, dy + headerH / 2f, 7 * S, ex, Theme.txtDim());
+                    chit.hasArrow = true; chit.ax = dx + dw - 24 * S; chit.ay = dy; chit.aw = 24 * S; chit.ah = headerH;
+                }
                 cHits.add(chit);
+
+                if (isExp) {
+                    NanoVgRenderer.save(vg);
+                    NanoVgRenderer.intersectScissor(vg, dx, dy, dw, dh);
+                    renderSettingsNvg(vg, m, dx, cy0 + headerH, dw, S, mxF, myF);
+                    NanoVgRenderer.restore(vg);
+                }
             }
             NanoVgRenderer.restore(vg);
 
@@ -642,6 +681,100 @@ public class ClickGuiScreen extends Screen {
         NanoVgRenderer.roundedRect(vg, lx, bot - barW, s * 0.4f, barW, 1, 0xFFFFFFFF);
         float dot = Math.max(2, s / 6f);
         NanoVgRenderer.roundedRect(vg, x + s * 0.60f, y + s * 0.20f, dot, dot, dot / 2, 0xFFFFFFFF);
+    }
+
+    /** Settings-expand chevron: ▸ collapsed → ▾ expanded (rotated by {@code ex}). */
+    private void nvgChevron(long vg, float cx, float cy, float size, float ex, int color) {
+        NanoVgRenderer.save(vg);
+        NanoVgRenderer.translate(vg, cx, cy);
+        NanoVgRenderer.rotate(vg, (float) (Math.PI / 2.0 * ex));
+        NanoVgRenderer.triangle(vg, -size * 0.5f, -size * 0.6f, -size * 0.5f, size * 0.6f, size * 0.5f, 0, color);
+        NanoVgRenderer.restore(vg);
+    }
+
+    /** Height of a module's NanoVG settings panel (bool/slider/mode/color only). */
+    private int panelHeightNvg(Module m, int S) {
+        int h = 4 * S;
+        for (Setting s : m.getSettings()) h += settingHeight(s, S);
+        return h + 8 * S;
+    }
+
+    /** Render a module's settings via NanoVG, recording {@code sHits} so the existing
+     *  click/drag handlers work unchanged. (Crosshair preview / waypoint manager /
+     *  event list are skipped here for now — only bool/slider/mode/color.) */
+    private void renderSettingsNvg(long vg, Module m, int x0, int yTop, int w, int S, int mx, int my) {
+        NanoVgRenderer.roundedRect(vg, x0 + 10 * S, yTop, w - 20 * S, Math.max(1, S), 0.5f, Theme.border());
+        int sx = x0 + 14 * S, swid = w - 28 * S, yy = yTop + 4 * S;
+        for (Setting s : m.getSettings()) {
+            int h = settingHeight(s, S);
+            if (s instanceof BoolSetting bs) renderBoolNvg(vg, bs, sx, yy, swid, h, S);
+            else if (s instanceof SliderSetting ss) renderSliderNvg(vg, ss, sx, yy, swid, h, S);
+            else if (s instanceof ModeSetting ms) renderModeNvg(vg, ms, sx, yy, swid, h, S);
+            else if (s instanceof ColorSetting cs) renderColorNvg(vg, cs, sx, yy, swid, S);
+            yy += h;
+        }
+    }
+
+    private void renderBoolNvg(long vg, BoolSetting bs, int x, int y, int w, int h, int S) {
+        NanoVgRenderer.text(vg, x, y + h / 2f, 10 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, bs.name);
+        int pw = 18 * S, ph = 10 * S, px = x + w - pw, py = y + (h - ph) / 2;
+        NanoVgRenderer.roundedRect(vg, px, py, pw, ph, ph / 2f, bs.value ? Theme.accent() : Theme.pillOff());
+        int kd = ph - 4 * S, kx = bs.value ? px + pw - kd - 2 * S : px + 2 * S;
+        NanoVgRenderer.roundedRect(vg, kx, py + 2 * S, kd, kd, kd / 2f, 0xFFFFFFFF);
+        SHit hit = new SHit(); hit.s = bs; hit.kind = 0; hit.x = x; hit.y = y; hit.w = w; hit.h = h; sHits.add(hit);
+    }
+
+    private void renderSliderNvg(long vg, SliderSetting ss, int x, int y, int w, int h, int S) {
+        NanoVgRenderer.text(vg, x, y + 6 * S, 10 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, ss.name);
+        String val = ss.display();
+        float vw = NanoVgRenderer.textWidth(vg, 10 * S, val);
+        NanoVgRenderer.text(vg, x + w - vw, y + 6 * S, 10 * S, Theme.accent(), NanoVgRenderer.ALIGN_MIDDLE, val);
+        int ty = y + 14 * S, th = 4 * S;
+        NanoVgRenderer.roundedRect(vg, x, ty, w, th, th / 2f, Theme.pillOff());
+        int fw = Math.round(w * (float) ss.fraction());
+        if (fw > 0) NanoVgRenderer.roundedRect(vg, x, ty, Math.max(th, fw), th, th / 2f, Theme.accent());
+        int kd = 8 * S, kx = x + Math.round(w * (float) ss.fraction());
+        NanoVgRenderer.circle(vg, Math.min(x + w - kd / 2f, Math.max(x + kd / 2f, kx)), ty + th / 2f, kd / 2f, 0xFFFFFFFF);
+        SHit hit = new SHit(); hit.s = ss; hit.kind = 1; hit.x = x; hit.y = y; hit.w = w; hit.h = h; hit.trackX = x; hit.trackW = w; sHits.add(hit);
+    }
+
+    private void renderModeNvg(long vg, ModeSetting ms, int x, int y, int w, int h, int S) {
+        NanoVgRenderer.text(vg, x, y + h / 2f, 10 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, ms.name);
+        String disp = "‹ " + ms.get() + " ›";
+        float dw = NanoVgRenderer.textWidth(vg, 10 * S, disp);
+        NanoVgRenderer.text(vg, x + w - dw, y + h / 2f, 10 * S, Theme.accent(), NanoVgRenderer.ALIGN_MIDDLE, disp);
+        SHit hit = new SHit(); hit.s = ms; hit.kind = 4; hit.x = x; hit.y = y; hit.w = w; hit.h = h; sHits.add(hit);
+    }
+
+    private void renderColorNvg(long vg, ColorSetting cs, int x, int y, int w, int S) {
+        int row = 15 * S;
+        NanoVgRenderer.text(vg, x, y + row / 2f, 10 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, cs.name);
+        int pw = 18 * S, ph = 10 * S, px = x + w - pw, py = y + (row - ph) / 2;
+        NanoVgRenderer.roundedRect(vg, px, py, pw, ph, ph / 2f, cs.accent ? Theme.accent() : Theme.pillOff());
+        int kd = ph - 4 * S, kx = cs.accent ? px + pw - kd - 2 * S : px + 2 * S;
+        NanoVgRenderer.roundedRect(vg, kx, py + 2 * S, kd, kd, kd / 2f, 0xFFFFFFFF);
+        int swx = px - 16 * S, swatch = cs.accent ? Theme.accent() : (0xFF000000 | cs.rgb());
+        NanoVgRenderer.roundedRect(vg, swx, py, 12 * S, ph, 3 * S, swatch);
+        SHit at = new SHit(); at.s = cs; at.kind = 2; at.x = px; at.y = y; at.w = pw; at.h = row; sHits.add(at);
+        if (!cs.accent) {
+            int yy = y + row;
+            channelNvg(vg, cs, 0, "R", 0xFFE05656, x, yy, w, S); yy += 14 * S;
+            channelNvg(vg, cs, 1, "G", 0xFF6FCF7F, x, yy, w, S); yy += 14 * S;
+            channelNvg(vg, cs, 2, "B", 0xFF6F9CE0, x, yy, w, S);
+        }
+    }
+
+    private void channelNvg(long vg, ColorSetting cs, int idx, String label, int chCol, int x, int y, int w, int S) {
+        int h = 14 * S;
+        NanoVgRenderer.text(vg, x, y + h / 2f, 9 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, label);
+        int tx = x + 12 * S, tw = w - 12 * S, ty = y + (h - 4 * S) / 2, th = 4 * S;
+        NanoVgRenderer.roundedRect(vg, tx, ty, tw, th, th / 2f, Theme.pillOff());
+        int val = idx == 0 ? cs.r : idx == 1 ? cs.g : cs.b;
+        float frac = val / 255f;
+        if (frac > 0) NanoVgRenderer.roundedRect(vg, tx, ty, Math.max(th, Math.round(tw * frac)), th, th / 2f, chCol);
+        int kd = 8 * S, kx = tx + Math.round(tw * frac);
+        NanoVgRenderer.circle(vg, Math.min(tx + tw - kd / 2f, Math.max(tx + kd / 2f, kx)), ty + th / 2f, kd / 2f, 0xFFFFFFFF);
+        SHit hit = new SHit(); hit.s = cs; hit.kind = 3; hit.channel = idx; hit.x = x; hit.y = y; hit.w = w; hit.h = h; hit.trackX = tx; hit.trackW = tw; sHits.add(hit);
     }
 
     // ---- Server tab (FT/HW helper) ----------------------------------------
