@@ -909,39 +909,7 @@ public class ClickGuiScreen extends Screen {
                 }
                 cur += rh;
             }
-            cur += 6 * S;
-
-            NanoVgRenderer.text(vg, sx + 2 * S, gy + cur - scrollI + 6 * S, 10 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, "Предметы — отметь что есть на сервере:");
-            cur += 14 * S;
-            String[] catNames = { "Активные", "Сферы", "Талисманы" };
-            ItemRule.Cat[] cats = { ItemRule.Cat.ACTIVE, ItemRule.Cat.SPHERE, ItemRule.Cat.TALISMAN };
-            for (int ci = 0; ci < cats.length; ci++) {
-                int ryh = gy + cur - scrollI;
-                if (ryh + 12 * S >= clipTop && ryh <= clipBot)
-                    NanoVgRenderer.text(vg, sx + 4 * S, ryh + 6 * S, 10 * S, Theme.accent(), NanoVgRenderer.ALIGN_MIDDLE, catNames[ci]);
-                cur += 13 * S;
-                for (ItemRule it : ItemRules.byCat(cats[ci])) {
-                    int ry = gy + cur - scrollI, rh = 16 * S;
-                    if (ry + rh >= clipTop && ry <= clipBot) {
-                        int cb = 11 * S, cbx = sx + 4 * S, cby = ry + (rh - cb) / 2;
-                        NanoVgRenderer.roundedRect(vg, cbx, cby, cb, cb, 3 * S, it.present ? it.color : Theme.pillOff());
-                        if (it.present) NanoVgRenderer.roundedRect(vg, cbx + (cb - 4 * S) / 2, cby + (cb - 4 * S) / 2, 4 * S, 4 * S, S, 0xFFFFFFFF);
-                        serverHits.add(new Object[]{ "present", cbx, ry, w, rh, it });
-                        NanoVgRenderer.text(vg, cbx + cb + 6 * S, ry + rh / 2f, 10 * S, it.present ? Theme.txt() : Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, it.name);
-                        StringBuilder rb = new StringBuilder();
-                        if (it.radius > 0) rb.append("R").append((int) it.radius).append(" ");
-                        if (it.cooldownSec > 0) rb.append(it.cooldownSec).append("с");
-                        if (rb.length() > 0) {
-                            float rw = NanoVgRenderer.textWidth(vg, 10 * S, rb.toString());
-                            NanoVgRenderer.text(vg, sx + w - rw, ry + rh / 2f, 10 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, rb.toString());
-                        }
-                    }
-                    cur += 16 * S;
-                }
-                cur += 2 * S;
-            }
-
-            cur += 4 * S;
+            cur += 8 * S;
             int rye = gy + cur - scrollI;
             if (rye + 12 * S >= clipTop && rye <= clipBot)
                 NanoVgRenderer.text(vg, sx + 2 * S, rye + 6 * S, 10 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, "Расписание ивентов (учится по чату):");
@@ -1247,12 +1215,27 @@ public class ClickGuiScreen extends Screen {
         addFrame(rects, names, "Inventory HUD", sw / 2 - 85, sh - 80, 170, 58, sw, sh);
         addFrame(rects, names, "Armor HUD", sw / 2 + 87, sh - 22, 84, 20, sw, sh);
         addFrame(rects, names, "Totem Counter", sw / 2 - 138, sh - 22, 46, 20, sw, sh);
+        // FT/HW helper HUD sub-elements (movable too)
+        ServerHelper shm = (ServerHelper) LumeClient.MODULES.getByName("Server Helper");
+        boolean ftOn = shm != null && shm.isEnabled();
+        addFrameIf(rects, names, "FT Events", 6, 150, 140, 50, ftOn && shm.eventsHud.value);
+        addFrameIf(rects, names, "Effects", 6, sh / 2 - 30, 120, 60, ftOn && shm.effects.value);
+        addFrameIf(rects, names, "Quick Commands", sw - 130, sh / 2 - 40, 124, 80, ftOn && shm.quickCmds.value);
+        addFrameIf(rects, names, "Item Helper", sw / 2 - 80, sh - 64, 160, 30, ftOn && shm.itemHelper.value);
         return rects;
     }
 
     private void addFrame(List<int[]> rects, List<String> names, String name, int bx, int by, int w, int h, int sw, int sh) {
         Module m = LumeClient.MODULES.getByName(name);
         if (m == null || !m.isEnabled()) return;
+        int[] off = HudLayout.get(name);
+        rects.add(new int[]{ bx + off[0], by + off[1], w, h });
+        names.add(name);
+    }
+
+    /** Add a movable HUD frame gated by an arbitrary visibility flag (for sub-elements). */
+    private void addFrameIf(List<int[]> rects, List<String> names, String name, int bx, int by, int w, int h, boolean visible) {
+        if (!visible) return;
         int[] off = HudLayout.get(name);
         rects.add(new int[]{ bx + off[0], by + off[1], w, h });
         names.add(name);

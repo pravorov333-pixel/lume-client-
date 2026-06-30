@@ -112,10 +112,10 @@ public final class HudRenderer {
         if (on("Waypoints")) renderWaypoints(ctx, mc, tr, S);
         if (on("Server Helper")) {
             ServerHelper shm = (ServerHelper) LumeClient.MODULES.getByName("Server Helper");
-            if (shm == null || shm.eventsHud.value) renderServerHelper(ctx, mc, tr, S);
-            if (shm == null || shm.itemHelper.value) renderItemHelper(ctx, mc, tr, S);
-            if (shm == null || shm.effects.value) renderEffects(ctx, mc, tr, S);
-            if (shm == null || shm.quickCmds.value) renderQuickBar(ctx, mc, tr, S);
+            if (shm == null || shm.eventsHud.value) transform(ctx, "FT Events", sizeOf("FT Events"), 6 * S, 150 * S, S, () -> renderServerHelper(ctx, mc, tr, S));
+            if (shm == null || shm.itemHelper.value) transform(ctx, "Item Helper", sizeOf("Item Helper"), nsw / 2.0, nsh, S, () -> renderItemHelper(ctx, mc, tr, S));
+            if (shm == null || shm.effects.value) transform(ctx, "Effects", sizeOf("Effects"), 6 * S, nsh / 2.0, S, () -> renderEffects(ctx, mc, tr, S));
+            if (shm == null || shm.quickCmds.value) transform(ctx, "Quick Commands", sizeOf("Quick Commands"), nsw, nsh / 2.0, S, () -> renderQuickBar(ctx, mc, tr, S));
         }
         Notifications.render(ctx, tr, S, nsw);
         if (on("Module List")) transform(ctx, "Module List", sizeOf("Module List"), nsw, 6 * S, S, () -> renderArrayList(ctx, mc, tr, S));
