@@ -107,10 +107,11 @@ public class ClickGuiScreen extends Screen {
 
     private boolean isBindsTab() { return search.isEmpty() && selectedCat == Category.values().length; }
     private boolean isServerTab() { return search.isEmpty() && selectedCat == Category.values().length + 1; }
+    private boolean isEventsTab() { return search.isEmpty() && selectedCat == Category.values().length + 2; }
 
     private String tabTitle(int i) {
         Category[] c = Category.values();
-        String en = i < c.length ? c[i].title : (i == c.length ? "Binds" : "Server");
+        String en = i < c.length ? c[i].title : (i == c.length ? "Binds" : (i == c.length + 1 ? "Server" : "Events"));
         return com.lume.client.Lang.tCat(en);
     }
 
@@ -280,7 +281,7 @@ public class ClickGuiScreen extends Screen {
         RenderUtil.vanillaText(ctx, this.textRenderer, shown, sx + 12 * S, sy + (shei - 8 * S) / 2.0, empty ? Theme.txtDim() : Theme.txt(), S);
 
         // Category segmented pill (categories + a "Binds" tab)
-        int tabs = Category.values().length + 2;
+        int tabs = Category.values().length + 3;
         segX = new int[tabs];
         segW = new int[tabs];
         segH = 26 * S;
@@ -503,7 +504,7 @@ public class ClickGuiScreen extends Screen {
         final int mxF = mx, myF = my;
 
         // layout/anim that needs to persist to hit-testing is computed here (outside the lambda)
-        final boolean fCards = !isBindsTab() && !isServerTab();
+        final boolean fCards = !isBindsTab() && !isServerTab() && !isEventsTab();
         List<Module> mods = fCards ? modules() : new ArrayList<>();
         int margin = 20 * S, gap = CARD_GAP * S;
         int cardW = (W - margin * 2 - gap) / 2;
@@ -580,10 +581,10 @@ public class ClickGuiScreen extends Screen {
             NanoVgRenderer.text(vg, sx + 12 * S, sy + shei / 2f, 11 * S, empty ? Theme.txtDim() : Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, shown);
 
             // category tabs (auto-shrink to always fit the window width)
-            int tabs = Category.values().length + 2;
+            int tabs = Category.values().length + 3;
             segX = new int[tabs]; segW = new int[tabs];
             segH = 26 * S; segY = y + 82 * S;
-            float tFont = 11 * S; int padSeg = 11 * S;
+            float tFont = 10 * S; int padSeg = 10 * S;
             int[] ww = new int[tabs]; int segTotal = 0;
             for (int i = 0; i < tabs; i++) { ww[i] = (int) NanoVgRenderer.textWidth(vg, tFont, tabTitle(i)) + padSeg * 2; segTotal += ww[i]; }
             int maxBarW = W - 16 * S;
@@ -675,8 +676,10 @@ public class ClickGuiScreen extends Screen {
             }
             } else if (isBindsTab()) {
                 drawBindsNvg(vg, x, y, W, H, S, mxF, myF, dt, gy, clipTop, clipBot, fVisH, margin);
-            } else {
+            } else if (isServerTab()) {
                 drawServerNvg(vg, x, y, W, H, S, mxF, myF, dt, gy, clipTop, clipBot, fVisH, margin);
+            } else {
+                drawEventsNvg(vg, x, y, W, H, S, gy, clipTop, clipBot, fVisH, margin, dt);
             }
 
             // resize grip
@@ -963,6 +966,61 @@ public class ClickGuiScreen extends Screen {
             int sbW = 3 * S, sbX = x + W - margin / 2 - sbW;
             NanoVgRenderer.roundedRect(vg, sbX, gy, sbW, visH, sbW / 2f, Theme.glassRow());
             int thumbH = Math.max(14 * S, Math.round(visH * (visH / (float) serverContentH)));
+            int thumbY = gy + Math.round((visH - thumbH) * (scroll / maxScroll));
+            NanoVgRenderer.roundedRect(vg, sbX, thumbY, sbW, thumbH, sbW / 2f, Theme.accent());
+        }
+    }
+
+    // ---- NanoVG Events tab ------------------------------------------------
+    private void drawEventsNvg(long vg, int x, int y, int W, int H, int S, int gy, int clipTop, int clipBot, int visH, int margin, float dt) {
+        int sx = x + margin, w = W - margin * 2;
+        com.lume.client.fthw.ServerType st = com.lume.client.fthw.ServerType.current();
+        String hdr = st == com.lume.client.fthw.ServerType.UNKNOWN
+                ? "Ивенты · зайди на FunTime/HolyWorld" : "Ивенты · " + st.display() + " (учится по чату)";
+
+        int rowH = 30 * S, gapr = 6 * S;
+        int contentH = 22 * S + Math.max(0, EventManager.rules.size() * (rowH + gapr) - gapr);
+        int maxScroll = Math.max(0, contentH - visH);
+        scrollTarget = Math.max(0f, Math.min(scrollTarget, maxScroll));
+        scroll = approach(scroll, scrollTarget, 16f, dt);
+        if (Math.abs(scroll - scrollTarget) < 0.5f) scroll = scrollTarget;
+        int scrollI = Math.round(scroll);
+
+        NanoVgRenderer.save(vg);
+        NanoVgRenderer.scissor(vg, x, clipTop, W, visH);
+        int cur = 0;
+        NanoVgRenderer.text(vg, sx + 2 * S, gy + cur - scrollI + 7 * S, 11 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, hdr);
+        cur += 22 * S;
+        for (com.lume.client.fthw.EventRule r : EventManager.rules) {
+            int ry = gy + cur - scrollI;
+            if (ry + rowH >= clipTop && ry <= clipBot) {
+                int left = -1;
+                for (EventManager.Active a : EventManager.active) if (a.rule == r) { left = a.secondsLeft(); break; }
+                long eta = r.etaSec(), ago = r.agoSec();
+                int dotCol; String status; int statusCol;
+                if (left >= 0) { dotCol = 0xFF6FCF7F; status = "идёт сейчас"; statusCol = 0xFF6FCF7F; }
+                else if (eta > 0) { dotCol = 0xFFE8C15A; status = "≈ через " + fmtDur(eta); statusCol = 0xFFE8C15A; }
+                else if (ago >= 0) { dotCol = Theme.txtDim(); status = "был " + fmtDur(ago) + " назад"; statusCol = Theme.txtDim(); }
+                else { dotCol = Theme.pillOff(); status = "ещё не видел"; statusCol = Theme.txtDim(); }
+
+                NanoVgRenderer.roundedRect(vg, sx, ry, w, rowH, 9 * S, Theme.glassRow());
+                NanoVgRenderer.roundedRect(vg, sx, ry, 3 * S, rowH, 2 * S, dotCol);
+                NanoVgRenderer.text(vg, sx + 12 * S, ry + 11 * S, 12 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, r.name);
+                NanoVgRenderer.text(vg, sx + 12 * S, ry + 22 * S, 10 * S, statusCol, NanoVgRenderer.ALIGN_MIDDLE, status);
+
+                String big = left >= 0 ? left + "с" : (eta > 0 ? fmtDur(eta) : "");
+                if (!big.isEmpty()) {
+                    float tw = NanoVgRenderer.textWidth(vg, 16 * S, big);
+                    NanoVgRenderer.text(vg, sx + w - tw - 12 * S, ry + rowH / 2f, 16 * S, left >= 0 ? 0xFF6FCF7F : 0xFFE8C15A, NanoVgRenderer.ALIGN_MIDDLE, big);
+                }
+            }
+            cur += rowH + gapr;
+        }
+        NanoVgRenderer.restore(vg);
+        if (maxScroll > 0) {
+            int sbW = 3 * S, sbX = x + W - margin / 2 - sbW;
+            NanoVgRenderer.roundedRect(vg, sbX, gy, sbW, visH, sbW / 2f, Theme.glassRow());
+            int thumbH = Math.max(14 * S, Math.round(visH * (visH / (float) contentH)));
             int thumbY = gy + Math.round((visH - thumbH) * (scroll / maxScroll));
             NanoVgRenderer.roundedRect(vg, sbX, thumbY, sbW, thumbH, sbW / 2f, Theme.accent());
         }
