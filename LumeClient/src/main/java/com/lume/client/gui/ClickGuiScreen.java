@@ -7,6 +7,10 @@ import com.lume.client.fthw.EventManager;
 import com.lume.client.fthw.ItemRule;
 import com.lume.client.fthw.ItemRules;
 import com.lume.client.nanovg.NanoVgRenderer;
+import net.minecraft.client.gui.screen.TitleScreen;
+import net.minecraft.client.gui.screen.multiplayer.ConnectScreen;
+import net.minecraft.client.network.ServerAddress;
+import net.minecraft.client.network.ServerInfo;
 import com.lume.client.module.modules.cosmetic.CustomCrosshair;
 import com.lume.client.module.modules.fthw.ServerHelper;
 import com.lume.client.module.modules.qol.Waypoints;
@@ -202,10 +206,10 @@ public class ClickGuiScreen extends Screen {
         this.scale = S;
         int sw = this.width * S, sh = this.height * S;
 
-        // NanoVG-rendered main view (smooth). Binds/Server tabs still use the old
-        // DrawContext path for now. Falls back to DrawContext if NanoVG is unavailable.
+        // NanoVG-rendered menu (smooth) — all tabs. Falls back to the DrawContext
+        // path only if NanoVG is unavailable.
         NanoVgRenderer.ensureInit();
-        if (!isBindsTab() && !isServerTab() && NanoVgRenderer.ready()) {
+        if (NanoVgRenderer.ready()) {
             renderNvgMain(ctx, mouseX, mouseY, dt, S);
             return;
         }
@@ -497,7 +501,8 @@ public class ClickGuiScreen extends Screen {
         final int mxF = mx, myF = my;
 
         // layout/anim that needs to persist to hit-testing is computed here (outside the lambda)
-        List<Module> mods = modules();
+        final boolean fCards = !isBindsTab() && !isServerTab();
+        List<Module> mods = fCards ? modules() : new ArrayList<>();
         int margin = 20 * S, gap = CARD_GAP * S;
         int cardW = (W - margin * 2 - gap) / 2;
         int gx0 = x + margin, gx1 = x + margin + cardW + gap;
@@ -507,29 +512,31 @@ public class ClickGuiScreen extends Screen {
         lastClipTop = clipTop; lastClipBot = clipBot;
         int n = mods.size();
 
-        // masonry: each card's height grows with its expand animation; the two
-        // columns flow INDEPENDENTLY so expanding a card only pushes the cards
-        // below it in its own column.
+        // masonry (cards tab only): each card's height grows with its expand anim;
+        // the two columns flow INDEPENDENTLY so expanding pushes only its own column.
         final int[] cardHpx = new int[n];
-        for (int i = 0; i < n; i++) {
-            Module m = mods.get(i);
-            float[] ca = animFor(m.getName());
-            boolean exp = expanded.contains(m.getName()) && m.hasSettings();
-            ca[3] = approach(ca[3], exp ? 1f : 0f, 11f, dt);
-            int panelH = m.hasSettings() ? panelHeightNvg(m, S) : 0;
-            cardHpx[i] = headerH + Math.round(ca[3] * panelH);
+        int contentH = 0;
+        if (fCards) {
+            for (int i = 0; i < n; i++) {
+                Module m = mods.get(i);
+                float[] ca = animFor(m.getName());
+                boolean exp = expanded.contains(m.getName()) && m.hasSettings();
+                ca[3] = approach(ca[3], exp ? 1f : 0f, 11f, dt);
+                int panelH = m.hasSettings() ? panelHeightNvg(m, S) : 0;
+                cardHpx[i] = headerH + Math.round(ca[3] * panelH);
+            }
+            int colA = 0, colB = 0;
+            for (int i = 0; i < n; i++) { if (i % 2 == 0) colA += cardHpx[i] + gap; else colB += cardHpx[i] + gap; }
+            contentH = Math.max(0, Math.max(colA, colB) - gap);
+            int maxScroll = Math.max(0, contentH - visH);
+            scrollTarget = Math.max(0f, Math.min(scrollTarget, maxScroll));
+            scroll = approach(scroll, scrollTarget, 16f, dt);
+            if (Math.abs(scroll - scrollTarget) < 0.5f) scroll = scrollTarget;
         }
-        int colA = 0, colB = 0;
-        for (int i = 0; i < n; i++) { if (i % 2 == 0) colA += cardHpx[i] + gap; else colB += cardHpx[i] + gap; }
-        int contentH = Math.max(0, Math.max(colA, colB) - gap);
-        int maxScroll = Math.max(0, contentH - visH);
-        scrollTarget = Math.max(0f, Math.min(scrollTarget, maxScroll));
-        scroll = approach(scroll, scrollTarget, 16f, dt);
-        if (Math.abs(scroll - scrollTarget) < 0.5f) scroll = scrollTarget;
         final int scrollI = Math.round(scroll);
-        cHits.clear(); sHits.clear(); wpHits.clear();
+        cHits.clear(); sHits.clear(); wpHits.clear(); bindHits.clear(); serverHits.clear();
 
-        final int fMaxScroll = maxScroll, fContentH = contentH, fVisH = visH;
+        final int fContentH = contentH, fVisH = visH;
 
         NanoVgRenderer.frame(vg -> {
             NanoVgRenderer.translate(vg, winOffX * S, winOffY * S);
@@ -595,6 +602,7 @@ public class ClickGuiScreen extends Screen {
                 cx2 += ww[i];
             }
 
+            if (fCards) {
             // module cards — masonry (2 independent columns), expandable settings
             NanoVgRenderer.save(vg);
             NanoVgRenderer.scissor(vg, x, clipTop, W, fVisH);
@@ -655,12 +663,18 @@ public class ClickGuiScreen extends Screen {
             NanoVgRenderer.restore(vg);
 
             // scrollbar
-            if (fMaxScroll > 0) {
+            int maxScroll = Math.max(0, fContentH - fVisH);
+            if (maxScroll > 0) {
                 int sbW = 3 * S, sbX = x + W - margin / 2 - sbW;
                 NanoVgRenderer.roundedRect(vg, sbX, gy, sbW, fVisH, sbW / 2f, Theme.glassRow());
                 int thumbH = Math.max(14 * S, Math.round(fVisH * (fVisH / (float) fContentH)));
-                int thumbY = gy + Math.round((fVisH - thumbH) * (scroll / fMaxScroll));
+                int thumbY = gy + Math.round((fVisH - thumbH) * (scroll / maxScroll));
                 NanoVgRenderer.roundedRect(vg, sbX, thumbY, sbW, thumbH, sbW / 2f, Theme.accent());
+            }
+            } else if (isBindsTab()) {
+                drawBindsNvg(vg, x, y, W, H, S, mxF, myF, dt, gy, clipTop, clipBot, fVisH, margin);
+            } else {
+                drawServerNvg(vg, x, y, W, H, S, mxF, myF, dt, gy, clipTop, clipBot, fVisH, margin);
             }
 
             // resize grip
@@ -775,6 +789,200 @@ public class ClickGuiScreen extends Screen {
         int kd = 8 * S, kx = tx + Math.round(tw * frac);
         NanoVgRenderer.circle(vg, Math.min(tx + tw - kd / 2f, Math.max(tx + kd / 2f, kx)), ty + th / 2f, kd / 2f, 0xFFFFFFFF);
         SHit hit = new SHit(); hit.s = cs; hit.kind = 3; hit.channel = idx; hit.x = x; hit.y = y; hit.w = w; hit.h = h; hit.trackX = tx; hit.trackW = tw; sHits.add(hit);
+    }
+
+    // ---- NanoVG Binds tab -------------------------------------------------
+    private void drawBindsNvg(long vg, int x, int y, int W, int H, int S, int mx, int my, float dt,
+                              int gy, int clipTop, int clipBot, int visH, int margin) {
+        int rowH = 22 * S, gapr = 6 * S, listW = W - margin * 2, rx = x + margin;
+        List<Module> binds = new ArrayList<>();
+        for (Module m : LumeClient.MODULES.getModules()) if (m.isBindable()) binds.add(m);
+        int contentH = Math.max(0, binds.size() * (rowH + gapr) - gapr);
+        int maxScroll = Math.max(0, contentH - visH);
+        scrollTarget = Math.max(0f, Math.min(scrollTarget, maxScroll));
+        scroll = approach(scroll, scrollTarget, 16f, dt);
+        if (Math.abs(scroll - scrollTarget) < 0.5f) scroll = scrollTarget;
+        int scrollI = Math.round(scroll);
+
+        NanoVgRenderer.save(vg);
+        NanoVgRenderer.scissor(vg, rx - 2 * S, clipTop, listW + 4 * S, visH);
+        for (int i = 0; i < binds.size(); i++) {
+            Module m = binds.get(i);
+            int ry = gy + i * (rowH + gapr) - scrollI;
+            if (ry + rowH < clipTop || ry > clipBot) continue;
+            boolean binding = m == bindingModule;
+            boolean hov = inside(mx, my, rx, ry, listW, rowH) && my >= clipTop && my <= clipBot;
+            NanoVgRenderer.roundedRect(vg, rx, ry, listW, rowH, 8 * S, (hov || binding) ? Theme.glassHov() : Theme.glassRow());
+            NanoVgRenderer.text(vg, rx + 12 * S, ry + rowH / 2f, 11 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, com.lume.client.Lang.tName(m.getName()));
+            String kd = binding ? "нажми клавишу…" : keyDisplay(m.getKey());
+            int chipW = (int) NanoVgRenderer.textWidth(vg, 10 * S, kd) + 16 * S, chipX = rx + listW - chipW - 8 * S, chipY = ry + (rowH - 15 * S) / 2;
+            NanoVgRenderer.roundedRect(vg, chipX, chipY, chipW, 15 * S, 7 * S, binding ? withAlpha(Theme.accentRgb(), 0x66) : Theme.pillOff());
+            NanoVgRenderer.text(vg, chipX + chipW / 2f, chipY + 7.5f * S, 10 * S, binding ? 0xFFFFFFFF : Theme.accent(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, kd);
+            String md = m.getBindMode() == Module.BindMode.HOLD ? "HOLD" : "TOGGLE";
+            int modeW = (int) NanoVgRenderer.textWidth(vg, 9 * S, md) + 12 * S, modeX = chipX - modeW - 6 * S;
+            NanoVgRenderer.roundedRect(vg, modeX, chipY, modeW, 15 * S, 7 * S, Theme.pillOff());
+            NanoVgRenderer.text(vg, modeX + modeW / 2f, chipY + 7.5f * S, 9 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, md);
+            bindHits.add(new Object[]{ m, rx, ry, listW, rowH, modeX, modeW, chipY });
+        }
+        NanoVgRenderer.restore(vg);
+        if (maxScroll > 0) {
+            int sbW = 3 * S, sbX = x + W - margin / 2 - sbW;
+            NanoVgRenderer.roundedRect(vg, sbX, gy, sbW, visH, sbW / 2f, Theme.glassRow());
+            int thumbH = Math.max(14 * S, Math.round(visH * (visH / (float) contentH)));
+            int thumbY = gy + Math.round((visH - thumbH) * (scroll / maxScroll));
+            NanoVgRenderer.roundedRect(vg, sbX, thumbY, sbW, thumbH, sbW / 2f, Theme.accent());
+        }
+    }
+
+    // ---- NanoVG Server tab (FT/HW helper) ---------------------------------
+    private void nvgPill(long vg, boolean on, int px, int py, int pw, int ph, int S) {
+        NanoVgRenderer.roundedRect(vg, px, py, pw, ph, ph / 2f, on ? Theme.accent() : Theme.pillOff());
+        int kd = ph - 4 * S, kx = on ? px + pw - kd - 2 * S : px + 2 * S;
+        NanoVgRenderer.roundedRect(vg, kx, py + 2 * S, kd, kd, kd / 2f, 0xFFFFFFFF);
+    }
+
+    private void drawServerNvg(long vg, int x, int y, int W, int H, int S, int mx, int my, float dt,
+                               int gy, int clipTop, int clipBot, int visH, int margin) {
+        int sx = x + margin, w = W - margin * 2;
+        com.lume.client.fthw.ServerType st = com.lume.client.fthw.ServerType.current();
+        boolean supported = st != com.lume.client.fthw.ServerType.UNKNOWN;
+        ServerHelper sh = (ServerHelper) LumeClient.MODULES.getByName("Server Helper");
+        boolean on = sh != null && sh.isEnabled();
+
+        if (!supported) {
+            // fast-connect buttons (you're not on FunTime/HolyWorld)
+            NanoVgRenderer.text(vg, sx + 2 * S, gy + 6 * S, 11 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, "Не на сервере. Быстрый вход:");
+            int bh = 32 * S, by = gy + 20 * S;
+            NanoVgRenderer.gradientRoundedRect(vg, sx, by, w, bh, 11 * S, Theme.accent(), Theme.accent2());
+            NanoVgRenderer.text(vg, sx + w / 2f, by + bh / 2f, 13 * S, 0xFFFFFFFF, NanoVgRenderer.ALIGN_CENTER_MIDDLE, "Играть на FunTime");
+            serverHits.add(new Object[]{ "connect:funtime", sx, by, w, bh, null });
+            by += bh + 8 * S;
+            NanoVgRenderer.roundedRect(vg, sx, by, w, bh, 11 * S, Theme.glassHov());
+            NanoVgRenderer.strokeRoundedRect(vg, sx + 0.5f * S, by + 0.5f * S, w - S, bh - S, 11 * S, S, Theme.rim());
+            NanoVgRenderer.text(vg, sx + w / 2f, by + bh / 2f, 13 * S, Theme.txt(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, "Играть на HolyWorld");
+            serverHits.add(new Object[]{ "connect:holyworld", sx, by, w, bh, null });
+            return;
+        }
+
+        int maxScroll = Math.max(0, serverContentH - visH);
+        scrollTarget = Math.max(0f, Math.min(scrollTarget, maxScroll));
+        scroll = approach(scroll, scrollTarget, 16f, dt);
+        if (Math.abs(scroll - scrollTarget) < 0.5f) scroll = scrollTarget;
+        int scrollI = Math.round(scroll);
+
+        NanoVgRenderer.save(vg);
+        NanoVgRenderer.scissor(vg, x, clipTop, W, visH);
+        int cur = 0;
+
+        { // master enable toggle
+            int ry = gy + cur - scrollI;
+            NanoVgRenderer.text(vg, sx + 2 * S, ry + 11 * S, 11 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, "Включить хелпер");
+            int pw = 40 * S, ph = 18 * S, px = sx + w - pw, py = ry;
+            nvgPill(vg, on, px, py, pw, ph, S);
+            serverHits.add(new Object[]{ "master", px, py, pw, ph, null });
+            cur += 26 * S;
+        }
+
+        if (on) {
+            NanoVgRenderer.text(vg, sx + 2 * S, gy + cur - scrollI + 7 * S, 11 * S, 0xFF6FCF7F, NanoVgRenderer.ALIGN_MIDDLE, "Сервер: " + st.display() + "  ·  Активно");
+            cur += 16 * S;
+            NanoVgRenderer.text(vg, sx + 2 * S, gy + cur - scrollI + 6 * S, 10 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, "Функции (клик по чипу = бинд клавиши):");
+            cur += 14 * S;
+            BoolSetting[] subs = { sh.itemHelper, sh.effects, sh.eventsHud, sh.showServer };
+            for (BoolSetting bs : subs) {
+                int ry = gy + cur - scrollI, rh = 17 * S;
+                if (ry + rh >= clipTop && ry <= clipBot) {
+                    NanoVgRenderer.text(vg, sx + 6 * S, ry + rh / 2f, 10 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, bs.name);
+                    int pw = 30 * S, ph = 14 * S, px = sx + w - pw, py = ry + S;
+                    nvgPill(vg, bs.value, px, py, pw, ph, S);
+                    serverHits.add(new Object[]{ "subToggle", px, py, pw, ph, bs });
+                    if (com.lume.client.fthw.HelperBinds.bound.contains(bs)) {
+                        boolean cap = bs == bindingSetting;
+                        String kd = cap ? "клавиша…" : keyDisplay(bs.key);
+                        int chipW = (int) NanoVgRenderer.textWidth(vg, 9 * S, kd) + 12 * S, chipX = px - chipW - 8 * S;
+                        NanoVgRenderer.roundedRect(vg, chipX, py, chipW, ph, ph / 2f, cap ? withAlpha(Theme.accentRgb(), 0x66) : Theme.pillOff());
+                        NanoVgRenderer.text(vg, chipX + chipW / 2f, py + ph / 2f, 9 * S, cap ? 0xFFFFFFFF : Theme.accent(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, kd);
+                        serverHits.add(new Object[]{ "subBind", chipX, py, chipW, ph, bs });
+                    }
+                }
+                cur += rh;
+            }
+            cur += 6 * S;
+
+            NanoVgRenderer.text(vg, sx + 2 * S, gy + cur - scrollI + 6 * S, 10 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, "Предметы — отметь что есть на сервере:");
+            cur += 14 * S;
+            String[] catNames = { "Активные", "Сферы", "Талисманы" };
+            ItemRule.Cat[] cats = { ItemRule.Cat.ACTIVE, ItemRule.Cat.SPHERE, ItemRule.Cat.TALISMAN };
+            for (int ci = 0; ci < cats.length; ci++) {
+                int ryh = gy + cur - scrollI;
+                if (ryh + 12 * S >= clipTop && ryh <= clipBot)
+                    NanoVgRenderer.text(vg, sx + 4 * S, ryh + 6 * S, 10 * S, Theme.accent(), NanoVgRenderer.ALIGN_MIDDLE, catNames[ci]);
+                cur += 13 * S;
+                for (ItemRule it : ItemRules.byCat(cats[ci])) {
+                    int ry = gy + cur - scrollI, rh = 16 * S;
+                    if (ry + rh >= clipTop && ry <= clipBot) {
+                        int cb = 11 * S, cbx = sx + 4 * S, cby = ry + (rh - cb) / 2;
+                        NanoVgRenderer.roundedRect(vg, cbx, cby, cb, cb, 3 * S, it.present ? it.color : Theme.pillOff());
+                        if (it.present) NanoVgRenderer.roundedRect(vg, cbx + (cb - 4 * S) / 2, cby + (cb - 4 * S) / 2, 4 * S, 4 * S, S, 0xFFFFFFFF);
+                        serverHits.add(new Object[]{ "present", cbx, ry, w, rh, it });
+                        NanoVgRenderer.text(vg, cbx + cb + 6 * S, ry + rh / 2f, 10 * S, it.present ? Theme.txt() : Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, it.name);
+                        StringBuilder rb = new StringBuilder();
+                        if (it.radius > 0) rb.append("R").append((int) it.radius).append(" ");
+                        if (it.cooldownSec > 0) rb.append(it.cooldownSec).append("с");
+                        if (rb.length() > 0) {
+                            float rw = NanoVgRenderer.textWidth(vg, 10 * S, rb.toString());
+                            NanoVgRenderer.text(vg, sx + w - rw, ry + rh / 2f, 10 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, rb.toString());
+                        }
+                    }
+                    cur += 16 * S;
+                }
+                cur += 2 * S;
+            }
+
+            cur += 4 * S;
+            int rye = gy + cur - scrollI;
+            if (rye + 12 * S >= clipTop && rye <= clipBot)
+                NanoVgRenderer.text(vg, sx + 2 * S, rye + 6 * S, 10 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, "Расписание ивентов (учится по чату):");
+            cur += 14 * S;
+            for (com.lume.client.fthw.EventRule r : EventManager.rules) {
+                int ry = gy + cur - scrollI;
+                if (ry + 12 * S >= clipTop && ry <= clipBot) {
+                    int left = -1;
+                    for (EventManager.Active a : EventManager.active) if (a.rule == r) { left = a.secondsLeft(); break; }
+                    int col; String line;
+                    if (left >= 0) { col = 0xFF6FCF7F; line = "● " + r.name + " — идёт, " + left + "с"; }
+                    else {
+                        long eta = r.etaSec(), ago = r.agoSec();
+                        if (eta > 0) { col = 0xFFE8C15A; line = "◷ " + r.name + " — ≈ через " + fmtDur(eta); }
+                        else if (ago >= 0) { col = Theme.txtDim(); line = "○ " + r.name + " — был " + fmtDur(ago) + " назад"; }
+                        else { col = Theme.txtDim(); line = "○ " + r.name + " — ещё не видел"; }
+                    }
+                    NanoVgRenderer.text(vg, sx + 6 * S, ry + 6 * S, 10 * S, col, NanoVgRenderer.ALIGN_MIDDLE, line);
+                }
+                cur += 13 * S;
+            }
+        }
+
+        NanoVgRenderer.restore(vg);
+        serverContentH = cur;
+        if (maxScroll > 0) {
+            int sbW = 3 * S, sbX = x + W - margin / 2 - sbW;
+            NanoVgRenderer.roundedRect(vg, sbX, gy, sbW, visH, sbW / 2f, Theme.glassRow());
+            int thumbH = Math.max(14 * S, Math.round(visH * (visH / (float) serverContentH)));
+            int thumbY = gy + Math.round((visH - thumbH) * (scroll / maxScroll));
+            NanoVgRenderer.roundedRect(vg, sbX, thumbY, sbW, thumbH, sbW / 2f, Theme.accent());
+        }
+    }
+
+    /** Quick-connect to a server from inside the game (Server tab fast-connect). */
+    private void fastConnect(String name, String address) {
+        try {
+            ServerInfo info = new ServerInfo(name, address, ServerInfo.ServerType.OTHER);
+            this.client.setScreen(null);
+            ConnectScreen.connect(new TitleScreen(), this.client, ServerAddress.parse(address), info, false, null);
+        } catch (Exception e) {
+            System.out.println("[Lume] fast connect failed: " + e);
+        }
     }
 
     // ---- Server tab (FT/HW helper) ----------------------------------------
@@ -1371,6 +1579,8 @@ public class ClickGuiScreen extends Screen {
                                 case "subToggle" -> { BoolSetting bs = (BoolSetting) h[5]; bs.value = !bs.value; com.lume.client.Config.save(); }
                                 case "subBind" -> { BoolSetting bs = (BoolSetting) h[5]; bindingSetting = (bindingSetting == bs) ? null : bs; }
                                 case "present" -> { ItemRule it = (ItemRule) h[5]; it.present = !it.present; com.lume.client.Config.save(); }
+                                case "connect:funtime" -> fastConnect("FunTime", "mc.funtime.su");
+                                case "connect:holyworld" -> fastConnect("HolyWorld", "mc.holyworld.ru");
                             }
                             return true;
                         }
