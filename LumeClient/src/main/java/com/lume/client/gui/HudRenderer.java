@@ -115,6 +115,7 @@ public final class HudRenderer {
             if (shm == null || shm.eventsHud.value) renderServerHelper(ctx, mc, tr, S);
             if (shm == null || shm.itemHelper.value) renderItemHelper(ctx, mc, tr, S);
             if (shm == null || shm.effects.value) renderEffects(ctx, mc, tr, S);
+            if (shm == null || shm.quickCmds.value) renderQuickBar(ctx, mc, tr, S);
         }
         Notifications.render(ctx, tr, S, nsw);
         if (on("Module List")) transform(ctx, "Module List", sizeOf("Module List"), nsw, 6 * S, S, () -> renderArrayList(ctx, mc, tr, S));
@@ -588,6 +589,36 @@ public final class HudRenderer {
         int sec = ticks / 20;
         if (sec >= 60) return (sec / 60) + ":" + String.format("%02d", sec % 60);
         return sec + "с";
+    }
+
+    private static String keyName(int code) {
+        if (code < 0) return "—";
+        try { return net.minecraft.client.util.InputUtil.Type.KEYSYM.createFromCode(code).getLocalizedText().getString(); }
+        catch (Exception e) { return "?"; }
+    }
+
+    /** FT/HW quick-command HUD bar (right side): each command + its bound key. */
+    private static void renderQuickBar(DrawContext ctx, MinecraftClient mc, TextRenderer tr, int S) {
+        java.util.List<com.lume.client.fthw.QuickCommands.Cmd> list = com.lume.client.fthw.QuickCommands.list;
+        if (list.isEmpty()) return;
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        int pad = 6 * S, lineH = 12 * S, pw = 0;
+        for (com.lume.client.fthw.QuickCommands.Cmd c : list) {
+            String line = c.label + "  [" + keyName(c.key) + "]";
+            lines.add(line);
+            pw = Math.max(pw, RenderUtil.vanillaWidth(tr, line, S));
+        }
+        pw += pad * 2 + 4 * S;
+        int h = lines.size() * lineH + pad * 2;
+        int x = mc.getWindow().getScaledWidth() * S - pw - 6 * S;
+        int y = mc.getWindow().getScaledHeight() * S / 2 - h / 2;
+        RenderUtil.roundedRect(ctx, x, y, pw, h, 7 * S, Theme.winBg());
+        RenderUtil.roundedRect(ctx, x + pw - 3 * S, y, 3 * S, h, 2 * S, Theme.accent());
+        int ty = y + pad;
+        for (String l : lines) {
+            RenderUtil.vanillaText(ctx, tr, l, x + pad, ty, Theme.txt(), S);
+            ty += lineH;
+        }
     }
 
     /** Dotted ring on the ground (radius blocks) around the player, projected to screen. */

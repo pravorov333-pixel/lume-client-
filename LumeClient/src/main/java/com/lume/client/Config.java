@@ -132,6 +132,11 @@ public final class Config {
             for (BoolSetting b : com.lume.client.fthw.HelperBinds.bound) hbinds.addProperty(b.name, b.key);
             root.add("helperBinds", hbinds);
 
+            // FT/HW quick-command keybinds
+            JsonObject qcmds = new JsonObject();
+            for (com.lume.client.fthw.QuickCommands.Cmd c : com.lume.client.fthw.QuickCommands.list) qcmds.addProperty(c.label, c.key);
+            root.add("quickCmds", qcmds);
+
             Files.createDirectories(file().getParent());
             Files.writeString(file(), GSON.toJson(root));
         } catch (Exception e) {
@@ -228,6 +233,12 @@ public final class Config {
                 JsonObject hb = root.getAsJsonObject("helperBinds");
                 for (BoolSetting b : com.lume.client.fthw.HelperBinds.bound)
                     if (hb.has(b.name)) b.key = hb.get(b.name).getAsInt();
+            }
+
+            if (root.has("quickCmds")) {
+                JsonObject qc = root.getAsJsonObject("quickCmds");
+                for (com.lume.client.fthw.QuickCommands.Cmd c : com.lume.client.fthw.QuickCommands.list)
+                    if (qc.has(c.label)) c.key = qc.get(c.label).getAsInt();
             }
         } catch (Exception e) {
             System.out.println("[Lume] config load failed: " + e);

@@ -101,6 +101,7 @@ public class ClickGuiScreen extends Screen {
 
     // Server tab: scrollable encyclopedia + sub-function binds
     private BoolSetting bindingSetting = null;                    // sub-function capturing a key
+    private com.lume.client.fthw.QuickCommands.Cmd bindingQuickCmd = null;  // quick-command capturing a key
     private final List<Object[]> serverHits = new ArrayList<>();  // {String kind, int x, y, w, h, Object ref}
     private int serverContentH = 0;
 
@@ -962,6 +963,30 @@ public class ClickGuiScreen extends Screen {
                 }
                 cur += 13 * S;
             }
+
+            // quick commands — bind a key + ▶ send
+            cur += 6 * S;
+            int ryq = gy + cur - scrollI;
+            if (ryq + 12 * S >= clipTop && ryq <= clipBot)
+                NanoVgRenderer.text(vg, sx + 2 * S, ryq + 6 * S, 10 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, "Быстрые команды (бинд клавиши · ▶ отправить):");
+            cur += 14 * S;
+            for (com.lume.client.fthw.QuickCommands.Cmd c : com.lume.client.fthw.QuickCommands.list) {
+                int ry = gy + cur - scrollI, rh = 16 * S;
+                if (ry + rh >= clipTop && ry <= clipBot) {
+                    NanoVgRenderer.text(vg, sx + 6 * S, ry + rh / 2f, 10 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, c.label + "  " + c.command);
+                    int sbw = 22 * S, sbx = sx + w - sbw, sby = ry + S, sbh = 14 * S;
+                    NanoVgRenderer.roundedRect(vg, sbx, sby, sbw, sbh, sbh / 2f, Theme.accent());
+                    NanoVgRenderer.triangle(vg, sbx + sbw / 2f - 2 * S, sby + sbh / 2f - 3 * S, sbx + sbw / 2f - 2 * S, sby + sbh / 2f + 3 * S, sbx + sbw / 2f + 4 * S, sby + sbh / 2f, 0xFFFFFFFF);
+                    serverHits.add(new Object[]{ "qcmdSend", sbx, sby, sbw, sbh, c });
+                    boolean cap = c == bindingQuickCmd;
+                    String kd = cap ? "клавиша…" : keyDisplay(c.key);
+                    int chipW = (int) NanoVgRenderer.textWidth(vg, 9 * S, kd) + 12 * S, chipX = sbx - chipW - 6 * S, chipY = ry + S;
+                    NanoVgRenderer.roundedRect(vg, chipX, chipY, chipW, 14 * S, 7 * S, cap ? withAlpha(Theme.accentRgb(), 0x66) : Theme.pillOff());
+                    NanoVgRenderer.text(vg, chipX + chipW / 2f, chipY + 7 * S, 9 * S, cap ? 0xFFFFFFFF : Theme.accent(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, kd);
+                    serverHits.add(new Object[]{ "qcmdBind", chipX, chipY, chipW, 14 * S, c });
+                }
+                cur += 16 * S;
+            }
         }
 
         NanoVgRenderer.restore(vg);
@@ -1560,7 +1585,7 @@ public class ClickGuiScreen extends Screen {
             if (inWindow) {
                 if (inside(mlx, mly, themeBtn[0], themeBtn[1], themeBtn[2], themeBtn[3])) { Theme.toggle(); animFor("_theme")[2] = 1f; return true; }
                 for (int i = 0; i < segX.length; i++) {
-                    if (inside(mlx, mly, segX[i], segY - 3 * S, segW[i], segH + 6 * S)) { selectedCat = i; search = ""; scroll = scrollTarget = 0f; bindingModule = null; bindingSetting = null; return true; }
+                    if (inside(mlx, mly, segX[i], segY - 3 * S, segW[i], segH + 6 * S)) { selectedCat = i; search = ""; scroll = scrollTarget = 0f; bindingModule = null; bindingSetting = null; bindingQuickCmd = null; return true; }
                 }
                 if (isBindsTab()) {
                     if (mly >= lastClipTop && mly <= lastClipBot) {
@@ -1597,6 +1622,8 @@ public class ClickGuiScreen extends Screen {
                                 case "present" -> { ItemRule it = (ItemRule) h[5]; it.present = !it.present; com.lume.client.Config.save(); }
                                 case "connect:funtime" -> fastConnect("FunTime", "mc.funtime.su");
                                 case "connect:holyworld" -> fastConnect("HolyWorld", "mc.holyworld.ru");
+                                case "qcmdSend" -> com.lume.client.fthw.QuickCommands.send((com.lume.client.fthw.QuickCommands.Cmd) h[5]);
+                                case "qcmdBind" -> { var qc = (com.lume.client.fthw.QuickCommands.Cmd) h[5]; bindingQuickCmd = (bindingQuickCmd == qc) ? null : qc; }
                             }
                             return true;
                         }
@@ -1724,7 +1751,7 @@ public class ClickGuiScreen extends Screen {
 
     @Override
     public boolean charTyped(char chr, int modifiers) {
-        if (bindingModule != null || bindingSetting != null) return true;   // consume while capturing a bind
+        if (bindingModule != null || bindingSetting != null || bindingQuickCmd != null) return true;   // consume while capturing a bind
         if (!(chr >= 32 && chr != 127)) return super.charTyped(chr, modifiers);
         if ("search".equals(focusedField)) { search += chr; scroll = scrollTarget = 0f; return true; }
         if (focusedField != null) {                         // waypoint fields
@@ -1749,6 +1776,13 @@ public class ClickGuiScreen extends Screen {
         if (bindingSetting != null) {
             bindingSetting.key = keyCode == 256 ? -1 : keyCode;    // Esc = unbind
             bindingSetting = null;
+            com.lume.client.Config.save();
+            return true;
+        }
+        // capturing a quick-command bind on the Server tab
+        if (bindingQuickCmd != null) {
+            bindingQuickCmd.key = keyCode == 256 ? -1 : keyCode;
+            bindingQuickCmd = null;
             com.lume.client.Config.save();
             return true;
         }

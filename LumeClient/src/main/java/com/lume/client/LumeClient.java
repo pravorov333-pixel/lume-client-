@@ -74,6 +74,7 @@ public class LumeClient implements ClientModInitializer {
             handleDeathWaypoint(client);
             SpeedTracker.update(client);
             EventManager.tick();
+            com.lume.client.fthw.EnemyAlert.tick();
             MODULES.onTick();
         });
 

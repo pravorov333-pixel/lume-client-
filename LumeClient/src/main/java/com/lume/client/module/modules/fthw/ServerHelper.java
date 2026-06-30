@@ -21,17 +21,21 @@ import com.lume.client.module.setting.BoolSetting;
 public class ServerHelper extends Module {
 
     public final BoolSetting showServer = add(new BoolSetting("Показывать сервер", true));
-    public final BoolSetting itemHelper = add(new BoolSetting("Хелпер предметов", true));
+    public final BoolSetting itemHelper = add(new BoolSetting("Хелпер предметов (кулдаун+радиус)", true));
+    public final BoolSetting enemyAlert = add(new BoolSetting("Алерт: тебя задело предметом", true));
+    public final BoolSetting eventsHud  = add(new BoolSetting("Алерт ивентов + таймер", true));
+    public final BoolSetting quickCmds  = add(new BoolSetting("Быстрые команды (HUD)", true));
     public final BoolSetting effects    = add(new BoolSetting("Эффекты на тебе", true));
-    public final BoolSetting eventsHud  = add(new BoolSetting("HUD ивентов", true));
 
     public ServerHelper() {
         super("Server Helper", "FunTime / HolyWorld helper", Category.CHAT, -1);
         setBindable(true);   // whole helper can be bound on/off in the Binds tab
-        // the three sub-functions can carry their own keybinds (set in the Server tab)
+        // sub-functions can carry their own keybinds (set in the Server tab)
         HelperBinds.register(itemHelper);
-        HelperBinds.register(effects);
+        HelperBinds.register(enemyAlert);
         HelperBinds.register(eventsHud);
+        HelperBinds.register(quickCmds);
+        HelperBinds.register(effects);
     }
 
     @Override
