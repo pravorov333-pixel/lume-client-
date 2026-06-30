@@ -14,8 +14,7 @@
     "electron-builder": "^25.1.8"
   },
   "dependencies": {
-    "minecraft-launcher-core": "^3.18.2",
-    "telegram": "^2.26.22"
+    "minecraft-launcher-core": "^3.18.2"
   },
   "build": {
     "appId": "com.lume.client",

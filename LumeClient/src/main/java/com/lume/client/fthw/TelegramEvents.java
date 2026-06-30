@@ -5,44 +5,68 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
- * Reads the FunTime events that the launcher scraped from the @FunTimeEventRobot
- * Telegram Mini App into {@code %APPDATA%/.lumeclient/events.json}. This gives the
- * Events tab data for ALL anarchies at once (not just the one you're on), since the
- * Telegram bot aggregates every anarchy. Re-read on a short throttle.
+ * Pulls the all-anarchy FunTime event feed from the Lume events backend over HTTP.
+ * The backend (see /tg-server) reads @FunTimeEventRobot through ONE Telegram account
+ * (the owner's) and serves the events as JSON, so the client never logs into Telegram
+ * — it just fetches {@link #EVENTS_URL}. Fetched off-thread, throttled.
  */
 public final class TelegramEvents {
+
+    /** Owner's events server. Point this at the hosted backend (default = local server). */
+    private static final String EVENTS_URL = "http://localhost:8077/events";
 
     public static final class Ev {
         public final String anarchy, name, time, phase, rarity;
         public Ev(String a, String n, String t, String p, String r) { anarchy = a; name = n; time = t; phase = p; rarity = r; }
     }
 
-    public static final List<Ev> list = new ArrayList<>();
-    public static long updated = 0;
-    private static long lastLoad = 0;
+    private static volatile List<Ev> list = Collections.emptyList();
+    private static volatile long updated = 0;
+    private static volatile boolean fetching = false;
+    private static long lastFetch = 0;
 
     private TelegramEvents() {}
 
+    public static List<Ev> events() { return list; }
     public static boolean available() { return !list.isEmpty(); }
+    public static long ageSec() { return updated == 0 ? -1 : (System.currentTimeMillis() - updated) / 1000; }
 
-    /** Re-read events.json (throttled to ~3s). Safe to call every frame. */
+    /** Kick an off-thread fetch (throttled to ~5s). Safe to call every frame. */
     public static void load() {
         long now = System.currentTimeMillis();
-        if (now - lastLoad < 3000) return;
-        lastLoad = now;
+        if (fetching || now - lastFetch < 5000) return;
+        lastFetch = now;
+        fetching = true;
+        Thread t = new Thread(() -> {
+            try {
+                HttpClient c = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(4)).build();
+                HttpRequest req = HttpRequest.newBuilder(URI.create(EVENTS_URL)).timeout(Duration.ofSeconds(4)).GET().build();
+                HttpResponse<String> resp = c.send(req, HttpResponse.BodyHandlers.ofString());
+                if (resp.statusCode() == 200) parse(resp.body());
+            } catch (Exception ignored) {
+                // server offline / unreachable → keep last data
+            } finally {
+                fetching = false;
+            }
+        }, "Lume-TGEvents");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private static void parse(String body) {
         try {
-            String appData = System.getenv("APPDATA");
-            if (appData == null) return;
-            Path f = Path.of(appData, ".lumeclient", "events.json");
-            if (!Files.exists(f)) return;
-            JsonObject root = JsonParser.parseString(Files.readString(f)).getAsJsonObject();
-            updated = root.has("updated") ? root.get("updated").getAsLong() : 0;
+            JsonObject root = JsonParser.parseString(body).getAsJsonObject();
+            long upd = root.has("updated") ? root.get("updated").getAsLong() : System.currentTimeMillis();
             List<Ev> fresh = new ArrayList<>();
             if (root.has("events")) {
                 JsonArray arr = root.getAsJsonArray("events");
@@ -51,14 +75,9 @@ public final class TelegramEvents {
                     fresh.add(new Ev(s(o, "anarchy"), s(o, "name"), s(o, "time"), s(o, "phase"), s(o, "rarity")));
                 }
             }
-            list.clear();
-            list.addAll(fresh);
+            list = fresh;       // atomic reference swap (never mutate the live list)
+            updated = upd;
         } catch (Exception ignored) {}
-    }
-
-    /** Seconds since the launcher last refreshed the feed, or -1. */
-    public static long ageSec() {
-        return updated == 0 ? -1 : (System.currentTimeMillis() - updated) / 1000;
     }
 
     private static String s(JsonObject o, String k) {

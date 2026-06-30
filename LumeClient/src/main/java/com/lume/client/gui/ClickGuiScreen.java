@@ -984,7 +984,7 @@ public class ClickGuiScreen extends Screen {
         if (tg) {
             long age = com.lume.client.fthw.TelegramEvents.ageSec();
             hdr = "Ивенты всех анархий · Telegram" + (age >= 0 ? " · " + (age < 60 ? age + "с" : (age / 60) + "м") + " назад" : "");
-            evs = new ArrayList<>(com.lume.client.fthw.TelegramEvents.list);
+            evs = new ArrayList<>(com.lume.client.fthw.TelegramEvents.events());
             evs.sort((a, b) -> a.anarchy.length() != b.anarchy.length() ? a.anarchy.length() - b.anarchy.length() : a.anarchy.compareTo(b.anarchy));
             n = evs.size();
         } else {

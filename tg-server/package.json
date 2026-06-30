@@ -1,0 +1,16 @@
+{
+  "name": "lume-tg-server",
+  "version": "1.0.0",
+  "description": "Lume FunTime events backend — reads @FunTimeEventRobot via one Telegram account, serves JSON to clients.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "electron": "^33.4.11"
+  },
+  "dependencies": {
+    "telegram": "^2.26.22"
+  }
+}

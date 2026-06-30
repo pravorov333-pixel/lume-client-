@@ -13,12 +13,4 @@ contextBridge.exposeInMainWorld('lume', {
   onLog: (cb) => ipcRenderer.on('log', (_e, d) => cb(d)),
   onProgress: (cb) => ipcRenderer.on('progress', (_e, d) => cb(d)),
   onGameClosed: (cb) => ipcRenderer.on('game-closed', (_e, d) => cb(d)),
-  // Telegram events
-  tgStatus: () => ipcRenderer.invoke('tg-status'),
-  tgStartLogin: (p) => ipcRenderer.invoke('tg-start-login', p),
-  tgCode: (code) => ipcRenderer.invoke('tg-code', code),
-  tgPassword: (pw) => ipcRenderer.invoke('tg-password', pw),
-  tgRefresh: () => ipcRenderer.invoke('tg-refresh'),
-  tgUnlink: () => ipcRenderer.invoke('tg-unlink'),
-  onTgLog: (cb) => ipcRenderer.on('tg-log', (_e, d) => cb(d)),
 });

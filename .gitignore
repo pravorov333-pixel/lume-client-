@@ -9,6 +9,7 @@
 !/LumeClient/
 !/LumeClient1165/
 !/LumeLauncher/
+!/tg-server/
 
 # ── Build artifacts / dependencies (don't commit) ────────────
 # Gradle (mod projects)
@@ -27,6 +28,11 @@ LumeClient1165/run/
 LumeLauncher/node_modules/
 LumeLauncher/dist/
 LumeLauncher/out/
+LumeLauncher/build-log.txt
+
+# Telegram events backend (don't commit deps or the private session/config)
+tg-server/node_modules/
+tg-server/config.json
 
 # ── OS / editor junk ─────────────────────────────────────────
 *.log

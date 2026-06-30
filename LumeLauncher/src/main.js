@@ -6,7 +6,6 @@ const os = require('os');
 const crypto = require('crypto');
 const { checkKey } = require('./keys');
 const { launchGame, cancelLaunch } = require('./launcher');
-const tg = require('./telegram');
 
 let win;
 
@@ -57,15 +56,3 @@ ipcMain.handle('launch', async (_e, payload) => {
 });
 
 ipcMain.handle('cancel-launch', () => cancelLaunch());
-
-// --- Telegram events integration ---
-tg.setLogSink((m) => { if (win && !win.isDestroyed()) win.webContents.send('tg-log', { text: m }); });
-ipcMain.handle('tg-status', () => tg.status());
-ipcMain.handle('tg-start-login', (_e, p) => tg.startLogin(p.apiId, p.apiHash, p.phone));
-ipcMain.handle('tg-code', (_e, code) => tg.submitCode(code));
-ipcMain.handle('tg-password', (_e, pw) => tg.submitPassword(pw));
-ipcMain.handle('tg-refresh', () => tg.refresh());
-ipcMain.handle('tg-unlink', () => tg.unlink());
-
-// auto-connect with a saved session on startup
-app.whenReady().then(() => { try { if (tg.isLinked()) tg.connectSaved().catch(() => {}); } catch (e) {} });
