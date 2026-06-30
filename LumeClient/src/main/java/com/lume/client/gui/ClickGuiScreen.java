@@ -973,13 +973,27 @@ public class ClickGuiScreen extends Screen {
 
     // ---- NanoVG Events tab ------------------------------------------------
     private void drawEventsNvg(long vg, int x, int y, int W, int H, int S, int gy, int clipTop, int clipBot, int visH, int margin, float dt) {
-        int sx = x + margin, w = W - margin * 2;
-        com.lume.client.fthw.ServerType st = com.lume.client.fthw.ServerType.current();
-        String hdr = st == com.lume.client.fthw.ServerType.UNKNOWN
-                ? "Ивенты · зайди на FunTime/HolyWorld" : "Ивенты · " + st.display() + " (учится по чату)";
+        int sx = x + margin, w = W - margin * 2, rowH = 30 * S, gapr = 6 * S;
 
-        int rowH = 30 * S, gapr = 6 * S;
-        int contentH = 22 * S + Math.max(0, EventManager.rules.size() * (rowH + gapr) - gapr);
+        com.lume.client.fthw.TelegramEvents.load();
+        boolean tg = com.lume.client.fthw.TelegramEvents.available();
+
+        String hdr;
+        int n;
+        java.util.List<com.lume.client.fthw.TelegramEvents.Ev> evs = null;
+        if (tg) {
+            long age = com.lume.client.fthw.TelegramEvents.ageSec();
+            hdr = "Ивенты всех анархий · Telegram" + (age >= 0 ? " · " + (age < 60 ? age + "с" : (age / 60) + "м") + " назад" : "");
+            evs = new ArrayList<>(com.lume.client.fthw.TelegramEvents.list);
+            evs.sort((a, b) -> a.anarchy.length() != b.anarchy.length() ? a.anarchy.length() - b.anarchy.length() : a.anarchy.compareTo(b.anarchy));
+            n = evs.size();
+        } else {
+            com.lume.client.fthw.ServerType st = com.lume.client.fthw.ServerType.current();
+            hdr = "Ивенты · подключи Telegram в лаунчере (кнопка «Telegram ивенты»). Пока — " + (st == com.lume.client.fthw.ServerType.UNKNOWN ? "нет сервера" : st.display());
+            n = EventManager.rules.size();
+        }
+
+        int contentH = 22 * S + Math.max(0, n * (rowH + gapr) - gapr);
         int maxScroll = Math.max(0, contentH - visH);
         scrollTarget = Math.max(0f, Math.min(scrollTarget, maxScroll));
         scroll = approach(scroll, scrollTarget, 16f, dt);
@@ -991,30 +1005,49 @@ public class ClickGuiScreen extends Screen {
         int cur = 0;
         NanoVgRenderer.text(vg, sx + 2 * S, gy + cur - scrollI + 7 * S, 11 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, hdr);
         cur += 22 * S;
-        for (com.lume.client.fthw.EventRule r : EventManager.rules) {
-            int ry = gy + cur - scrollI;
-            if (ry + rowH >= clipTop && ry <= clipBot) {
-                int left = -1;
-                for (EventManager.Active a : EventManager.active) if (a.rule == r) { left = a.secondsLeft(); break; }
-                long eta = r.etaSec(), ago = r.agoSec();
-                int dotCol; String status; int statusCol;
-                if (left >= 0) { dotCol = 0xFF6FCF7F; status = "идёт сейчас"; statusCol = 0xFF6FCF7F; }
-                else if (eta > 0) { dotCol = 0xFFE8C15A; status = "≈ через " + fmtDur(eta); statusCol = 0xFFE8C15A; }
-                else if (ago >= 0) { dotCol = Theme.txtDim(); status = "был " + fmtDur(ago) + " назад"; statusCol = Theme.txtDim(); }
-                else { dotCol = Theme.pillOff(); status = "ещё не видел"; statusCol = Theme.txtDim(); }
 
-                NanoVgRenderer.roundedRect(vg, sx, ry, w, rowH, 9 * S, Theme.glassRow());
-                NanoVgRenderer.roundedRect(vg, sx, ry, 3 * S, rowH, 2 * S, dotCol);
-                NanoVgRenderer.text(vg, sx + 12 * S, ry + 11 * S, 12 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, r.name);
-                NanoVgRenderer.text(vg, sx + 12 * S, ry + 22 * S, 10 * S, statusCol, NanoVgRenderer.ALIGN_MIDDLE, status);
-
-                String big = left >= 0 ? left + "с" : (eta > 0 ? fmtDur(eta) : "");
-                if (!big.isEmpty()) {
-                    float tw = NanoVgRenderer.textWidth(vg, 16 * S, big);
-                    NanoVgRenderer.text(vg, sx + w - tw - 12 * S, ry + rowH / 2f, 16 * S, left >= 0 ? 0xFF6FCF7F : 0xFFE8C15A, NanoVgRenderer.ALIGN_MIDDLE, big);
+        if (tg) {
+            for (com.lume.client.fthw.TelegramEvents.Ev e : evs) {
+                int ry = gy + cur - scrollI;
+                if (ry + rowH >= clipTop && ry <= clipBot) {
+                    boolean active = !e.phase.isEmpty() && !e.phase.toLowerCase().contains("ожидан");
+                    int dotCol = active ? 0xFF6FCF7F : 0xFFE8C15A;
+                    NanoVgRenderer.roundedRect(vg, sx, ry, w, rowH, 9 * S, Theme.glassRow());
+                    NanoVgRenderer.roundedRect(vg, sx, ry, 3 * S, rowH, 2 * S, dotCol);
+                    NanoVgRenderer.text(vg, sx + 12 * S, ry + 11 * S, 11 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, "Анархия " + e.anarchy + "  ·  " + e.name);
+                    String sub = e.phase + (e.rarity.isEmpty() ? "" : "  ·  " + e.rarity);
+                    NanoVgRenderer.text(vg, sx + 12 * S, ry + 22 * S, 10 * S, active ? 0xFF6FCF7F : Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, sub);
+                    if (!e.time.isEmpty() && !e.time.toLowerCase().contains("загруз")) {
+                        float tw = NanoVgRenderer.textWidth(vg, 13 * S, e.time);
+                        NanoVgRenderer.text(vg, sx + w - tw - 12 * S, ry + rowH / 2f, 13 * S, dotCol, NanoVgRenderer.ALIGN_MIDDLE, e.time);
+                    }
                 }
+                cur += rowH + gapr;
             }
-            cur += rowH + gapr;
+        } else {
+            for (com.lume.client.fthw.EventRule r : EventManager.rules) {
+                int ry = gy + cur - scrollI;
+                if (ry + rowH >= clipTop && ry <= clipBot) {
+                    int left = -1;
+                    for (EventManager.Active a : EventManager.active) if (a.rule == r) { left = a.secondsLeft(); break; }
+                    long eta = r.etaSec(), ago = r.agoSec();
+                    int dotCol; String status; int statusCol;
+                    if (left >= 0) { dotCol = 0xFF6FCF7F; status = "идёт сейчас"; statusCol = 0xFF6FCF7F; }
+                    else if (eta > 0) { dotCol = 0xFFE8C15A; status = "≈ через " + fmtDur(eta); statusCol = 0xFFE8C15A; }
+                    else if (ago >= 0) { dotCol = Theme.txtDim(); status = "был " + fmtDur(ago) + " назад"; statusCol = Theme.txtDim(); }
+                    else { dotCol = Theme.pillOff(); status = "ещё не видел"; statusCol = Theme.txtDim(); }
+                    NanoVgRenderer.roundedRect(vg, sx, ry, w, rowH, 9 * S, Theme.glassRow());
+                    NanoVgRenderer.roundedRect(vg, sx, ry, 3 * S, rowH, 2 * S, dotCol);
+                    NanoVgRenderer.text(vg, sx + 12 * S, ry + 11 * S, 12 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, r.name);
+                    NanoVgRenderer.text(vg, sx + 12 * S, ry + 22 * S, 10 * S, statusCol, NanoVgRenderer.ALIGN_MIDDLE, status);
+                    String big = left >= 0 ? left + "с" : (eta > 0 ? fmtDur(eta) : "");
+                    if (!big.isEmpty()) {
+                        float tw = NanoVgRenderer.textWidth(vg, 16 * S, big);
+                        NanoVgRenderer.text(vg, sx + w - tw - 12 * S, ry + rowH / 2f, 16 * S, left >= 0 ? 0xFF6FCF7F : 0xFFE8C15A, NanoVgRenderer.ALIGN_MIDDLE, big);
+                    }
+                }
+                cur += rowH + gapr;
+            }
         }
         NanoVgRenderer.restore(vg);
         if (maxScroll > 0) {
