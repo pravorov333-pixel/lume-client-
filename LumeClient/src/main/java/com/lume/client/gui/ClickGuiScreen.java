@@ -7,6 +7,7 @@ import com.lume.client.fthw.EventManager;
 import com.lume.client.fthw.ItemRule;
 import com.lume.client.fthw.ItemRules;
 import com.lume.client.nanovg.NanoVgRenderer;
+import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.client.gui.screen.multiplayer.ConnectScreen;
 import net.minecraft.client.network.ServerAddress;
@@ -976,10 +977,25 @@ public class ClickGuiScreen extends Screen {
 
     /** Quick-connect to a server from inside the game (Server tab fast-connect). */
     private void fastConnect(String name, String address) {
+        final MinecraftClient mc = this.client;
         try {
-            ServerInfo info = new ServerInfo(name, address, ServerInfo.ServerType.OTHER);
-            this.client.setScreen(null);
-            ConnectScreen.connect(new TitleScreen(), this.client, ServerAddress.parse(address), info, false, null);
+            final ServerInfo info = new ServerInfo(name, address, ServerInfo.ServerType.OTHER);
+            final ServerAddress addr = ServerAddress.parse(address);
+            // leave the current world FIRST (esp. the singleplayer integrated server),
+            // then connect on the next client tick so the teardown has finished —
+            // otherwise the world unloads but the connect screen never comes up (black).
+            if (mc.world != null) {
+                mc.world.disconnect();
+                mc.disconnect();
+            }
+            mc.execute(() -> {
+                try {
+                    System.out.println("[Lume] fast connect → " + address);
+                    ConnectScreen.connect(new TitleScreen(), mc, addr, info, false, null);
+                } catch (Exception e) {
+                    System.out.println("[Lume] fast connect (deferred) failed: " + e);
+                }
+            });
         } catch (Exception e) {
             System.out.println("[Lume] fast connect failed: " + e);
         }
