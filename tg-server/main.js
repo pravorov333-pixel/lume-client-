@@ -43,15 +43,31 @@ function saveConfig(cfg) {
   fs.writeFileSync(CONFIG, JSON.stringify(cfg, null, 2));
 }
 
-function ask(question, hide) {
+/**
+ * Ask for a login value. You can EITHER type it in the terminal, OR (easier)
+ * paste it into a file next to the server — whichever comes first wins. This lets
+ * the OWNER enter their own Telegram code without fighting the console.
+ */
+function ask(question, hide, file) {
+  const fpath = file ? path.join(__dirname, file) : null;
+  if (fpath) { try { if (fs.existsSync(fpath)) fs.unlinkSync(fpath); } catch (e) {} }
+  console.log('\n[Lume TG] ' + question.trim());
+  if (fpath) console.log('          (или впиши значение в файл  tg-server/' + file + '  и сохрани)\n');
   return new Promise((resolve) => {
+    let done = false;
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    if (hide) {
-      // mask password input
-      const stdout = process.stdout;
-      rl._writeToOutput = (s) => { if (s.includes(question)) stdout.write(s); };
-    }
-    rl.question(question, (a) => { rl.close(); resolve(a.trim()); });
+    if (hide) { const so = process.stdout; rl._writeToOutput = (s) => { if (s.includes(question)) so.write(s); }; }
+    const finish = (v) => { if (done) return; done = true; clearInterval(timer); try { rl.close(); } catch (e) {} resolve(String(v).trim()); };
+    rl.question('> ', finish);
+    const timer = setInterval(() => {
+      if (!fpath) return;
+      try {
+        if (fs.existsSync(fpath)) {
+          const v = fs.readFileSync(fpath, 'utf8').trim();
+          if (v) { try { fs.unlinkSync(fpath); } catch (e) {} finish(v); }
+        }
+      } catch (e) {}
+    }, 800);
   });
 }
 
@@ -71,8 +87,8 @@ async function login() {
 
   await client.start({
     phoneNumber: async () => cfg.phone,
-    phoneCode: async () => await ask('[Lume TG] enter the code Telegram sent you: '),
-    password: async () => await ask('[Lume TG] 2FA password: ', true),
+    phoneCode: async () => await ask('Введи код, который Telegram прислал тебе в приложение:', false, 'code.txt'),
+    password: async () => await ask('Введи облачный пароль (2FA), если он есть:', true, 'password.txt'),
     onError: (err) => console.log('[Lume TG] login error:', err),
   });
   cfg.session = client.session.save();
