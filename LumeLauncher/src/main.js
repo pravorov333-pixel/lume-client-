@@ -17,6 +17,7 @@ function createWindow() {
     frame: false,
     transparent: false,
     backgroundColor: '#eafff6',
+    icon: path.join(__dirname, '..', 'resources', 'lume.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

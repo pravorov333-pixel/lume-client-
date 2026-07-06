@@ -18,11 +18,81 @@ public final class Lang {
     private static final Map<String, String> NAME = new HashMap<>();
 
     static {
+        // HUD labels
         RU.put("Day", "День");
         RU.put("Ping", "Пинг");
         RU.put("Speed", "Скорость");
         RU.put("b/s", "б/с");
         RU.put("ms", "мс");
+        // Setting names (the buttons that open inside a module)
+        RU.put("Color", "Цвет");
+        RU.put("Style", "Стиль");
+        RU.put("Opacity", "Прозрачность");
+        RU.put("Filter", "Фильтр");
+        RU.put("Thickness", "Толщина");
+        RU.put("Size", "Размер");
+        RU.put("Sound", "Звук");
+        RU.put("Volume", "Громкость");
+        RU.put("Pitch", "Тон");
+        RU.put("Only on Crit", "Только крит");
+        RU.put("Fill", "Заливка");
+        RU.put("Fill Opacity", "Прозрачность заливки");
+        RU.put("Rate", "Частота");
+        RU.put("Gravity", "Гравитация");
+        RU.put("Lifetime", "Время жизни");
+        RU.put("Turbulence", "Турбулентность");
+        RU.put("Radius", "Радиус");
+        RU.put("Type", "Тип");
+        RU.put("Count", "Количество");
+        RU.put("Intensity", "Интенсивность");
+        RU.put("Angle", "Угол");
+        RU.put("Preset", "Пресет");
+        RU.put("Ratio", "Соотношение");
+        RU.put("Time", "Время");
+        RU.put("No Rain", "Без дождя");
+        RU.put("No Storm", "Без грозы");
+        RU.put("Scale", "Масштаб");
+        RU.put("Mode", "Режим");
+        RU.put("Range", "Дальность");
+        RU.put("Outline", "Обводка");
+        RU.put("Center dot", "Точка");
+        RU.put("Gap", "Отступ");
+        RU.put("Duration ms", "Длительность мс");
+        RU.put("RAM Bar HUD", "RAM в HUD");
+        RU.put("Simple", "Простой");
+        RU.put("Accent", "Акцент");
+        RU.put("Pos X", "Позиция X");
+        RU.put("Pos Y", "Позиция Y");
+        RU.put("Pos Z", "Позиция Z");
+        RU.put("Rot X", "Поворот X");
+        RU.put("Rot Y", "Поворот Y");
+        RU.put("Rot Z", "Поворот Z");
+        // ClickGUI strings (keys are English, values are Russian)
+        RU.put("Search modules…", "Поиск модулей…");
+        RU.put("No results", "Ничего не найдено");
+        RU.put("press a key…", "нажми клавишу…");
+        RU.put("Enabled", "Включено");
+        RU.put("Disabled", "Выключено");
+        RU.put("Menu", "Меню");
+        RU.put("Events", "Ивенты");
+        RU.put("Config", "Конфиг");
+        RU.put("Friends", "Друзья");
+        // Sub-screen strings
+        RU.put("Configs", "Конфиги");
+        RU.put("Config profiles — click to load", "Профили конфигурации — нажми для загрузки");
+        RU.put("Save", "Сохранить");
+        RU.put("New Profile", "Новый профиль");
+        RU.put("Import config by code:", "Импорт конфига по коду:");
+        RU.put("profile code…", "код профиля…");
+        RU.put("Apply", "Применить");
+        RU.put("active", "✓ активен");
+        RU.put("Friends", "Друзья");
+        RU.put("Online status coming soon — add names for now:", "Онлайн-статус появится позже — пока можно добавить имена:");
+        RU.put("offline", "не в сети");
+        RU.put("Add to list:", "Добавить в список:");
+        RU.put("player name…", "ник игрока…");
+        RU.put("Add", "Добавить");
+        RU.put("List is empty — add a player name below", "Список пуст — добавь ник игрока ниже");
 
         CAT.put("Visuals", "Визуалы");
         CAT.put("Render", "Рендер");
@@ -82,8 +152,17 @@ public final class Lang {
         return ru() ? CAT.getOrDefault(en, en) : en;
     }
 
-    /** Module/function name — translated only where a clean RU exists, else kept English. */
-    public static String tName(String en) {
-        return ru() ? NAME.getOrDefault(en, en) : en;
+    /**
+     * Module/function name — always returns English. tName kept for compatibility
+     * but callers in the GUI now use m.getName() directly.
+     */
+    public static String tName(String en) { return en; }
+
+    /**
+     * UI string — returns Russian translation in RU mode.
+     * Key is always the English string.
+     */
+    public static String tUI(String en) {
+        return ru() ? RU.getOrDefault(en, en) : en;
     }
 }

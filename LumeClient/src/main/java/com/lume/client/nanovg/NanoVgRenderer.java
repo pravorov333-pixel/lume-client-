@@ -183,6 +183,21 @@ public final class NanoVgRenderer {
         }
     }
 
+    /** Fill a rounded rect with an arbitrary linear gradient (endpoints in px). */
+    public static void fillLinearGradient(long vg, float x, float y, float w, float h, float r,
+                                          float gx0, float gy0, float gx1, float gy1, int argb0, int argb1) {
+        try (MemoryStack s = MemoryStack.stackPush()) {
+            NVGColor c0 = NVGColor.malloc(s), c1 = NVGColor.malloc(s);
+            color(argb0, c0); color(argb1, c1);
+            NVGPaint p = NVGPaint.malloc(s);
+            nvgLinearGradient(vg, gx0, gy0, gx1, gy1, c0, c1, p);
+            nvgBeginPath(vg);
+            nvgRoundedRect(vg, x, y, w, h, r);
+            nvgFillPaint(vg, p);
+            nvgFill(vg);
+        }
+    }
+
     /** Stroked (outlined) rounded rect — used for the bright glass rim. */
     public static void strokeRoundedRect(long vg, float x, float y, float w, float h, float r, float width, int argb) {
         try (MemoryStack s = MemoryStack.stackPush()) {
@@ -209,6 +224,59 @@ public final class NanoVgRenderer {
             nvgRoundedRect(vg, x, y, w, h, r);
             nvgPathWinding(vg, NVG_HOLE);
             nvgFillPaint(vg, p);
+            nvgFill(vg);
+        }
+    }
+
+    /**
+     * Coloured neon bloom halo around a rounded rect (feathered box gradient,
+     * no hole → also bleeds under translucent elements). Draw BEFORE the element.
+     * Stack a few with growing {@code spread} + falling alpha for a stronger bloom.
+     */
+    public static void neonGlow(long vg, float x, float y, float w, float h, float r, float spread, int argb) {
+        try (MemoryStack s = MemoryStack.stackPush()) {
+            NVGColor c1 = NVGColor.malloc(s), c0 = NVGColor.malloc(s);
+            color(argb, c1);
+            nvgRGBA((byte) 0, (byte) 0, (byte) 0, (byte) 0, c0);
+            NVGPaint p = NVGPaint.malloc(s);
+            nvgBoxGradient(vg, x, y, w, h, r + spread * 0.4f, spread, c1, c0, p);
+            nvgBeginPath(vg);
+            nvgRect(vg, x - spread, y - spread, w + spread * 2, h + spread * 2);
+            nvgFillPaint(vg, p);
+            nvgFill(vg);
+        }
+    }
+
+    /** Multi-layer neon bloom: several stacked halos for a soft, bright glow. */
+    public static void bloom(long vg, float x, float y, float w, float h, float r, float spread, int rgb, int peakAlpha) {
+        for (int i = 3; i >= 1; i--) {
+            int a = (peakAlpha * i) / 6;             // fades outward
+            neonGlow(vg, x, y, w, h, r, spread * i / 3f, (a << 24) | (rgb & 0xFFFFFF));
+        }
+    }
+
+    /** Lume "Spark" mark: 3 nested diamonds — cream outer, mid-lavender, bright-lavender core. */
+    public static void logoMark(long vg, float x, float y, float s) {
+        float u = s / 100f;
+        float cx = x + 50 * u, cy = y + 50 * u;
+        int cream = 0xFFF5F0E6, acc2 = 0xFF8E7FC0, acc = 0xFFB7AAD9;
+        diamond(vg, cx, cy, 40 * u, cream);
+        diamond(vg, cx, cy, 24.8f * u, acc2);
+        diamond(vg, cx, cy, 10.4f * u, acc);
+    }
+
+    /** Filled diamond (rotated square) centred at (cx,cy) with vertex distance r. */
+    public static void diamond(long vg, float cx, float cy, float r, int argb) {
+        try (MemoryStack s = MemoryStack.stackPush()) {
+            NVGColor col = NVGColor.malloc(s);
+            color(argb, col);
+            nvgBeginPath(vg);
+            nvgMoveTo(vg, cx, cy - r);
+            nvgLineTo(vg, cx + r, cy);
+            nvgLineTo(vg, cx, cy + r);
+            nvgLineTo(vg, cx - r, cy);
+            nvgClosePath(vg);
+            nvgFillColor(vg, col);
             nvgFill(vg);
         }
     }

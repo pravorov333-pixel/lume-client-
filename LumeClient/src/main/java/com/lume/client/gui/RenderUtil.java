@@ -5,6 +5,7 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.text.Style;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
+import net.minecraft.util.math.RotationAxis;
 
 /**
  * Small drawing helpers. Vanilla DrawContext has no rounded-rect primitive,
@@ -144,17 +145,24 @@ public final class RenderUtil {
         }
     }
 
-    /** The Lume logo mark: gradient rounded square + white "L" + spark dot. */
+    /** The Lume "Spark" logo mark: 3 nested diamonds (cream / mid-lavender / bright-lavender core). */
     public static void drawLogo(DrawContext ctx, int x, int y, int s) {
-        gradientRoundedRect(ctx, x, y, s, s, Math.max(4, s / 4), 0xFFB7AAD9, 0xFF8E7FC0);
-        int barW = Math.max(2, s / 7);
-        int lx = x + s * 3 / 10;
-        int top = y + s * 28 / 100;
-        int bot = y + s * 72 / 100;
-        roundedRect(ctx, lx, top, barW, bot - top, 1, 0xFFFFFFFF);
-        roundedRect(ctx, lx, bot - barW, s * 2 / 5, barW, 1, 0xFFFFFFFF);
-        int dot = Math.max(2, s / 6);
-        roundedRect(ctx, x + s * 60 / 100, y + s * 20 / 100, dot, dot, dot / 2, 0xFFFFFFFF);
+        int cream = 0xFFF5F0E6, acc2 = 0xFF8E7FC0, acc = 0xFFB7AAD9;
+        float cx = x + s * 0.5f, cy = y + s * 0.5f;
+        diamond(ctx, cx, cy, s * 0.40f, cream);
+        diamond(ctx, cx, cy, s * 0.248f, acc2);
+        diamond(ctx, cx, cy, s * 0.104f, acc);
+    }
+
+    /** Filled diamond (square rotated 45°) centred at (cx,cy), vertex distance r — via matrix rotation. */
+    public static void diamond(DrawContext ctx, float cx, float cy, float r, int argb) {
+        float half = r * 0.70710678f;   // rotated-square half-side so its vertices sit at distance r
+        var m = ctx.getMatrices();
+        m.push();
+        m.translate(cx, cy, 0);
+        m.multiply(RotationAxis.POSITIVE_Z.rotationDegrees(45f));
+        ctx.fill(Math.round(-half), Math.round(-half), Math.round(half), Math.round(half), argb);
+        m.pop();
     }
 
     /**

@@ -10,6 +10,8 @@ import com.lume.client.module.modules.cosmetic.CustomCrosshair;
 import com.lume.client.module.modules.fthw.ServerHelper;
 import com.lume.client.module.modules.qol.Waypoints;
 import com.lume.client.module.modules.visual.BlockInfo;
+import com.lume.client.module.modules.visual.ShiftIndicator;
+import com.lume.client.module.modules.visual.TargetEsp;
 import com.lume.client.module.modules.visual.TargetHud;
 import com.lume.client.module.setting.Setting;
 import com.lume.client.module.setting.SliderSetting;
@@ -99,6 +101,7 @@ public final class HudRenderer {
             transform(ctx, "Armor HUD", sizeOf("Armor HUD"), sw / 2.0 + 95, sh, 1, () -> renderArmor(ctx, mc, tr));
         if (on("Totem Counter"))
             transform(ctx, "Totem Counter", sizeOf("Totem Counter"), sw / 2.0 - 132, sh, 1, () -> renderTotem(ctx, mc, tr));
+        renderPvpHighlight(ctx, mc);
 
         // --- Native-resolution text / panels ---
         var m = ctx.getMatrices();
@@ -119,6 +122,13 @@ public final class HudRenderer {
         }
         Notifications.render(ctx, tr, S, nsw);
         if (on("Module List")) transform(ctx, "Module List", sizeOf("Module List"), nsw, 6 * S, S, () -> renderArrayList(ctx, mc, tr, S));
+        if (on("Crit Helper")) transform(ctx, "Crit Helper", sizeOf("Crit Helper"), nsw / 2.0, nsh / 2.0 + 16 * S, S, () -> renderShiftIndicator(ctx, mc, tr, S));
+        // RAM bar HUD (System Info module)
+        com.lume.client.module.modules.performance.JvmOptimizer jvmMod =
+                (com.lume.client.module.modules.performance.JvmOptimizer) LumeClient.MODULES.getByName("System Info");
+        if (jvmMod != null && jvmMod.isEnabled() && jvmMod.showRam.value)
+            transform(ctx, "RAM Bar", com.lume.client.gui.HudLayout.getScale("RAM Bar"), 6 * S, nsh - 10 * S, S,
+                    () -> renderRamBar(ctx, tr, S));
         if (target != null) {
             float es = sizeOf("Target HUD");
             LivingEntity ft = target;
@@ -144,6 +154,20 @@ public final class HudRenderer {
         if (target != null) renderTargetHead(ctx, mc, target, S, sizeOf("Target HUD"));
         if (blockHit != null && !biSimple)
             renderBlockIcon(ctx, mc, blockHit, S, sizeOf("Block Info"));
+    }
+
+    /** PvP Helper — pulsing green highlight over the hotbar slot with the best food to eat. */
+    private static void renderPvpHighlight(DrawContext ctx, MinecraftClient mc) {
+        if (mc.currentScreen != null) return;   // inventory highlight is handled in HandledScreenMixin instead
+        Module m = LumeClient.MODULES.getByName("PvP Helper");
+        if (!(m instanceof com.lume.client.module.modules.qol.PvpHelper ph) || !ph.isEnabled()) return;
+        int slot = ph.targetSlot();
+        if (slot < 0 || slot > 8) return;   // only the hotbar portion is drawn here
+        int sw = mc.getWindow().getScaledWidth(), sh = mc.getWindow().getScaledHeight();
+        int x = sw / 2 - 91 + slot * 20, y = sh - 22;
+        float pulse = 0.5f + 0.5f * (float) Math.sin(System.currentTimeMillis() / 200.0);
+        int a = Math.round(90 + 120 * pulse);
+        RenderUtil.roundedRect(ctx, x + 1, y + 1, 18, 18, 3, (a << 24) | 0x00FF66);
     }
 
     /** The living entity we can hit: vanilla targeted entity (reach + wall checked), not invisible. */
@@ -213,8 +237,9 @@ public final class HudRenderer {
         int[] L = targetLayout(mc, tr, t, S, showHead);
         int x = L[0], y = L[1], pw = L[2], ph = L[3];
         float nameScale = 0.5f * S, hpScale = 0.42f * S;
+        int accentRgb = (mod != null && !mod.color.accent) ? mod.color.rgb() : Theme.accentRgb();
 
-        RenderUtil.glow(ctx, x, y, pw, ph, 9 * S, Theme.accentRgb(), 3);
+        RenderUtil.glow(ctx, x, y, pw, ph, 9 * S, accentRgb, 3);
         RenderUtil.roundedRect(ctx, x, y, pw, ph, 9 * S, Theme.winBg());
 
         if (showHead) // subtle inset behind the head
@@ -358,52 +383,64 @@ public final class HudRenderer {
         ctx.fill(cx - th / 2 - e, cy + gap - e, cx - th / 2 + th + e, cy + gap + len + e, color); // bottom
     }
 
+    /** Minimum lines the main HUD panel must always fit — title row + one horizontal metrics row. */
+    private static final int HUD_MIN_LINES = 2;
+
+    /**
+     * Main info panel: title row + a SINGLE horizontal metrics row (FPS + whichever
+     * optional fields are on, joined side by side) — never stacks extra fields as new
+     * rows, so the panel stays exactly 2 lines tall no matter how many are enabled
+     * (that's what lets it be resized down in Y) and everything reads left-to-right.
+     */
     private static void renderInfo(DrawContext ctx, MinecraftClient mc, TextRenderer tr, int S) {
         int x = 6 * S, y = 6 * S, pad = 6 * S;
-        int pw = 134 * S;             // fixed width — panel never jumps from big numbers
+        com.lume.client.module.modules.visual.Hud hudMod =
+                (com.lume.client.module.modules.visual.Hud) LumeClient.MODULES.getByName("HUD");
+        int accentCol = (hudMod != null && !hudMod.color.accent) ? (0xFF000000 | hudMod.color.rgb()) : Theme.accent();
+        int accentRgb = accentCol & 0xFFFFFF;
         int lineH = 11 * S;
-        boolean coords = on("Coords") && mc.player != null;
-        boolean ping = on("Ping") && mc.player != null && mc.getNetworkHandler() != null;
-        boolean day = on("Day Counter") && mc.world != null;
-        boolean cps = on("CPS");
-        boolean speed = on("Speed") && mc.player != null;
-        boolean clock = on("Clock") && mc.world != null;
-        int extra = (coords ? 1 : 0) + (ping ? 1 : 0) + (day ? 1 : 0) + (cps ? 1 : 0) + (speed ? 1 : 0) + (clock ? 1 : 0);
-        int n = 2 + extra;
-        int h = n * lineH + pad * 2 - 2 * S;
 
-        RenderUtil.glow(ctx, x, y, pw, h, 7 * S, Theme.accentRgb(), 3 * S);
-        RenderUtil.roundedRect(ctx, x, y, pw, h, 7 * S, Theme.winBg());
-        RenderUtil.roundedRect(ctx, x, y, 3 * S, h, 2 * S, Theme.accent());
+        boolean fps = hudMod == null || hudMod.fps.value;   // default on for a fresh install (no module yet)
+        boolean coords = hudMod != null && hudMod.coords.value && mc.player != null;
+        boolean ping = hudMod != null && hudMod.ping.value && mc.player != null && mc.getNetworkHandler() != null;
+        boolean day = hudMod != null && hudMod.dayCounter.value && mc.world != null;
+        boolean cps = hudMod != null && hudMod.cps.value;
+        boolean speed = hudMod != null && hudMod.speed.value && mc.player != null;
+        boolean clock = hudMod != null && hudMod.clock.value && mc.world != null;
 
-        int ty = y + pad;
-        centerLine(ctx, tr, "Lume Client", x, pw, ty, lineH, Theme.accent(), 0.5f * S); ty += lineH;
-        centerLine(ctx, tr, "FPS " + mc.getCurrentFps(), x, pw, ty, lineH, Theme.txt(), 0.46f * S); ty += lineH;
-        if (coords) {
-            String c = String.format("XYZ %.0f  %.0f  %.0f", mc.player.getX(), mc.player.getY(), mc.player.getZ());
-            centerLine(ctx, tr, c, x, pw, ty, lineH, Theme.txt(), 0.4f * S); ty += lineH;
-        }
+        List<String> parts = new ArrayList<>();
+        if (fps) parts.add("FPS " + mc.getCurrentFps());
+        if (coords) parts.add(String.format("%.0f %.0f %.0f", mc.player.getX(), mc.player.getY(), mc.player.getZ()));
         if (ping) {
             PlayerListEntry e = mc.getNetworkHandler().getPlayerListEntry(mc.player.getUuid());
-            if (e != null) { centerLine(ctx, tr, com.lume.client.Lang.t("Ping") + " " + e.getLatency() + com.lume.client.Lang.t("ms"), x, pw, ty, lineH, Theme.txt(), 0.46f * S); }
-            ty += lineH;
+            if (e != null) parts.add(e.getLatency() + com.lume.client.Lang.t("ms"));
         }
-        if (day) {
-            centerLine(ctx, tr, com.lume.client.Lang.t("Day") + " " + (mc.world.getTimeOfDay() / 24000L), x, pw, ty, lineH, Theme.txt(), 0.46f * S); ty += lineH;
-        }
-        if (cps) {
-            centerLine(ctx, tr, "CPS " + ClickTracker.left() + " | " + ClickTracker.right(), x, pw, ty, lineH, Theme.txt(), 0.46f * S); ty += lineH;
-        }
-        if (speed) {
-            centerLine(ctx, tr, com.lume.client.Lang.t("Speed") + String.format(" %.1f ", SpeedTracker.get()) + com.lume.client.Lang.t("b/s"), x, pw, ty, lineH, Theme.txt(), 0.46f * S); ty += lineH;
-        }
+        if (day) parts.add(com.lume.client.Lang.t("Day") + " " + (mc.world.getTimeOfDay() / 24000L));
+        if (cps) parts.add(ClickTracker.left() + "|" + ClickTracker.right());
+        if (speed) parts.add(String.format("%.1f ", SpeedTracker.get()) + com.lume.client.Lang.t("b/s"));
         if (clock) {
             long tod = mc.world.getTimeOfDay() % 24000L;
             if (tod < 0) tod += 24000L;
             int hh = (int) ((tod / 1000L + 6L) % 24L);     // tick 0 = 06:00
             int mm = (int) ((tod % 1000L) * 60L / 1000L);
-            centerLine(ctx, tr, String.format("%02d:%02d", hh, mm), x, pw, ty, lineH, Theme.txt(), 0.46f * S); ty += lineH;
+            parts.add(String.format("%02d:%02d", hh, mm));
         }
+        String metricsStr = String.join("  ·  ", parts);
+
+        int[] sizeOverride = HudLayout.getSize("HUD");   // user-resized (window-style) — else auto-fit to content
+        int autoW = Math.max(134, RenderUtil.width(tr, metricsStr, 0.46f * S) + pad * 2 + 4 * S);
+        int pw = (sizeOverride != null ? sizeOverride[0] * S : autoW);
+        int autoH = HUD_MIN_LINES * lineH + pad * 2 - 2 * S;
+        int h = sizeOverride != null ? Math.max(sizeOverride[1] * S, autoH) : autoH;
+
+        RenderUtil.glow(ctx, x, y, pw, h, 9 * S, accentRgb, 3 * S);
+        RenderUtil.roundedRect(ctx, x, y, pw, h, 9 * S, Theme.winBg());
+        ctx.enableScissor(x, y, x + pw, y + h);   // clip long metrics rows / small resizes, don't spill
+
+        int ty = y + pad;
+        centerLine(ctx, tr, "Lume Visuals", x, pw, ty, lineH, accentCol, 0.5f * S); ty += lineH;
+        centerLine(ctx, tr, metricsStr, x, pw, ty, lineH, Theme.txt(), 0.46f * S);
+        ctx.disableScissor();
     }
 
     /** Draws saved waypoints as 2D markers (name + distance) + edge arrows when off-screen. */
@@ -411,6 +448,7 @@ public final class HudRenderer {
         if (mc.world == null || mc.player == null || Waypoints.list.isEmpty()) return;
         Waypoints mod = (Waypoints) LumeClient.MODULES.getByName("Waypoints");
         boolean arrows = mod == null || mod.arrows.value;
+        int arrowCol = (mod != null && !mod.color.accent) ? (0xFF000000 | mod.color.rgb()) : Theme.accent();
         Camera cam = mc.gameRenderer.getCamera();
         Vec3d cp = cam.getPos();
 
@@ -455,7 +493,7 @@ public final class HudRenderer {
             } else if (arrows) {
                 double dirX = front ? (scrX - cx) : rc;
                 double dirY = front ? (scrY - cy) : -uc;
-                drawEdgeArrow(ctx, cx, cy, sw, sh, dirX, dirY, w.color, S);
+                drawEdgeArrow(ctx, cx, cy, sw, sh, dirX, dirY, arrowCol, S);
             }
         }
     }
@@ -651,6 +689,67 @@ public final class HudRenderer {
         }
     }
 
+    /**
+     * Crit Helper — draggable/resizable HUD element, defaulting just under the
+     * crosshair: either a filling Bar or an accumulating 1..100 Percent readout.
+     * Both re-colour red→yellow→green as the attack cooldown recovers, then glow
+     * once a crit is ready.
+     */
+    private static void renderShiftIndicator(DrawContext ctx, MinecraftClient mc, TextRenderer tr, int S) {
+        if (mc.player == null) return;
+        boolean crit = ShiftIndicator.canCrit(mc);
+        float cooldown = mc.player.getAttackCooldownProgress(1f); // 0.0 to 1.0
+        boolean canHit = cooldown >= 0.99f;
+
+        ShiftIndicator mod = (ShiftIndicator) LumeClient.MODULES.getByName("Crit Helper");
+        int critCol = (mod != null && !mod.color.accent) ? (0xFF000000 | mod.color.rgb()) : 0xFFE8C15A;
+        float sizeVal = mod != null ? (float) mod.size.value : 16f;
+        boolean percentStyle = mod != null && mod.style.index == 1;
+        int barCol = crit ? critCol : canHit ? 0xFF6FCF7F : cooldown >= 0.5f ? 0xFFE8C15A : 0xFFE05656;
+
+        int cx = mc.getWindow().getScaledWidth() * S / 2;
+        int cy = mc.getWindow().getScaledHeight() * S / 2 + 16 * S;   // default: just below the crosshair
+
+        if (percentStyle) {
+            int pct = Math.round(cooldown * 100);
+            String label = pct + "%";
+            float scale = sizeVal / 16f * 0.5f * S;
+            int tw = RenderUtil.width(tr, label, scale);
+            int th = Math.round(scale * 16);
+            int x = cx - tw / 2, y = cy - th / 2;
+            if (crit) {
+                float pulse = 0.6f + 0.4f * (float) Math.sin(System.currentTimeMillis() / 150.0);
+                RenderUtil.glow(ctx, x, y, tw, th, th / 2, critCol & 0xFFFFFF, Math.round(3 * pulse));
+            }
+            RenderUtil.textVCentered(ctx, tr, label, x, y, th, barCol, scale);
+        } else {
+            int barW = Math.round(sizeVal * 3 * S);
+            int barH = Math.max(2, Math.round(3f * S));
+            int x = cx - barW / 2, y = cy - barH / 2;
+            if (crit) {
+                float pulse = 0.6f + 0.4f * (float) Math.sin(System.currentTimeMillis() / 150.0);
+                RenderUtil.glow(ctx, x, y, barW, barH, barH / 2, critCol & 0xFFFFFF, Math.round(3 * pulse));
+            }
+            RenderUtil.roundedRect(ctx, x, y, barW, barH, barH / 2, Theme.pillOff());
+            int filledW = Math.max(barH, Math.round(barW * cooldown));
+            RenderUtil.roundedRect(ctx, x, y, filledW, barH, barH / 2, barCol);
+        }
+    }
+
+    /** Compact RAM bar drawn in HUD (System Info module → "RAM Bar HUD" enabled). */
+    private static void renderRamBar(DrawContext ctx, TextRenderer tr, int S) {
+        long used = com.lume.client.module.modules.performance.JvmOptimizer.usedMb();
+        long max = com.lume.client.module.modules.performance.JvmOptimizer.maxMb();
+        if (max <= 0) return;
+        float frac = (float) used / max;
+        int barW = 90 * S, barH = 5 * S;
+        int col = frac < 0.6f ? 0xFF6FCF7F : frac < 0.8f ? 0xFFE8C15A : 0xFFE05656;
+        RenderUtil.roundedRect(ctx, 0, 0, barW, barH, barH / 2, Theme.pillOff());
+        RenderUtil.roundedRect(ctx, 0, 0, Math.max(barH, Math.round(barW * frac)), barH, barH / 2, col);
+        String label = "RAM " + used + "/" + max + " MB";
+        RenderUtil.vanillaText(ctx, tr, label, 0, barH + 2 * S, Theme.txtDim(), S);
+    }
+
     /** Right-side ArrayList of enabled modules, staircase-sorted by name width. */
     private static void renderArrayList(DrawContext ctx, MinecraftClient mc, TextRenderer tr, int S) {
         int sw = mc.getWindow().getScaledWidth() * S;
@@ -659,13 +758,17 @@ public final class HudRenderer {
         for (Module mod : LumeClient.MODULES.getModules()) if (mod.isEnabled()) en.add(mod);
         en.sort((a, b) -> RenderUtil.width(tr, b.getName(), sc) - RenderUtil.width(tr, a.getName(), sc));
 
+        com.lume.client.module.modules.visual.ModuleList mlMod =
+                (com.lume.client.module.modules.visual.ModuleList) LumeClient.MODULES.getByName("Module List");
+        int accentCol = (mlMod != null && !mlMod.color.accent) ? (0xFF000000 | mlMod.color.rgb()) : Theme.accent();
+
         int y = 6 * S, rowH = 13 * S, right = sw - 4 * S;
         for (Module mod : en) {
             String name = mod.getName();
             int w = RenderUtil.width(tr, name, sc);
             int x1 = right - w - 12 * S;
             RenderUtil.roundedRect(ctx, x1, y, w + 12 * S, rowH, 0, Theme.winBg());
-            RenderUtil.roundedRect(ctx, right - 2 * S, y, 2 * S, rowH, 0, Theme.accent());
+            RenderUtil.roundedRect(ctx, right - 2 * S, y, 2 * S, rowH, 0, accentCol);
             RenderUtil.textVCentered(ctx, tr, name, x1 + 6 * S, y, rowH, Theme.txt(), sc);
             y += rowH + 1 * S;
         }
@@ -680,6 +783,10 @@ public final class HudRenderer {
         if (mc.player == null || mc.player.getStatusEffects().isEmpty()) return;
         int sw = mc.getWindow().getScaledWidth() * S;
         int y = 6 * S;
+        com.lume.client.module.modules.visual.PotionHud phMod =
+                (com.lume.client.module.modules.visual.PotionHud) LumeClient.MODULES.getByName("Potion HUD");
+        int accentRgb = (phMod != null && !phMod.color.accent) ? phMod.color.rgb() : Theme.accentRgb();
+        int accentCol = 0xFF000000 | accentRgb;
         for (StatusEffectInstance inst : mc.player.getStatusEffects()) {
             String name = inst.getEffectType().value().getName().getString();
             int dur = inst.getDuration();
@@ -687,9 +794,9 @@ public final class HudRenderer {
             String label = name + " " + (inst.getAmplifier() + 1) + "  " + time;
             int w = RenderUtil.width(tr, label, 0.46f * S);
             int ax = sw - w - 18 * S;
-            RenderUtil.glow(ctx, ax - 8 * S, y, w + 16 * S, 16 * S, 7 * S, Theme.accentRgb(), 2 * S);
+            RenderUtil.glow(ctx, ax - 8 * S, y, w + 16 * S, 16 * S, 7 * S, accentRgb, 2 * S);
             RenderUtil.roundedRect(ctx, ax - 8 * S, y, w + 16 * S, 16 * S, 7 * S, Theme.winBg());
-            RenderUtil.roundedRect(ctx, sw - 8 * S, y + 3 * S, 3 * S, 10 * S, 1 * S, Theme.accent());
+            RenderUtil.roundedRect(ctx, sw - 8 * S, y + 3 * S, 3 * S, 10 * S, 1 * S, accentCol);
             RenderUtil.textVCentered(ctx, tr, label, ax, y, 16 * S, Theme.txt(), 0.46f * S);
             y += 20 * S;
         }
@@ -708,19 +815,24 @@ public final class HudRenderer {
         boolean d = mc.options.rightKey.isPressed();
         boolean space = mc.options.jumpKey.isPressed();
 
-        key(ctx, tr, bx + box + gap, by, box, box, "W", w, S);
-        key(ctx, tr, bx, by + box + gap, box, box, "A", a, S);
-        key(ctx, tr, bx + box + gap, by + box + gap, box, box, "S", s, S);
-        key(ctx, tr, bx + (box + gap) * 2, by + box + gap, box, box, "D", d, S);
+        com.lume.client.module.modules.visual.Keystrokes ksMod =
+                (com.lume.client.module.modules.visual.Keystrokes) LumeClient.MODULES.getByName("Keystrokes");
+        int accentRgb = (ksMod != null && !ksMod.color.accent) ? ksMod.color.rgb() : Theme.accentRgb();
+        int accentCol = 0xFF000000 | accentRgb;
+
+        key(ctx, tr, bx + box + gap, by, box, box, "W", w, S, accentRgb, accentCol);
+        key(ctx, tr, bx, by + box + gap, box, box, "A", a, S, accentRgb, accentCol);
+        key(ctx, tr, bx + box + gap, by + box + gap, box, box, "S", s, S, accentRgb, accentCol);
+        key(ctx, tr, bx + (box + gap) * 2, by + box + gap, box, box, "D", d, S, accentRgb, accentCol);
         int spaceW = box * 3 + gap * 2;
         int spaceY = by + (box + gap) * 2;
-        if (space) RenderUtil.glow(ctx, bx, spaceY, spaceW, 9 * S, 5 * S, Theme.accentRgb(), 2 * S);
-        RenderUtil.roundedRect(ctx, bx, spaceY, spaceW, 9 * S, 5 * S, space ? Theme.accent() : Theme.glassRow());
+        if (space) RenderUtil.glow(ctx, bx, spaceY, spaceW, 9 * S, 5 * S, accentRgb, 2 * S);
+        RenderUtil.roundedRect(ctx, bx, spaceY, spaceW, 9 * S, 5 * S, space ? accentCol : Theme.glassRow());
     }
 
-    private static void key(DrawContext ctx, TextRenderer tr, int x, int y, int w, int h, String label, boolean pressed, int S) {
-        if (pressed) RenderUtil.glow(ctx, x, y, w, h, 6 * S, Theme.accentRgb(), 2 * S);
-        RenderUtil.roundedRect(ctx, x, y, w, h, 6 * S, pressed ? Theme.accent() : Theme.glassRow());
+    private static void key(DrawContext ctx, TextRenderer tr, int x, int y, int w, int h, String label, boolean pressed, int S, int accentRgb, int accentCol) {
+        if (pressed) RenderUtil.glow(ctx, x, y, w, h, 6 * S, accentRgb, 2 * S);
+        RenderUtil.roundedRect(ctx, x, y, w, h, 6 * S, pressed ? accentCol : Theme.glassRow());
         RenderUtil.textCentered(ctx, tr, label, x, y, w, h, pressed ? 0xFF04342C : Theme.txt(), 0.5f * S);
     }
 
@@ -730,21 +842,25 @@ public final class HudRenderer {
         if (mc.player == null) return;
         int sw = mc.getWindow().getScaledWidth();
         int sh = mc.getWindow().getScaledHeight();
+        com.lume.client.module.modules.visual.ArmorHud am =
+                (com.lume.client.module.modules.visual.ArmorHud) LumeClient.MODULES.getByName("Armor HUD");
+        boolean vert = am != null && am.flipY.value;
+        int accentCol = (am != null && !am.color.accent) ? (0xFF000000 | am.color.rgb()) : Theme.accent();
         int x = sw / 2 + 95;            // right of the hotbar
-        int y = sh - 19;
+        int y = vert ? sh - 19 - 3 * 18 : sh - 19;   // vertical: 4 items stacked above the anchor
         for (int i = 3; i >= 0; i--) {  // helmet -> boots
             ItemStack st = mc.player.getInventory().armor.get(i);
-            if (st.isEmpty()) continue;
+            if (st.isEmpty()) { if (vert) y += 18; else x += 18; continue; }
             ctx.drawItem(st, x, y);
             ctx.drawStackOverlay(tr, st, x, y);
             if (st.isDamageable() && st.getMaxDamage() > 0) {
                 int pct = (st.getMaxDamage() - st.getDamage()) * 100 / st.getMaxDamage();
-                int col = pct > 50 ? Theme.accent() : pct > 20 ? 0xFFE8C15A : 0xFFE05656;
+                int col = pct > 50 ? accentCol : pct > 20 ? 0xFFE8C15A : 0xFFE05656;
                 String s = String.valueOf(pct);   // number only, no "%"
                 int tw = RenderUtil.width(tr, s, 0.4f);
                 RenderUtil.text(ctx, tr, s, x + 8 - tw / 2, y - 7, col, true, 0.4f);
             }
-            x += 18;
+            if (vert) y += 18; else x += 18;
         }
     }
 

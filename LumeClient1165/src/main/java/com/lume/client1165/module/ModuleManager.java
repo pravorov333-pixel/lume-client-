@@ -1,5 +1,9 @@
 package com.lume.client1165.module;
 
+import com.lume.client1165.module.modules.performance.FpsLimit;
+import com.lume.client1165.module.modules.performance.GraphicsQuality;
+import com.lume.client1165.module.modules.performance.ReducedParticles;
+import com.lume.client1165.module.modules.performance.RenderDistance;
 import com.lume.client1165.module.modules.player.AutoSprint;
 import com.lume.client1165.module.modules.render.FullBright;
 import com.lume.client1165.module.modules.render.Zoom;
@@ -20,6 +24,11 @@ public class ModuleManager {
         register(new Hud());
         register(new Coords());
         register(new Keystrokes());
+        // Performance
+        register(new RenderDistance());
+        register(new FpsLimit());
+        register(new GraphicsQuality());
+        register(new ReducedParticles());
         // Render
         register(new FullBright());
         register(new Zoom());

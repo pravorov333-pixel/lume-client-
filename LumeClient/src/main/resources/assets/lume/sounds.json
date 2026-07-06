@@ -1,0 +1,10 @@
+{
+  "bass_crit_1": {
+    "subtitle": "lume.sound.bass_crit_1",
+    "sounds": ["lume:bass_crit_1"]
+  },
+  "bass_crit_2": {
+    "subtitle": "lume.sound.bass_crit_2",
+    "sounds": ["lume:bass_crit_2"]
+  }
+}

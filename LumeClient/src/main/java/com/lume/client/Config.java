@@ -79,11 +79,14 @@ public final class Config {
             java.util.Set<String> keys = new java.util.HashSet<>();
             keys.addAll(HudLayout.offsetMap().keySet());
             keys.addAll(HudLayout.scaleMap().keySet());
+            keys.addAll(HudLayout.sizeMap().keySet());
             for (String k : keys) {
                 int[] off = HudLayout.offsetMap().getOrDefault(k, new int[2]);
                 JsonObject e = new JsonObject();
                 e.addProperty("x", off[0]); e.addProperty("y", off[1]);
                 e.addProperty("scale", HudLayout.getScale(k));
+                int[] size = HudLayout.getSize(k);
+                if (size != null) { e.addProperty("w", size[0]); e.addProperty("h", size[1]); }
                 hud.add(k, e);
             }
             root.add("hud", hud);
@@ -144,6 +147,64 @@ public final class Config {
         }
     }
 
+    /** Serialize current module enabled states + settings to a JSON string (for profile saving). */
+    public static String toJson() {
+        JsonObject root = new JsonObject();
+        JsonObject modules = new JsonObject();
+        for (Module m : LumeClient.MODULES.getModules()) {
+            JsonObject mo = new JsonObject();
+            mo.addProperty("enabled", m.isEnabled());
+            if (m.hasSettings()) {
+                JsonObject so = new JsonObject();
+                for (Setting s : m.getSettings()) {
+                    if (s instanceof BoolSetting b) so.addProperty(s.name, b.value);
+                    else if (s instanceof SliderSetting sl) so.addProperty(s.name, sl.value);
+                    else if (s instanceof ModeSetting md) so.addProperty(s.name, md.get());
+                    else if (s instanceof ColorSetting c) {
+                        JsonObject co = new JsonObject();
+                        co.addProperty("accent", c.accent);
+                        co.addProperty("r", c.r); co.addProperty("g", c.g); co.addProperty("b", c.b);
+                        so.add(s.name, co);
+                    }
+                }
+                mo.add("settings", so);
+            }
+            modules.add(m.getName(), mo);
+        }
+        root.add("modules", modules);
+        return GSON.toJson(root);
+    }
+
+    /** Apply a JSON string produced by {@link #toJson()} to the current module states. */
+    public static void fromJson(String json) {
+        try {
+            JsonObject root = JsonParser.parseString(json).getAsJsonObject();
+            if (!root.has("modules")) return;
+            JsonObject mods = root.getAsJsonObject("modules");
+            for (Module m : LumeClient.MODULES.getModules()) {
+                if (!mods.has(m.getName())) continue;
+                JsonObject mo = mods.getAsJsonObject(m.getName());
+                if (mo.has("enabled")) m.setEnabled(mo.get("enabled").getAsBoolean());
+                if (mo.has("settings")) {
+                    JsonObject so = mo.getAsJsonObject("settings");
+                    for (Setting s : m.getSettings()) {
+                        if (!so.has(s.name)) continue;
+                        if (s instanceof BoolSetting b) b.value = so.get(s.name).getAsBoolean();
+                        else if (s instanceof SliderSetting sl) sl.value = so.get(s.name).getAsDouble();
+                        else if (s instanceof ModeSetting md) md.setByName(so.get(s.name).getAsString());
+                        else if (s instanceof ColorSetting c) {
+                            JsonObject co = so.getAsJsonObject(s.name);
+                            c.accent = co.get("accent").getAsBoolean();
+                            c.r = co.get("r").getAsInt(); c.g = co.get("g").getAsInt(); c.b = co.get("b").getAsInt();
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            System.out.println("[Lume] profile fromJson failed: " + e);
+        }
+    }
+
     public static void load() {
         Path f = file();
         if (!Files.exists(f)) return;
@@ -188,6 +249,7 @@ public final class Config {
                     JsonObject e = en.getValue().getAsJsonObject();
                     HudLayout.set(en.getKey(), e.get("x").getAsInt(), e.get("y").getAsInt());
                     HudLayout.setScale(en.getKey(), e.get("scale").getAsFloat());
+                    if (e.has("w") && e.has("h")) HudLayout.setSize(en.getKey(), e.get("w").getAsInt(), e.get("h").getAsInt());
                 }
             }
 

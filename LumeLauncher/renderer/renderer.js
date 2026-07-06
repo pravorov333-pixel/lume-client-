@@ -61,6 +61,11 @@ $('vers').querySelectorAll('button').forEach((b) => {
   };
 });
 
+// --- Nickname: empty on first run, required, remembered forever ---
+const savedNick = localStorage.getItem('lumeNick');
+if (savedNick) $('nick').value = savedNick;
+$('nick').addEventListener('input', () => { $('nick').style.color = ''; });
+
 // --- Play / launch ---
 const playBtn = $('play');
 const playHTML = playBtn.innerHTML;
@@ -115,11 +120,20 @@ playBtn.onclick = async () => {
     log('Отменено пользователем.');
     return;
   }
+  const nick = $('nick').value.trim();
+  if (!nick) {                                   // nickname is required
+    $('nick').style.color = '#e05656';
+    $('nick').placeholder = 'Сначала введите ник!';
+    $('nick').focus();
+    progLabel.textContent = 'Введите ник';
+    return;
+  }
+  localStorage.setItem('lumeNick', nick);        // remember forever
   setLaunching(true);
   statusBox.textContent = 'Preparing…';
   prog.style.width = '0%';
   progPct.textContent = '';
-  const res = await window.lume.launch({ username: $('nick').value.trim() || 'LumePlayer', memory: 4, version: selectedVersion });
+  const res = await window.lume.launch({ username: nick, memory: 4, version: selectedVersion });
   if (res && res.cancelled) { setLaunching(false); return; }
   if (!res || !res.ok) {
     log('ERROR: ' + (res && res.error));

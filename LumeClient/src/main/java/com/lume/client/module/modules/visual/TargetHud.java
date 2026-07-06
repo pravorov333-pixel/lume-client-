@@ -3,6 +3,7 @@ package com.lume.client.module.modules.visual;
 import com.lume.client.module.Category;
 import com.lume.client.module.Module;
 import com.lume.client.module.setting.BoolSetting;
+import com.lume.client.module.setting.ColorSetting;
 
 /**
  * Target HUD — shows the name and health of the living entity you can hit
@@ -18,6 +19,7 @@ public class TargetHud extends Module {
     public final BoolSetting head = add(new BoolSetting("3D head", true));
     public final BoolSetting healthBar = add(new BoolSetting("Health bar", true));
     public final BoolSetting animate = add(new BoolSetting("Animate HP", true));
+    public final ColorSetting color = add(new ColorSetting("Color", true, 183, 170, 217));
 
     public TargetHud() {
         super("Target HUD", "Show HP & name of what you can hit", Category.VISUALS, -1);

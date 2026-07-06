@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "lume",
   "version": "${version}",
-  "name": "Lume Client",
+  "name": "Lume Visuals",
   "description": "A clean, glass-styled utility client for Minecraft.",
   "authors": ["Lume"],
   "license": "ARR",

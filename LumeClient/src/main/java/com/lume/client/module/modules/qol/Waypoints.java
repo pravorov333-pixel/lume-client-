@@ -3,6 +3,7 @@ package com.lume.client.module.modules.qol;
 import com.lume.client.module.Category;
 import com.lume.client.module.Module;
 import com.lume.client.module.setting.BoolSetting;
+import com.lume.client.module.setting.ColorSetting;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -36,6 +37,7 @@ public class Waypoints extends Module {
 
     public final BoolSetting deathPoint = add(new BoolSetting("Death point", true));
     public final BoolSetting arrows = add(new BoolSetting("Edge arrows", true));
+    public final ColorSetting color = add(new ColorSetting("Arrow Color", true, 183, 170, 217));
 
     public Waypoints() {
         super("Waypoints", "Saved location markers", Category.CHAT, -1);

@@ -11,7 +11,7 @@ import java.util.Locale;
  * by this once the helper is fleshed out.
  */
 public enum ServerType {
-    FUNTIME, HOLYWORLD, UNKNOWN;
+    FUNTIME, UNKNOWN;
 
     public static ServerType current() {
         MinecraftClient mc = MinecraftClient.getInstance();
@@ -19,14 +19,12 @@ public enum ServerType {
         if (s == null || s.address == null) return UNKNOWN;
         String a = s.address.toLowerCase(Locale.ROOT);
         if (a.contains("funtime")) return FUNTIME;
-        if (a.contains("holyworld") || a.contains("holy")) return HOLYWORLD;
         return UNKNOWN;
     }
 
     public String display() {
         return switch (this) {
             case FUNTIME -> "FunTime";
-            case HOLYWORLD -> "HolyWorld";
             default -> "Unknown";
         };
     }

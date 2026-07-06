@@ -18,7 +18,7 @@ public class CustomCrosshair extends Module {
     public final SliderSetting size = add(new SliderSetting("Size", 5, 1, 12, true));
     public final SliderSetting thickness = add(new SliderSetting("Thickness", 1, 1, 4, true));
     public final SliderSetting gap = add(new SliderSetting("Gap", 3, 0, 10, true));
-    public final ColorSetting color = add(new ColorSetting("Color", true, 169, 155, 199));
+    public final ColorSetting color = add(new ColorSetting("Color", false, 169, 155, 199));
     public final BoolSetting outline = add(new BoolSetting("Outline", true));
     public final BoolSetting dot = add(new BoolSetting("Center dot", true));
 

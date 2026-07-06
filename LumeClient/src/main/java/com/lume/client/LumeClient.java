@@ -21,6 +21,7 @@ import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
+import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.font.TextRenderer;
@@ -40,7 +41,7 @@ import org.lwjgl.glfw.GLFW;
  */
 public class LumeClient implements ClientModInitializer {
 
-    public static final String NAME = "Lume Client";
+    public static final String NAME = "Lume Visuals";
     public static final String VERSION = "1.0.0";
 
     public static final ModuleManager MODULES = new ModuleManager();
@@ -51,6 +52,8 @@ public class LumeClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
+        Sounds.init();
+        com.lume.client.audio.CustomAudioPlayer.ensureReadme("hitsound");
         MODULES.init();
         Config.load();
         ClientLifecycleEvents.CLIENT_STOPPING.register(c -> Config.save());
@@ -75,10 +78,15 @@ public class LumeClient implements ClientModInitializer {
             SpeedTracker.update(client);
             EventManager.tick();
             com.lume.client.fthw.EnemyAlert.tick();
+            com.lume.client.audio.CustomAudioPlayer.tick();
             MODULES.onTick();
         });
 
         HudRenderCallback.EVENT.register((ctx, tickCounter) -> HudRenderer.render(ctx));
+        WorldRenderEvents.AFTER_ENTITIES.register(com.lume.client.module.modules.visual.TargetEsp::renderWorld);
+        WorldRenderEvents.AFTER_ENTITIES.register(com.lume.client.module.modules.visual.SelfName::renderWorld);
+        WorldRenderEvents.AFTER_ENTITIES.register(com.lume.client.fx.ParticleEngine::render);
+        WorldRenderEvents.AFTER_ENTITIES.register(com.lume.client.module.modules.cosmetic.BlockOutline::renderFill);
 
         registerChatHooks();
         registerConnectionHooks();
@@ -189,7 +197,7 @@ public class LumeClient implements ClientModInitializer {
         int tx = x + size + 8;
         RenderUtil.text(ctx, tr, "lume", tx, y + 2, Theme.accent(), false, 0.6f);
         int lw = RenderUtil.width(tr, "lume", 0.6f);
-        RenderUtil.text(ctx, tr, "client", tx + lw + 5, y + 3, Theme.txtDim(), false, 0.6f);
+        RenderUtil.text(ctx, tr, "visuals", tx + lw + 5, y + 3, Theme.txtDim(), false, 0.6f);
         RenderUtil.text(ctx, tr, "v" + VERSION, tx, y + 14, Theme.txtDim(), false, 0.4f);
     }
 }

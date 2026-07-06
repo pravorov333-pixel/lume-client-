@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;" />
-<title>Lume Client</title>
+<title>Lume Visuals</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', system-ui, sans-serif; }
   :root { --mint:#A99BC7; --blue:#8E7FC0; --ink:#4A4133; --ink2:#8C8170; --ink3:#b0a594; }
@@ -111,7 +111,7 @@
   <div class="app">
     <div class="titlebar">
       <div class="brand">
-        <svg class="mark" viewBox="0 0 100 100"><rect x="6" y="6" width="88" height="88" rx="26" fill="url(#g)"/><path d="M38 26 v40 a4 4 0 0 0 4 4 h22" fill="none" stroke="#fff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/><circle cx="68" cy="32" r="8" fill="#fff"/></svg>
+        <svg class="mark" viewBox="0 0 100 100"><polygon points="50,10 90,50 50,90 10,50" fill="#F5F0E6"/><polygon points="50,25.2 74.8,50 50,74.8 25.2,50" fill="#8E7FC0"/><polygon points="50,39.6 60.4,50 50,60.4 39.6,50" fill="#B7AAD9"/></svg>
         <span class="lume">lume</span>
       </div>
       <div class="winbtns">
@@ -123,7 +123,7 @@
     <div class="stage">
       <!-- Key screen -->
       <div id="login" class="card">
-        <svg class="bigmark" viewBox="0 0 100 100"><rect x="6" y="6" width="88" height="88" rx="26" fill="url(#g)"/><path d="M38 26 v40 a4 4 0 0 0 4 4 h22" fill="none" stroke="#fff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/><circle cx="68" cy="32" r="8" fill="#fff"/></svg>
+        <svg class="bigmark" viewBox="0 0 100 100"><polygon points="50,10 90,50 50,90 10,50" fill="#F5F0E6"/><polygon points="50,25.2 74.8,50 50,74.8 25.2,50" fill="#8E7FC0"/><polygon points="50,39.6 60.4,50 50,60.4 39.6,50" fill="#B7AAD9"/></svg>
         <h1>Sign in to Lume</h1>
         <div class="sub">enter your license key</div>
         <div class="field">
@@ -141,9 +141,9 @@
       <!-- Home / play screen -->
       <div id="home" class="card home hidden">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:18px">
-          <svg class="mark" style="width:22px;height:22px" viewBox="0 0 100 100"><rect x="6" y="6" width="88" height="88" rx="26" fill="url(#g)"/><path d="M38 26 v40 a4 4 0 0 0 4 4 h22" fill="none" stroke="#fff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/><circle cx="68" cy="32" r="8" fill="#fff"/></svg>
+          <svg class="mark" style="width:22px;height:22px" viewBox="0 0 100 100"><polygon points="50,10 90,50 50,90 10,50" fill="#F5F0E6"/><polygon points="50,25.2 74.8,50 50,74.8 25.2,50" fill="#8E7FC0"/><polygon points="50,39.6 60.4,50 50,60.4 39.6,50" fill="#B7AAD9"/></svg>
           <span style="font-weight:700;letter-spacing:-.3px;color:var(--ink)">lume</span>
-          <span style="font-size:11px;color:var(--ink3);letter-spacing:2px;text-transform:uppercase;margin-top:2px">client</span>
+          <span style="font-size:11px;color:var(--ink3);letter-spacing:2px;text-transform:uppercase;margin-top:2px">visuals</span>
           <span id="plan" class="badge" style="margin-left:auto">tester</span>
         </div>
 
@@ -156,13 +156,12 @@
           </div>
           <div style="flex:1;min-width:0;text-align:left">
             <div style="font-size:11px;color:var(--ink3);margin-bottom:3px">Nickname</div>
-            <input id="nick" type="text" value="LumePlayer" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Nickname" style="width:100%;border:none;outline:none;background:transparent;font-size:15px;font-weight:600;color:var(--ink)" />
+            <input id="nick" type="text" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Введите ник" style="width:100%;border:none;outline:none;background:transparent;font-size:15px;font-weight:600;color:var(--ink)" />
           </div>
           <div style="text-align:right;flex:0 0 auto">
             <div style="font-size:11px;color:var(--ink3);margin-bottom:4px">Version</div>
             <div class="vers" id="vers">
               <button data-v="1.21.4" class="on">1.21.4</button>
-              <button data-v="1.16.5">1.16.5</button>
             </div>
           </div>
         </div>
@@ -179,9 +178,9 @@
 
       <!-- Loading transition (key accepted → play screen) -->
       <div id="loader">
-        <svg class="lmark" viewBox="0 0 100 100"><rect x="6" y="6" width="88" height="88" rx="26" fill="url(#g)"/><path d="M38 26 v40 a4 4 0 0 0 4 4 h22" fill="none" stroke="#fff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/><circle cx="68" cy="32" r="8" fill="#fff"/></svg>
+        <svg class="lmark" viewBox="0 0 100 100"><polygon points="50,10 90,50 50,90 10,50" fill="#F5F0E6"/><polygon points="50,25.2 74.8,50 50,74.8 25.2,50" fill="#8E7FC0"/><polygon points="50,39.6 60.4,50 50,60.4 39.6,50" fill="#B7AAD9"/></svg>
         <div class="ltitle">Key accepted</div>
-        <div class="lsub">preparing your client…</div>
+        <div class="lsub">preparing your visuals…</div>
         <div class="ltrack"><div></div></div>
       </div>
     </div>
