@@ -78,7 +78,6 @@ public class LumeClient implements ClientModInitializer {
             }
             while (addWaypointKey.wasPressed()) addWaypointHere(client);
             com.lume.client.gui.ThemeSync.tick();
-            com.lume.client.module.modules.performance.Shaders.forceSync();
             handleDeathWaypoint(client);
             SpeedTracker.update(client);
             EventManager.tick();
@@ -220,9 +219,6 @@ public class LumeClient implements ClientModInitializer {
         int x = 12, y = 12, size = 22;
         RenderUtil.glow(ctx, x, y, size, size, 7, Theme.accentRgb(), 3);
         RenderUtil.drawLogo(ctx, x, y, size);
-        int tx = x + size + 8;
-        RenderUtil.text(ctx, tr, "lume", tx, y + 2, Theme.txt(), false, 0.6f);
-        int lw = RenderUtil.width(tr, "lume", 0.6f);
-        RenderUtil.text(ctx, tr, "visuals", tx + lw + 5, y + 3, Theme.accent(), false, 0.6f);
+        com.lume.client.gui.Wordmark.drawLegacy(ctx, tr, x + size + 8, y + 2, 0.6f);
     }
 }

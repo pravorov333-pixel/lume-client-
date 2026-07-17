@@ -442,10 +442,7 @@ public class ColorsScreen extends Screen {
     private void drawInGameMockup(long vg, int S, int x, int y, int w, int h, int mx, int my, float dt) {
         int pad = 8 * S;
         float hfs = 9.5f * S;
-        float lumeW = NanoVgRenderer.textWidth(vg, hfs, "lume");
-        float cx = x + w / 2f - (lumeW + NanoVgRenderer.textWidth(vg, hfs, " visuals")) / 2f;
-        NanoVgRenderer.text(vg, cx, y + pad + hfs / 2f, hfs, Theme.txt(), ALIGN_MIDDLE, "lume");
-        NanoVgRenderer.text(vg, cx + lumeW, y + pad + hfs / 2f, hfs, Theme.accent(), ALIGN_MIDDLE, " visuals");
+        Wordmark.drawCentered(vg, x + w / 2f, y + pad + hfs / 2f, hfs, 255);
 
         // search bar — same glass-row look as ClickGuiScreen's real search box
         int searchY = (int) (y + pad + hfs + 5 * S), searchH = 13 * S;

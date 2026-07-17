@@ -287,8 +287,8 @@ public class ClickGuiScreen extends Screen {
 
         // Header: logo + wordmark
         RenderUtil.drawLogo(ctx, x + 20 * S, y + 15 * S, 22 * S);
-        text(ctx, "lume", x + 20 * S + 28 * S, y + 17 * S, Theme.txt(), 0.6f);
-        text(ctx, "visuals", x + 20 * S + 28 * S + width("lume", 0.6f) + 6 * S, y + 18 * S, Theme.accent(), 0.6f);
+        Wordmark.drawLegacy(ctx, MinecraftClient.getInstance().textRenderer,
+                x + 20 * S + 28 * S, y + 17 * S, 0.6f);
 
         // Theme toggle (right) — animated hover + press pulse
         int tbw = 56 * S, tbh = 22 * S, tbx = x + W - tbw - 20 * S, tby = y + 14 * S;
@@ -618,12 +618,7 @@ public class ClickGuiScreen extends Screen {
             NanoVgRenderer.strokeRoundedRect(vg, x + 0.75f * S, y + 0.75f * S, W - 1.5f * S, H - 1.5f * S, r, 1.2f * S, Theme.rim());
 
             // header: centred wordmark at the top (logo removed)
-            float hfs = 15 * S, hcy = y + 20 * S;
-            float w1w = NanoVgRenderer.textWidth(vg, hfs, "lume ");
-            float w2w = NanoVgRenderer.textWidth(vg, hfs, "visuals");
-            float hsx = x + W / 2f - (w1w + w2w) / 2f;
-            NanoVgRenderer.text(vg, hsx, hcy, hfs, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, "lume");
-            NanoVgRenderer.text(vg, hsx + w1w, hcy, hfs, Theme.accent(), NanoVgRenderer.ALIGN_MIDDLE, "visuals");
+            Wordmark.drawCentered(vg, x + W / 2f, y + 20 * S, 15 * S, 255);
 
             // logo mark — top-left corner
             int logoS = 22 * S;

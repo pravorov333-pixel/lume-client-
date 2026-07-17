@@ -50,12 +50,23 @@ function fabricId(cfg) {
 
 // Aikar's GC flags — smoother frametimes, fewer GC stutters. (Valid on Java 8 & 21.)
 const JVM_FLAGS = [
+  // LWJGL defaults to its bundled jemalloc for native (off-heap) allocations — textures, GL
+  // buffers, image decoding, etc. On one user's machine this crashed (EXCEPTION_ACCESS_VIOLATION
+  // inside jemalloc.dll) from two completely unrelated call sites (loading a custom PNG particle,
+  // freeing a texture on world exit), while non-Minecraft software on the same PC never crashes —
+  // pointing at jemalloc itself, not general hardware/RAM. Forcing LWJGL's plain "system" allocator
+  // (regular malloc/free via the CRT) trades a little allocator performance for using a much more
+  // battle-tested code path than jemalloc on whatever's unusual about that machine's memory setup.
+  '-Dorg.lwjgl.system.allocator=system',
   '-XX:+UseG1GC',
   '-XX:+ParallelRefProcEnabled',
   '-XX:MaxGCPauseMillis=200',
   '-XX:+UnlockExperimentalVMOptions',
   '-XX:+DisableExplicitGC',
-  '-XX:+AlwaysPreTouch',
+  // AlwaysPreTouch deliberately dropped: it forces the JVM to commit + zero the ENTIRE heap
+  // up front at startup (great for avoiding GC-time page faults on a server with RAM to spare,
+  // needless memory pressure on a laptop with only a few GB total) — removed while chasing
+  // native-allocator crashes (jemalloc.dll) on a low-RAM machine; lazy commit is the safer default.
   '-XX:G1NewSizePercent=30',
   '-XX:G1MaxNewSizePercent=40',
   '-XX:G1HeapRegionSize=8M',
@@ -222,10 +233,13 @@ function writeOptions(win, version) {
   const f = path.join(profileDir(version), 'options.txt');
   if (fs.existsSync(f)) return;
   fs.mkdirSync(path.dirname(f), { recursive: true });
+  // No Sodium bundled any more (dropped — it was crashing on some Intel iGPU drivers), so vanilla's
+  // own renderer carries all of this alone. Tuned a notch more aggressive than before to compensate:
+  // renderClouds/ao off, lower mipmaps, no debug verbosity.
   const opts = [
     'renderDistance:8', 'simulationDistance:6', 'maxFps:260', 'graphicsMode:0',
     'particles:1', 'entityShadows:false', 'mipmapLevels:2', 'enableVsync:false',
-    'gamma:1.0', 'guiScale:0',
+    'gamma:1.0', 'guiScale:0', 'renderClouds:"false"', 'ao:false', 'glDebugVerbosity:0',
   ].join('\n') + '\n';
   fs.writeFileSync(f, opts);
   status(win, 'Optimised settings applied.');

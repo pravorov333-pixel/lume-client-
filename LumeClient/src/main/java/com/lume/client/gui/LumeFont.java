@@ -42,9 +42,8 @@ public final class LumeFont {
 
     private LumeFont() {}
 
-    /** ASCII font (default) vs Cyrillic font (Russian). */
-    private static String fontPath = "/assets/lume/font/lume.ttf";
-    private static boolean loadedRu = false;
+    /** Montserrat Medium — one face for every language (full Latin + Cyrillic coverage). */
+    private static final String fontPath = "/assets/lume/font/montserrat.ttf";
 
     public static void ensure() {
         if (tried) return;
@@ -60,19 +59,13 @@ public final class LumeFont {
         }
     }
 
-    /** Swap the HUD font between the default (Poppins, no Cyrillic) and PT Sans (Cyrillic) for RU. */
+    /**
+     * No-op kept for callers. The atlas used to be re-rasterised from PT Sans for Russian
+     * because the old Poppins primary had no Cyrillic glyphs at all; Montserrat covers both
+     * scripts, so there is one atlas for every language and nothing to swap.
+     */
     public static void ensureLang(boolean ru) {
         ensure();
-        if (!ready || ru == loadedRu) return;
-        String path = ru ? "/assets/lume/font/ptsans.ttf" : "/assets/lume/font/lume.ttf";
-        try {
-            fontPath = path;
-            glyphs.clear();
-            init();
-            loadedRu = ru;
-        } catch (Throwable t) {
-            System.out.println("[Lume] font lang swap failed: " + t);
-        }
     }
 
     private static void init() throws Exception {

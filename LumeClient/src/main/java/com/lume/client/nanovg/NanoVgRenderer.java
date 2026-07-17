@@ -18,6 +18,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.lwjgl.nanovg.NanoVG.*;
+// Tried NanoVGGL2 (simpler pipeline, no VAOs) while chasing a GL3 driver crash on one Intel
+// iGPU — nvgCreate just returned 0 (failed to even create a context) instead of crashing, so
+// GL2 doesn't work AT ALL on that hardware (likely because MC's context is core-profile and
+// GL2's backend needs compatibility-profile features). Back to GL3, the one that actually works
+// everywhere else; the crash-avoidance angle now being tried is the LWJGL system allocator
+// JVM flag (launcher.js) instead of the NanoVG backend.
 import static org.lwjgl.nanovg.NanoVGGL3.*;
 
 /**
@@ -25,8 +31,10 @@ import static org.lwjgl.nanovg.NanoVGGL3.*;
  * OpenGL at full framebuffer resolution — crisp curves/corners/text regardless of
  * Minecraft's GUI scale. Confirmed to load & render over the game (incl. Sodium).
  *
- * <p>Two fonts are loaded: <b>Poppins</b> (primary, the Lume look) with
- * <b>NotoSans</b> as a fallback so Cyrillic still renders (Poppins has none).
+ * <p>Two fonts are loaded: <b>Montserrat Medium</b> (primary, the Lume look) and
+ * <b>Montserrat ExtraBold</b>, used only by the LUME VISUALS wordmark. Montserrat
+ * ships full Cyrillic, so unlike the old Poppins primary this needs no fallback
+ * font for Russian.
  *
  * <p>GL interop: NanoVG's GL3 backend binds its own shader/VAO/buffers, so
  * {@link #frame} saves the GL state MC relies on before {@code nvgBeginFrame} and
@@ -44,7 +52,7 @@ public final class NanoVgRenderer {
 
     private static long vg = 0L;
     private static boolean failed = false;
-    private static int fontMain = -1, fontCyr = -1;
+    private static int fontMain = -1, fontBold = -1;
     private static final List<ByteBuffer> fontBuffers = new ArrayList<>();  // keep alive for NanoVG
 
     private NanoVgRenderer() {}
@@ -54,15 +62,46 @@ public final class NanoVgRenderer {
     /** Initialise NanoVG if not yet done (so {@link #ready()} is accurate before a frame). */
     public static void ensureInit() { ensure(); }
 
+    /** Escape hatch for GPUs/drivers where NanoVG's GL3 backend is simply broken (confirmed on
+     *  one Intel iGPU: a reproducible EXCEPTION_ACCESS_VIOLATION inside the driver itself,
+     *  igxelpicd64.dll, from plain {@code nvgEndFrame} — not tied to any specific NanoVG feature
+     *  flag, survived removing NVG_STENCIL_STROKES too). Every call site already guards on
+     *  {@link #ready()} and falls back to the plain DrawContext renderer (see class doc), so
+     *  simply never initialising NanoVG degrades the UI instead of crashing the game. Drop a
+     *  file named {@code lume_disable_nanovg} in the game directory (next to options.txt) to
+     *  enable — off by default, doesn't affect anyone who isn't hitting this. */
+    private static boolean nanoVgDisabledByMarker() {
+        try {
+            return java.nio.file.Files.exists(
+                    net.fabricmc.loader.api.FabricLoader.getInstance().getGameDir().resolve("lume_disable_nanovg"));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private static void ensure() {
         if (vg != 0L || failed) return;
+        if (nanoVgDisabledByMarker()) {
+            failed = true;
+            System.out.println("[Lume] NanoVG disabled via lume_disable_nanovg marker — using plain DrawContext rendering everywhere.");
+            return;
+        }
         try {
-            vg = nvgCreate(NVG_ANTIALIAS | NVG_STENCIL_STROKES);
+            // NVG_STENCIL_STROKES deliberately dropped: it makes NanoVG anti-alias strokes via a
+            // stencil-buffer pass, and stencil-buffer ops are a classic crash trigger on flaky/older
+            // Intel iGPU drivers — this client hit a real EXCEPTION_ACCESS_VIOLATION inside the Intel
+            // driver itself (igxelpicd64.dll) from nvgEndFrame, on hardware whose driver only reports
+            // OpenGL 3.2 despite the chip supporting far more. Plain NVG_ANTIALIAS still anti-aliases
+            // fills/text/simple strokes (everything this client actually draws — rounded rects, glows,
+            // text); it only loses the stencil trick for self-intersecting/overlapping stroke paths,
+            // which nothing here uses.
+            vg = nvgCreate(NVG_ANTIALIAS);
             if (vg == 0L) { failed = true; System.out.println("[Lume] NanoVG create FAILED (vg=0)"); return; }
-            fontMain = loadFont("lume", "/assets/lume/font/lume.ttf");          // Poppins
-            fontCyr  = loadFont("lume-cyr", "/assets/lume/font/notosans.ttf");  // Cyrillic fallback
-            if (fontMain != -1 && fontCyr != -1) nvgAddFallbackFontId(vg, fontMain, fontCyr);
-            System.out.println("[Lume] NanoVG READY (vg=" + vg + ", font=" + fontMain + "/" + fontCyr + ")");
+            // Montserrat covers Latin AND Cyrillic, so there's deliberately no fallback
+            // font registered any more (Poppins needed NotoSans bolted on for Russian).
+            fontMain = loadFont("lume", "/assets/lume/font/montserrat.ttf");            // Montserrat Medium
+            fontBold = loadFont("lume-bold", "/assets/lume/font/montserrat-bold.ttf");  // Montserrat ExtraBold (wordmark)
+            System.out.println("[Lume] NanoVG READY (vg=" + vg + ", font=" + fontMain + "/" + fontBold + ")");
         } catch (Throwable t) {
             failed = true;
             System.out.println("[Lume] NanoVG init error: " + t);
@@ -305,6 +344,82 @@ public final class NanoVgRenderer {
         }
     }
 
+    // ---- images -----------------------------------------------------------
+    // Used by the custom menu wallpaper. NanoVG decodes (stb_image: png/jpg/bmp/gif) and
+    // uploads to a GL texture inside nvgCreateImageMem, so — unlike fonts, whose buffers must
+    // stay alive for NanoVG to keep reading them — the source bytes can be freed right after.
+
+    /** @return image handle, or -1 if the bytes aren't a decodable image. */
+    public static int createImage(long vg, byte[] bytes) {
+        ByteBuffer buf = MemoryUtil.memAlloc(bytes.length);
+        try {
+            buf.put(bytes).flip();
+            return nvgCreateImageMem(vg, 0, buf);
+        } catch (Throwable t) {
+            System.out.println("[Lume] NVG image decode failed: " + t);
+            return -1;
+        } finally {
+            MemoryUtil.memFree(buf);
+        }
+    }
+
+    public static void deleteImage(long vg, int img) {
+        if (img != -1) nvgDeleteImage(vg, img);
+    }
+
+    /**
+     * Draws {@code img} filling the rect, cropping the overflow to preserve aspect ratio —
+     * i.e. CSS {@code background-size: cover}, so a wallpaper of any shape fills the screen
+     * without ever stretching.
+     */
+    public static void imageCover(long vg, float x, float y, float w, float h, int img, float alpha) {
+        if (img == -1) return;
+        try (MemoryStack s = MemoryStack.stackPush()) {
+            int[] iw = new int[1], ih = new int[1];
+            nvgImageSize(vg, img, iw, ih);
+            if (iw[0] <= 0 || ih[0] <= 0) return;
+            float scale = Math.max(w / iw[0], h / ih[0]);
+            float dw = iw[0] * scale, dh = ih[0] * scale;
+            NVGPaint p = NVGPaint.malloc(s);
+            nvgImagePattern(vg, x + (w - dw) / 2f, y + (h - dh) / 2f, dw, dh, 0, img, alpha, p);
+            nvgBeginPath(vg);
+            nvgRect(vg, x, y, w, h);
+            nvgFillPaint(vg, p);
+            nvgFill(vg);
+        }
+    }
+
+    /**
+     * Small solid 4-point sparkle (tips N/E/S/W at {@code r}, waists pinched to {@code waist}).
+     *
+     * <p>Like {@link #logoMark} this is a triangle FAN, not one concave path: a sparkle's inward
+     * waist is exactly the silhouette NanoVG's stencil fill can turn into a solid bounding box on
+     * some drivers. Unlike logoMark it samples no curves — 8 flat triangles, cheap enough to run
+     * on every particle of the menu sparkle field each frame.
+     */
+    public static void sparkle4(long vg, float cx, float cy, float r, float waist, int argb) {
+        float[] pts = {
+                cx, cy - r,          cx + waist, cy - waist,
+                cx + r, cy,          cx + waist, cy + waist,
+                cx, cy + r,          cx - waist, cy + waist,
+                cx - r, cy,          cx - waist, cy - waist,
+        };
+        try (MemoryStack s = MemoryStack.stackPush()) {
+            NVGColor col = NVGColor.malloc(s);
+            color(argb, col);
+            nvgFillColor(vg, col);
+            for (int i = 0; i < 8; i++) {
+                int j = (i + 1) % 8;
+                nvgBeginPath(vg);
+                nvgMoveTo(vg, cx, cy);
+                nvgLineTo(vg, pts[i * 2], pts[i * 2 + 1]);
+                nvgLineTo(vg, pts[j * 2], pts[j * 2 + 1]);
+                nvgClosePath(vg);
+                nvgFill(vg);
+            }
+        }
+    }
+
     /** Lume "Sparkle" mark — big 4-point sparkle (bright→mid lavender gradient) + a smaller
      *  sparkle (light lavender), the small one's bottom tip sitting directly above the big
      *  one's right tip (x=72 for both). Same 0..100 coordinate space and exact path numbers
@@ -414,13 +529,50 @@ public final class NanoVgRenderer {
     // ---- text -------------------------------------------------------------
 
     public static void text(long vg, float x, float y, float size, int argb, int align, String str) {
-        if (fontMain == -1 || str == null) return;
+        text(vg, x, y, size, argb, align, str, false);
+    }
+
+    /** {@code bold=true} draws in Montserrat ExtraBold — reserved for the LUME VISUALS wordmark. */
+    public static void text(long vg, float x, float y, float size, int argb, int align, String str, boolean bold) {
+        int face = bold && fontBold != -1 ? fontBold : fontMain;
+        if (face == -1 || str == null) return;
         try (MemoryStack s = MemoryStack.stackPush()) {
             NVGColor col = NVGColor.malloc(s);
             color(argb, col);
-            nvgFontFaceId(vg, fontMain);
+            nvgFontFaceId(vg, face);
             nvgFontSize(vg, size);
             nvgFillColor(vg, col);
+            nvgTextAlign(vg, align);
+            nvgText(vg, x, y, str);
+        }
+    }
+
+    /** Applies the wordmark's ExtraBold face + size to {@code vg} without drawing — for
+     *  callers that paint text themselves (e.g. a gradient fill via nvgFillPaint). */
+    public static void useBoldFace(long vg, float size) {
+        if (fontBold != -1) nvgFontFaceId(vg, fontBold);
+        nvgFontSize(vg, size);
+    }
+
+    /**
+     * Text filled with a horizontal linear gradient instead of a flat colour — NanoVG applies
+     * the current fill paint to glyphs the same way it does to shapes, so this is just a normal
+     * text draw with nvgFillPaint. Used by the shimmering VISUALS half of the wordmark.
+     * Gradient endpoints are absolute px, so callers can slide them past the text bounds to
+     * animate the colours flowing through the letters.
+     */
+    public static void textGradient(long vg, float x, float y, float size, int align, String str,
+                                    float gx0, float gx1, int argb0, int argb1, boolean bold) {
+        int face = bold && fontBold != -1 ? fontBold : fontMain;
+        if (face == -1 || str == null) return;
+        try (MemoryStack s = MemoryStack.stackPush()) {
+            NVGColor c0 = NVGColor.malloc(s), c1 = NVGColor.malloc(s);
+            color(argb0, c0); color(argb1, c1);
+            NVGPaint p = NVGPaint.malloc(s);
+            nvgLinearGradient(vg, gx0, y, gx1, y, c0, c1, p);
+            nvgFontFaceId(vg, face);
+            nvgFontSize(vg, size);
+            nvgFillPaint(vg, p);
             nvgTextAlign(vg, align);
             nvgText(vg, x, y, str);
         }
@@ -434,8 +586,13 @@ public final class NanoVgRenderer {
     }
 
     public static float textWidth(long vg, float size, String str) {
-        if (fontMain == -1 || str == null) return 0;
-        nvgFontFaceId(vg, fontMain);
+        return textWidth(vg, size, str, false);
+    }
+
+    public static float textWidth(long vg, float size, String str, boolean bold) {
+        int face = bold && fontBold != -1 ? fontBold : fontMain;
+        if (face == -1 || str == null) return 0;
+        nvgFontFaceId(vg, face);
         nvgFontSize(vg, size);
         return nvgTextBounds(vg, 0, 0, str, (float[]) null);
     }

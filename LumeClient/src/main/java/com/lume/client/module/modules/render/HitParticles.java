@@ -10,8 +10,6 @@ import com.lume.client.module.setting.ModeSetting;
 import com.lume.client.module.setting.SliderSetting;
 import net.minecraft.util.Identifier;
 
-import java.io.File;
-
 /**
  * Custom glowing hit particles (via ParticleEngine) spawned when you hit an
  * entity, always in the chosen Color — enabling this module always replaces
@@ -37,20 +35,26 @@ public class HitParticles extends Module {
     public final BoolSetting   useMyParticle = add(new BoolSetting("Use My Particle", false));
     public String selectedFile = null;   // "My Particles" — which dropped-in .png to use (null = first found)
 
+    // Loading happens here (throttled, onEnable/onTick), NOT inside resolveTexture() itself — a
+    // real crash was traced to decoding the custom PNG straight from HitEffects.onAttack, i.e. on
+    // every single hit, mid-combat. See ParticleTexture.Slot.
+    private final ParticleTexture.Slot texSlot =
+            new ParticleTexture.Slot(FOLDER, () -> useMyParticle.value, () -> selectedFile);
+
     public HitParticles() {
         super("Hit Particles", "Светящиеся частицы удара", Category.RENDER, -1);
         ParticleTexture.ensureReadme(FOLDER);
     }
 
-    /** Resolves the currently selected drop-in texture, or null if "Use My Particle" is off / no file. */
+    @Override
+    public void onEnable() { texSlot.refresh(); }
+
+    @Override
+    public void onTick() { texSlot.refresh(); }   // cheap — throttled to ~1/sec, picks up a mid-session file change
+
+    /** Resolves the currently selected drop-in texture, or null if "Use My Particle" is off / no file.
+     *  Cheap — just returns whatever {@link #texSlot} already has cached, no disk I/O here. */
     public Identifier resolveTexture() {
-        if (!useMyParticle.value) return null;
-        File[] files = ParticleTexture.list(FOLDER);
-        if (files.length == 0) return null;
-        File chosen = files[0];
-        if (selectedFile != null) {
-            for (File f : files) if (f.getName().equals(selectedFile)) { chosen = f; break; }
-        }
-        return ParticleTexture.get(chosen);
+        return texSlot.get();
     }
 }

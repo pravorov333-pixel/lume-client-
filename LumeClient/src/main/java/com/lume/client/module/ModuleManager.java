@@ -35,7 +35,6 @@ import com.lume.client.module.modules.performance.FpsLimit;
 import com.lume.client.module.modules.performance.GraphicsQuality;
 import com.lume.client.module.modules.performance.JvmOptimizer;
 import com.lume.client.module.modules.performance.RenderDistance;
-import com.lume.client.module.modules.performance.Shaders;
 import com.lume.client.module.modules.render.Aspect;
 import com.lume.client.module.modules.render.CustomHand;
 import com.lume.client.module.modules.render.CustomHitbox;
@@ -122,7 +121,6 @@ public class ModuleManager {
         register(new EntityDistance());
         register(new ReducedParticles());
         register(new JvmOptimizer());
-        register(new Shaders());
         // --- Render: combat feedback, then viewmodel/camera, then world visuals ---
         register(new HitSound());
         register(new HitColor());
@@ -187,10 +185,6 @@ public class ModuleManager {
         if (menuLogo != null) menuLogo.setEnabled(true);
         Module discord = getByName("Discord Rich Presence");
         if (discord != null) discord.setEnabled(true);
-        // Shaders deliberately NOT default-enabled — auto-running an unknown dropped-in
-        // shader pack with zero opt-in already hung this exact machine badly enough that
-        // the game wouldn't launch at all afterward. Auto-detect/auto-select still needs
-        // zero clicks once the user flips this on themselves in ClickGUI.
     }
 
     private void register(Module module) {

@@ -50,16 +50,12 @@ public class LogoDrawerMixin {
         context.draw();
         NanoVgRenderer.frame(vg -> {
             float textSize = 20f, markSize = 22f, gap = 6f;
-            String w1 = "Lume ", w2 = "Visuals";
-            float tw1 = NanoVgRenderer.textWidth(vg, textSize * S, w1) / S;
-            float tw2 = NanoVgRenderer.textWidth(vg, textSize * S, w2) / S;
-            float totalW = markSize + gap + tw1 + tw2;
+            float twTotal = com.lume.client.gui.Wordmark.width(vg, textSize * S) / S;
+            float totalW = markSize + gap + twTotal;
             float startX = cx - totalW / 2f;
 
             NanoVgRenderer.logoMark(vg, startX * S, (cy - markSize / 2f) * S, markSize * S);
-            float tx = (startX + markSize + gap) * S;
-            NanoVgRenderer.text(vg, tx, cy * S, textSize * S, withAlpha(Theme.txt(), alphaByte), NanoVgRenderer.ALIGN_MIDDLE, w1);
-            NanoVgRenderer.text(vg, tx + tw1 * S, cy * S, textSize * S, withAlpha(Theme.accent(), alphaByte), NanoVgRenderer.ALIGN_MIDDLE, w2);
+            com.lume.client.gui.Wordmark.draw(vg, (startX + markSize + gap) * S, cy * S, textSize * S, alphaByte);
         });
         return true;
     }

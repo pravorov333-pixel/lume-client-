@@ -13,7 +13,6 @@ import com.lume.client.module.setting.SliderSetting;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.util.Identifier;
 
-import java.io.File;
 import java.util.Random;
 
 /**
@@ -38,6 +37,13 @@ public class WorldParticles extends Module {
     public final BoolSetting   useMyParticle = add(new BoolSetting("Use My Particle", false));
     public String selectedFile = null;   // "My Particles" — which dropped-in .png to use (null = first found)
 
+    // Loading happens here (throttled, onEnable/onTick), NOT inside resolveTexture() itself — this
+    // used to re-scan the folder and (on first success) decode the PNG on EVERY tick; a real crash
+    // was traced to a custom drop-in PNG's native decode happening at a bad moment. See
+    // ParticleTexture.Slot — resolveTexture() below is now just a cheap cached lookup.
+    private final ParticleTexture.Slot texSlot =
+            new ParticleTexture.Slot(FOLDER, () -> useMyParticle.value, () -> selectedFile);
+
     private final Random rnd = new Random();
 
     public WorldParticles() {
@@ -45,22 +51,19 @@ public class WorldParticles extends Module {
         ParticleTexture.ensureReadme(FOLDER);
     }
 
+    @Override
+    public void onEnable() { texSlot.refresh(); }
+
     /** Resolves the currently selected drop-in texture, or null if "Use My Particle" is off / no file. */
     public Identifier resolveTexture() {
-        if (!useMyParticle.value) return null;
-        File[] files = ParticleTexture.list(FOLDER);
-        if (files.length == 0) return null;
-        File chosen = files[0];
-        if (selectedFile != null) {
-            for (File f : files) if (f.getName().equals(selectedFile)) { chosen = f; break; }
-        }
-        return ParticleTexture.get(chosen);
+        return texSlot.get();
     }
 
     @Override
     public void onTick() {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null || mc.world == null) return;
+        texSlot.refresh();   // throttled internally to ~1/sec — cheap to call every tick
         // Type only shapes the physics preset now — colour always comes from the
         // Color setting (previously Ember/Snow silently overrode it to a fixed
         // orange/white, ignoring whatever the user picked; that was the bug).

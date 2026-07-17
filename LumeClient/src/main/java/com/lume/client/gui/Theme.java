@@ -128,6 +128,7 @@ public final class Theme {
     public static int accent2()   { return mix(accent2(prevDark),   accent2(dark)); }
     public static int pillOff()   { return mix(pillOff(prevDark),   pillOff(dark)); }
     public static int accentRgb() { return accent() & 0xFFFFFF; }
+    public static int accent2Rgb() { return accent2() & 0xFFFFFF; }
     /** Text colour for active/selected buttons (accent-filled pills, tabs, style swatches) —
      *  defaults to white, but customisable via Customize Colors like everything else. */
     public static int activeText() { return mix(activeText(prevDark), activeText(dark)); }

@@ -84,6 +84,30 @@ public final class RenderUtil {
         textVCentered(ctx, tr, s, boxX + (boxW - w) / 2.0, boxY, boxH, color, scale);
     }
 
+    /** Faux-bold: redraws the string with tiny sub-pixel offsets to thicken the strokes —
+     *  there's no real Bold weight loaded for the body font (LumeFont only rasterises Medium),
+     *  so this fakes a bold look convincingly at HUD sizes without needing a second glyph atlas. */
+    public static void textBold(DrawContext ctx, TextRenderer tr, String s, double x, double y, int color, float scale) {
+        text(ctx, tr, s, x, y, color, false, scale);
+        text(ctx, tr, s, x + 0.4, y, color, false, scale);
+        text(ctx, tr, s, x, y + 0.35, color, false, scale);
+    }
+
+    /** Bold + centred both horizontally and vertically inside the given box. */
+    public static void textBoldCentered(DrawContext ctx, TextRenderer tr, String s, double boxX, double boxY, double boxW, double boxH, int color, float scale) {
+        int w = width(tr, s, scale);
+        double x = boxX + (boxW - w) / 2.0;
+        LumeFont.ensure();
+        double y;
+        if (LumeFont.ready) {
+            double ds = scale * (18f / LumeFont.FONT_PX);
+            y = boxY + boxH / 2.0 - LumeFont.opticalCenterPx() * ds;
+        } else {
+            y = boxY + boxH / 2.0 - 3.5 * scale;
+        }
+        textBold(ctx, tr, s, x, y, color, scale);
+    }
+
     public static int width(TextRenderer tr, String s, float scale) {
         if (hasCyrillic(s)) return Math.round(tr.getWidth(s) * scale * 2f);
         LumeFont.ensure();

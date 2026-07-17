@@ -20,31 +20,31 @@ public class CustomHand extends Module {
      *  by Style). Pos/Scale sliders below still apply on top regardless of which is picked.
      *  "Custom" (last index) uses the free rRot sliders below instead of a fixed lookup. */
     public final ModeSetting style = hide(add(new ModeSetting("Style", 0,
-            "Showcase", "Side Profile", "Laid Flat",
+            "Side", "Lay", "Far",
             "Custom")));
     public static final int STYLE_CUSTOM = 3;
 
     // Rotation in degrees (X, then Y, then Z — Euler, applied in that order) for the named
-    // presets only (Custom, last index, uses rRotX/Y/Z instead). First-pass estimates — there's
-    // no way to run the game and see the result from here, so if an angle/pivot looks off, the
-    // Pos/Scale sliders below are always free to nudge it afterward regardless of Style.
+    // presets only (Custom, last index, uses rRotX/Y/Z instead). These three are the user's own
+    // in-game "Copy" dumps pasted back verbatim, so unlike earlier guessed presets they're
+    // already known-good poses.
     private static final float[][] STYLE_ROT = {
-            { -95.0f, -30.0f, -145.0f }, // Showcase     — close to camera, big turn, good with shaders/cosmetics
-            { 0.0f, 90.0f, -90.0f },     // Side Profile — full flat/left side toward camera, blade tip pointing left
-            { 55.0f, -40.0f, -90.0f },   // Laid Flat    — tipped ~45° forward, blade diagonal to the left, like resting on the floor, tip forward
+            { -37.0f, -147.0f, -41.0f },  // Side
+            { -24.0f, -89.0f, 30.0f },    // Lay
+            { 0.0f, 0.0f, 0.0f },         // Far
     };
-    // Suggested starting position for each named style, applied ONCE when you pick it (not a
-    // continuous override) — after that, Pos/Scale sliders are the single source of truth.
-    // Custom (last index) doesn't get a preset.
+    // Starting position for each named style, applied ONCE when you pick it (not a continuous
+    // override) — after that, Pos/Scale sliders are the single source of truth. Custom (last
+    // index) doesn't get a preset.
     private static final float[][] STYLE_POS = {
-            { -0.02f, 0.25f, -0.85f },   // Showcase
-            { 0.00f, 0.20f, -0.90f },    // Side Profile — centred so the whole blade profile fits in frame
-            { -0.02f, 0.15f, -0.90f },   // Laid Flat
+            { -0.67f, -0.63f, -1.62f },   // Side
+            { -0.25f, -0.41f, -2.00f },   // Lay
+            { 0.64f, -0.41f, -1.42f },    // Far
     };
     private static final float[] STYLE_SCALE = {
-            1.10f,   // Showcase
-            1.00f,   // Side Profile
-            1.00f,   // Laid Flat
+            0.50f,   // Side
+            1.00f,   // Lay
+            1.00f,   // Far
     };
 
     public final SliderSetting rRotX = hide(add(new SliderSetting("Custom Rot X", 0, -180, 180, false)));
@@ -68,14 +68,16 @@ public class CustomHand extends Module {
         if (!Float.isNaN(sc)) rScale.value = sc;
     }
 
-    public final SliderSetting rPosX  = add(new SliderSetting("Right Pos X", 0.0, -1.0, 1.0, false));
-    public final SliderSetting rPosY  = add(new SliderSetting("Right Pos Y", 0.0, -1.0, 1.0, false));
-    public final SliderSetting rPosZ  = add(new SliderSetting("Right Pos Z", 0.0, -1.0, 1.0, false));
+    // -2..2 (2x the old -1..1) — the old range was too tight to reach/correct some Style
+    // positions (Z presets around -0.9 already ate most of it), leaving no room to nudge further.
+    public final SliderSetting rPosX  = add(new SliderSetting("Right Pos X", 0.0, -2.0, 2.0, false));
+    public final SliderSetting rPosY  = add(new SliderSetting("Right Pos Y", 0.0, -2.0, 2.0, false));
+    public final SliderSetting rPosZ  = add(new SliderSetting("Right Pos Z", 0.0, -2.0, 2.0, false));
     public final SliderSetting rScale = add(new SliderSetting("Right Scale", 1.0, 0.5, 2.0, false));
 
-    public final SliderSetting lPosX  = add(new SliderSetting("Left Pos X", 0.0, -1.0, 1.0, false));
-    public final SliderSetting lPosY  = add(new SliderSetting("Left Pos Y", 0.0, -1.0, 1.0, false));
-    public final SliderSetting lPosZ  = add(new SliderSetting("Left Pos Z", 0.0, -1.0, 1.0, false));
+    public final SliderSetting lPosX  = add(new SliderSetting("Left Pos X", 0.0, -2.0, 2.0, false));
+    public final SliderSetting lPosY  = add(new SliderSetting("Left Pos Y", 0.0, -2.0, 2.0, false));
+    public final SliderSetting lPosZ  = add(new SliderSetting("Left Pos Z", 0.0, -2.0, 2.0, false));
     public final SliderSetting lScale = add(new SliderSetting("Left Scale", 1.0, 0.5, 2.0, false));
 
     /** Which hand's Pos/Scale sliders the ClickGUI currently shows. */
@@ -95,11 +97,11 @@ public class CustomHand extends Module {
      *  swing-only) — see HeldItemRendererMixin#applySway for the actual motion. */
     public final BoolSetting sway = hide(add(new BoolSetting("Idle/Sprint Sway", true)));
 
-    /** True when swing/equip progress should be forced to 0 (vanilla's own bob included) — ALL
-     *  animation choices now: no animation is ever allowed to move the item spatially, each one
-     *  only tilts/spins it in place around its own mesh pivot (Use translates down-and-back,
-     *  the single deliberate exception) — see HeldItemRendererMixin#applyAnimation. */
-    public boolean freezeSwing() { return isEnabled(); }
+    /** True when vanilla's own swing/equip bob should be frozen — every choice EXCEPT Default.
+     *  Default deliberately keeps vanilla's normal animation (movement and all); the others each
+     *  only tilt/spin the item in place around its own mesh pivot, with Use the single exception
+     *  that translates (straight down and back, nothing else) — see HeldItemRendererMixin#applyAnimation. */
+    public boolean freezeSwing() { return isEnabled() && animation.index != ANIM_DEFAULT; }
 
     /** Outline: an enlarged flat-coloured copy of the item drawn behind the real one, so a thin
      *  rim of it peeks out past the real silhouette — the closest equivalent to Target ESP's

@@ -6,6 +6,8 @@ import com.lume.client.module.Category;
 import com.lume.client.module.Module;
 import com.lume.client.module.setting.BoolSetting;
 import com.lume.client.module.setting.ModeSetting;
+import com.lume.client.module.setting.SliderSetting;
+import com.lume.client.module.setting.StringSetting;
 import com.lume.client.nanovg.NanoVgRenderer;
 import net.minecraft.client.gui.DrawContext;
 
@@ -21,8 +23,12 @@ import static com.lume.client.nanovg.NanoVgRenderer.*;
  */
 public class CustomMenu extends Module {
 
-    public final ModeSetting background = add(new ModeSetting("Background", 0, "Glow", "Geometry", "Default"));
+    public final ModeSetting background = add(new ModeSetting("Background", 0, "Sparkles", "Geometry", "Wallpaper", "Default"));
+    public final BoolSetting cursorSparks = add(new BoolSetting("Cursor Sparks", true));
     public final BoolSetting cursorGlow = add(new BoolSetting("Cursor Glow", true));
+    /** Filename inside {@code .lumeclient/wallpapers}; only meaningful for the Wallpaper style. */
+    public final StringSetting wallpaper = add(new StringSetting("Wallpaper", ""));
+    public final SliderSetting wallpaperDim = add(new SliderSetting("Wallpaper Dim", 35, 0, 100, true));
     public final BoolSetting showFastConnect = add(new BoolSetting("Show Fast Connect", true));
     public final BoolSetting showFriends = add(new BoolSetting("Show Friends", true));
     public final BoolSetting showAccount = add(new BoolSetting("Show Account", true));
@@ -66,6 +72,17 @@ public class CustomMenu extends Module {
     public static void toggleCursorGlow() {
         Module m = LumeClient.MODULES.getByName("Custom Menu");
         if (m instanceof CustomMenu c) c.cursorGlow.value = !c.cursorGlow.value;
+    }
+
+    /** Current wallpaper filename (Wallpaper style only), or null if none selected / module missing. */
+    public static String wallpaper() {
+        Module m = LumeClient.MODULES.getByName("Custom Menu");
+        return m instanceof CustomMenu c ? c.wallpaper.value : null;
+    }
+
+    public static double wallpaperDim() {
+        Module m = LumeClient.MODULES.getByName("Custom Menu");
+        return m instanceof CustomMenu c ? c.wallpaperDim.value / 100.0 : 0.35;
     }
 
     public static boolean showFastConnect() {

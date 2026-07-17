@@ -42,12 +42,7 @@ public final class LoadingScreen {
             float logoS = 56 * S;
             NanoVgRenderer.logoMark(vg, cx - logoS / 2f, cy - logoS / 2f - 34 * S, logoS);
 
-            float fs = 15 * S;
-            String w1 = "lume ", w2 = "visuals";
-            float w1w = NanoVgRenderer.textWidth(vg, fs, w1), w2w = NanoVgRenderer.textWidth(vg, fs, w2);
-            float wx = cx - (w1w + w2w) / 2f, wy = cy + 24 * S;
-            NanoVgRenderer.text(vg, wx, wy, fs, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, w1);
-            NanoVgRenderer.text(vg, wx + w1w, wy, fs, Theme.accent(), NanoVgRenderer.ALIGN_MIDDLE, w2);
+            Wordmark.drawCentered(vg, cx, cy + 24 * S, 15 * S, 255);
 
             float barW = Math.min(240 * S, sw * 0.6f), barH = 5 * S;
             float bx = cx - barW / 2f, by = cy + 48 * S;

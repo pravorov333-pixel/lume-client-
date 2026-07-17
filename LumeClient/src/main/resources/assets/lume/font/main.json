@@ -2,7 +2,7 @@
   "providers": [
     {
       "type": "ttf",
-      "file": "lume:lume.ttf",
+      "file": "lume:montserrat.ttf",
       "shift": [0.0, 0.0],
       "size": 18.0,
       "oversample": 4.0

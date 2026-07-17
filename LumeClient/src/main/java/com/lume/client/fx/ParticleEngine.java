@@ -177,22 +177,17 @@ public final class ParticleEngine {
         double midY = (y0 + y1) / 2;
         double t = System.currentTimeMillis() / 1000.0;
         int n = 10;
-        if (shape >= SHAPE_STAR) {
-            for (int i = 0; i < n; i++) {
-                double a = t * 1.2 + 2 * Math.PI * i / n;
-                double wx = cx + Math.cos(a) * radius, wz = cz + Math.sin(a) * radius;
-                float fx = (float) (wx - cam.x), fy = (float) (midY - cam.y), fz = (float) (wz - cam.z);
-                fanShape(vcp, mat, fx, fy, fz, right, up, shape, 0.14f, rgbm, 235);
-            }
-            return;
-        }
-        VertexConsumer vc = vcp.getBuffer(RenderLayer.getDebugQuads());
+        VertexConsumer vc = vcp.getBuffer(RenderLayer.getDebugQuads());   // one quads buffer for both shapes — see fanShape()
         for (int i = 0; i < n; i++) {
             double a = t * 1.2 + 2 * Math.PI * i / n;
             double wx = cx + Math.cos(a) * radius, wz = cz + Math.sin(a) * radius;
             float fx = (float) (wx - cam.x), fy = (float) (midY - cam.y), fz = (float) (wz - cam.z);
-            quad(vc, mat, fx, fy, fz, right, up, 0.10f, rgbm, 220);
-            quad(vc, mat, fx, fy, fz, right, up, 0.18f, rgbm, 90);
+            if (shape >= SHAPE_STAR) {
+                fanShape(vc, mat, fx, fy, fz, right, up, shape, 0.14f, rgbm, 235);
+            } else {
+                quad(vc, mat, fx, fy, fz, right, up, 0.10f, rgbm, 220);
+                quad(vc, mat, fx, fy, fz, right, up, 0.18f, rgbm, 90);
+            }
         }
         if (vcp instanceof VertexConsumerProvider.Immediate imm) imm.draw(RenderLayer.getDebugQuads());
     }
@@ -280,36 +275,32 @@ public final class ParticleEngine {
 
         Matrix4f mat = ms.peek().getPositionMatrix();
 
-        // Two separate passes, never interleaved: fanShape() opens+draws its OWN
-        // getDebugTriangleFan() buffer per particle. Calling that WHILE the quads
-        // VertexConsumer below is still open (mid-buffer) closes/corrupts the shared
-        // BufferBuilder the two layers happen to reuse, throwing "Not building!" the
-        // next time a quad particle tries to write — exactly the Star-shape crash.
+        // ONE buffer, one pass, quads only. Everything (round billboards AND star/heart/etc.
+        // silhouettes) goes through DrawMode.QUADS, where every 4 vertices are an independent
+        // quad — so particles can never bleed into each other no matter who owns the buffer.
+        // Do NOT reintroduce getDebugTriangleFan(): TRIANGLE_FAN connects every triangle back to
+        // the buffer's FIRST vertex, so it only stays correct if the buffer is flushed between
+        // particles, and the old `vcp instanceof Immediate` flush silently does nothing once
+        // something wraps the provider (Iris' batched entity rendering does exactly that) —
+        // every shaped particle then fused into one connected mess. See fanShape().
         VertexConsumer vc = vcp.getBuffer(RenderLayer.getDebugQuads());
         for (GlowParticle p : PARTICLES) {
-            if (p.texture != null || p.shape >= SHAPE_STAR) continue;
+            if (p.texture != null) continue;
             float t = p.progress();
             float a = p.alpha * (1f - t);                       // fade out over life
             if (a <= 0.01f) continue;
             float rad = p.size + (p.sizeEnd - p.size) * t;
             float cx = (float) (p.x - cam.x), cy = (float) (p.y - cam.y), cz = (float) (p.z - cam.z);
             int rgb = p.rgb & 0xFFFFFF;
-            // soft radial falloff: faint wide halo + bright core
-            quad(vc, mat, cx, cy, cz, right, up, rad * 1.7f, rgb, (int) (a * 90));
-            quad(vc, mat, cx, cy, cz, right, up, rad * 0.9f, rgb, (int) (a * 255));
+            if (p.shape >= SHAPE_STAR) {
+                fanShape(vc, mat, cx, cy, cz, right, up, p.shape, rad * 1.6f, rgb, (int) (a * 255));
+            } else {
+                // soft radial falloff: faint wide halo + bright core
+                quad(vc, mat, cx, cy, cz, right, up, rad * 1.7f, rgb, (int) (a * 90));
+                quad(vc, mat, cx, cy, cz, right, up, rad * 0.9f, rgb, (int) (a * 255));
+            }
         }
         if (vcp instanceof VertexConsumerProvider.Immediate immQuads) immQuads.draw(RenderLayer.getDebugQuads());
-
-        for (GlowParticle p : PARTICLES) {
-            if (p.texture != null || p.shape < SHAPE_STAR) continue;
-            float t = p.progress();
-            float a = p.alpha * (1f - t);
-            if (a <= 0.01f) continue;
-            float rad = p.size + (p.sizeEnd - p.size) * t;
-            float cx = (float) (p.x - cam.x), cy = (float) (p.y - cam.y), cz = (float) (p.z - cam.z);
-            int rgb = p.rgb & 0xFFFFFF;
-            fanShape(vcp, mat, cx, cy, cz, right, up, p.shape, rad * 1.6f, rgb, (int) (a * 255));
-        }
 
         // Custom drop-in PNG particles — textured billboard, one draw call per particle
         // (each may use a different texture; batching by texture isn't worth the complexity here).
@@ -414,24 +405,33 @@ public final class ParticleEngine {
     }
 
     /**
-     * Draws one shaped particle as a triangle fan (centre + outline, closed) — the only
-     * draw mode that can express a star/heart/etc. silhouette (a plain quad can't). Each
-     * call flushes its own draw() so shapes never bleed into each other (a shared buffer
-     * would otherwise connect unrelated fans into one continuous, broken shape).
+     * Draws one shaped particle (star/heart/…) into a shared DrawMode.QUADS buffer: each
+     * centre→edge triangle is emitted as a quad whose last vertex is repeated (a degenerate
+     * quad renders exactly as that triangle).
+     *
+     * <p>This deliberately does NOT use TRIANGLE_FAN. A fan chains every triangle to the
+     * buffer's first vertex, so two particles in one un-flushed buffer get welded together —
+     * and the only thing that used to prevent that was a per-particle
+     * {@code vcp instanceof VertexConsumerProvider.Immediate} flush, which silently no-ops as
+     * soon as anything wraps the provider (Iris' batched entity rendering). QUADS needs no
+     * flush to stay correct: every 4 vertices stand alone.
      */
-    private static void fanShape(VertexConsumerProvider vcp, Matrix4f mat, float cx, float cy, float cz,
+    private static void fanShape(VertexConsumer vc, Matrix4f m, float cx, float cy, float cz,
                                  Vector3f right, Vector3f up, int shape, float r, int rgb, int alpha) {
         float[][] pts = shapeOutline(shape);
         alpha = Math.max(0, Math.min(255, alpha));
-        int argb = (alpha << 24) | rgb;
-        VertexConsumer vc = vcp.getBuffer(RenderLayer.getDebugTriangleFan());
-        vc.vertex(mat, cx, cy, cz).color(argb);
-        for (float[] p : pts) {
-            float lx = p[0] * r, ly = p[1] * r;
-            vc.vertex(mat, cx + right.x * lx + up.x * ly, cy + right.y * lx + up.y * ly, cz + right.z * lx + up.z * ly).color(argb);
+        int argb = (alpha << 24) | (rgb & 0xFFFFFF);
+        int n = pts.length;
+        for (int i = 0; i < n; i++) {
+            float[] a = pts[i], b = pts[(i + 1) % n];   // wraps → closes the silhouette
+            float ax = a[0] * r, ay = a[1] * r;
+            float bx = b[0] * r, by = b[1] * r;
+            float axw = cx + right.x * ax + up.x * ay, ayw = cy + right.y * ax + up.y * ay, azw = cz + right.z * ax + up.z * ay;
+            float bxw = cx + right.x * bx + up.x * by, byw = cy + right.y * bx + up.y * by, bzw = cz + right.z * bx + up.z * by;
+            vc.vertex(m, cx, cy, cz).color(argb);
+            vc.vertex(m, axw, ayw, azw).color(argb);
+            vc.vertex(m, bxw, byw, bzw).color(argb);
+            vc.vertex(m, bxw, byw, bzw).color(argb);   // repeated → degenerate quad == triangle
         }
-        float lx0 = pts[0][0] * r, ly0 = pts[0][1] * r;   // close the fan back to the first outline point
-        vc.vertex(mat, cx + right.x * lx0 + up.x * ly0, cy + right.y * lx0 + up.y * ly0, cz + right.z * lx0 + up.z * ly0).color(argb);
-        if (vcp instanceof VertexConsumerProvider.Immediate imm) imm.draw(RenderLayer.getDebugTriangleFan());
     }
 }

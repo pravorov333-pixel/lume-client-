@@ -665,7 +665,11 @@ public final class HudRenderer {
         ctx.enableScissor(x, y, x + pw, y + h);   // clip long metrics rows / small resizes, don't spill
 
         int ty = y + pad;
-        centerLine(ctx, tr, "Lume Visuals", x, pw, ty, lineH, accentCol, 0.5f * S); ty += lineH;
+        // "(lume.visuals)" tag — bold (faux, see RenderUtil.textBold), tinted with the accent
+        // like the rest of this panel. Distinct from the shared Wordmark (LUME VISUALS) used on
+        // menu screens — this is HUD-only branding, doesn't affect anything else.
+        RenderUtil.textBoldCentered(ctx, tr, "(lume.visuals)", x, ty, pw, lineH, accentCol, 0.5f * S);
+        ty += lineH;
         centerLine(ctx, tr, metricsStr, x, pw, ty, lineH, Theme.txt(), 0.46f * S);
         ctx.disableScissor();
     }

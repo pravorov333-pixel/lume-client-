@@ -135,94 +135,117 @@ public abstract class HeldItemRendererMixin {
         if (s != 1f) matrices.scale(s, s, s);
         applySway(matrices, ch, player, tickDelta);
         applyAnimation(matrices, ch, swingProgress, item);
-
-        // Outline / Fill — each is a SEPARATE extra render pass through a forced-flat-colour
-        // VertexConsumerProvider (see lume$renderFlat), not a RenderSystem.setShaderColor tint.
-        // A multiply tint (texture * colour) can never produce a true flat white — texture *
-        // 0xFFFFFF is the identity multiply, so white silently did nothing. This instead blends
-        // a solid near-opaque copy of the item OVER the real one through
-        // RenderLayer.getEntityTranslucentEmissiveNoOutline (a normal alpha-blended layer, used
-        // vanilla-side for glowing eyes etc.) with every vertex colour forced to the target hue,
-        // so white genuinely reads as white. Outline additionally enlarges that copy ~12% around
-        // the item's own centre and draws it BEFORE the real (normal, untouched) render, so a
-        // thin rim of it peeks out past the real silhouette.
-        if (ch.outline.value || ch.fill.index != 0) {
-            HeldItemRenderer self = (HeldItemRenderer) (Object) this;
-            boolean mainIsRight = player.getMainArm() == Arm.RIGHT;
-            boolean effectiveRight = right == mainIsRight;
-            ModelTransformationMode mode = effectiveRight ? ModelTransformationMode.FIRST_PERSON_RIGHT_HAND : ModelTransformationMode.FIRST_PERSON_LEFT_HAND;
-            boolean leftHanded = !effectiveRight;
-
-            if (ch.outline.value) {
-                matrices.push();
-                Vector3f c = HandGeometryPivot.center(item);
-                matrices.translate(c.x, c.y, c.z);   // enlarge around the item's own centre, not the hand origin
-                matrices.scale(1.12f, 1.12f, 1.12f);
-                matrices.translate(-c.x, -c.y, -c.z);
-                lume$renderFlat(self, player, item, mode, leftHanded, matrices, vertexConsumers, light, ch.outlineRgb());
-                matrices.pop();
-            }
-            if (ch.fill.index != 0) {
-                lume$renderFlat(self, player, item, mode, leftHanded, matrices, vertexConsumers, light, ch.fillRgb());
-            }
-            // Vanilla's own (real, untouched) renderItem call still runs immediately after this
-            // method returns, drawing the normal textured item on top of whatever we just added.
-        }
     }
 
     // Items share the block atlas since 1.19 (no separate items.png any more) — same texture
     // regardless of which specific item is being recoloured, so one fixed identifier works for all.
     private static final Identifier ITEM_ATLAS = Identifier.ofVanilla("textures/atlas/blocks.png");
 
-    private static void lume$renderFlat(HeldItemRenderer self, AbstractClientPlayerEntity player, ItemStack item,
+    /** Screen-space directions the Outline silhouettes are offset in (8-way ring, unit-ish). */
+    private static final float[][] OUTLINE_DIRS = {
+            { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 },
+            { 0.7f, 0.7f }, { -0.7f, 0.7f }, { 0.7f, -0.7f }, { -0.7f, -0.7f }
+    };
+    private static final float OUTLINE_WIDTH = 0.012f;   // in hand-space units; ~a thin rim at default scale
+
+    /**
+     * Outline / Fill, replacing vanilla's own renderItem call for this hand.
+     *
+     * <p><b>Outline</b> is a real rim, not a second sword: the item is drawn 8 times, flat-coloured
+     * and each copy nudged a hair in a different SCREEN-space direction, all BEFORE the real item
+     * — then the real item draws on top and covers the middle, leaving only a uniform line peeking
+     * out around the silhouette. (The previous version scaled one copy up 12%, which is why it read
+     * as a bigger sword behind the real one rather than an outline: a centre-scale grows the far
+     * parts much more than the near ones.)
+     *
+     * <p><b>Fill</b> REPLACES the real render rather than drawing under it — the old version drew
+     * the flat copy and then let vanilla paint the fully-textured item straight over the top, so
+     * the fill was always completely hidden. That's why Fill "did nothing" on its own.
+     *
+     * <p>Flat colour comes from {@link ForcedColorVertexConsumer} on an alpha-blended entity layer,
+     * NOT a {@code setShaderColor} multiply — a multiply can't make white (texture * 0xFFFFFF is
+     * the identity), which is why white used to look like "no effect / transparent".
+     */
+    @Redirect(method = "renderFirstPersonItem", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/client/render/item/HeldItemRenderer;renderItem(Lnet/minecraft/entity/LivingEntity;Lnet/minecraft/item/ItemStack;Lnet/minecraft/item/ModelTransformationMode;ZLnet/minecraft/client/util/math/MatrixStack;Lnet/minecraft/client/render/VertexConsumerProvider;I)V"),
+            require = 0)
+    private void lume$outlineAndFill(HeldItemRenderer self, LivingEntity entity, ItemStack stack, ModelTransformationMode mode,
+                                     boolean leftHanded, MatrixStack matrices, VertexConsumerProvider vcp, int light) {
+        Module chM = LumeClient.MODULES.getByName("Custom Hand");
+        if (!(chM instanceof CustomHand ch) || !ch.isEnabled() || (!ch.outline.value && ch.fill.index == 0)) {
+            self.renderItem(entity, stack, mode, leftHanded, matrices, vcp, light);   // untouched vanilla path
+            return;
+        }
+
+        if (ch.outline.value) {
+            int col = ch.outlineRgb();
+            for (float[] d : OUTLINE_DIRS) {
+                matrices.push();
+                matrices.translate(d[0] * OUTLINE_WIDTH, d[1] * OUTLINE_WIDTH, 0.0);
+                lume$renderFlat(self, entity, stack, mode, leftHanded, matrices, vcp, light, col);
+                matrices.pop();
+            }
+        }
+
+        if (ch.fill.index != 0) {
+            lume$renderFlat(self, entity, stack, mode, leftHanded, matrices, vcp, light, ch.fillRgb());
+        } else {
+            self.renderItem(entity, stack, mode, leftHanded, matrices, vcp, light);   // real item over the outline
+        }
+    }
+
+    private static void lume$renderFlat(HeldItemRenderer self, LivingEntity entity, ItemStack item,
                                          ModelTransformationMode mode, boolean leftHanded, MatrixStack matrices,
                                          VertexConsumerProvider realVcp, int light, int rgb) {
         RenderLayer layer = RenderLayer.getEntityTranslucentEmissiveNoOutline(ITEM_ATLAS);
-        VertexConsumer forced = new ForcedColorVertexConsumer(realVcp.getBuffer(layer), 0xE6000000 | rgb);
-        VertexConsumerProvider wrapper = l -> forced;
-        self.renderItem(player, item, mode, leftHanded, matrices, wrapper, light);
+        VertexConsumer base = realVcp.getBuffer(layer);
+        int argb = 0xFF000000 | rgb;
+        // A NEW wrapper per getBuffer call, deliberately: an enchanted item asks for two layers and
+        // unions them, and VertexConsumers.Dual throws "Duplicate delegates" if handed the same
+        // consumer object twice (verified in its bytecode) — which is exactly what crashed the game
+        // when Outline/Fill was on while holding a glinting item. Distinct wrappers over the same
+        // target buffer keep that union legal; both just write the same flat silhouette.
+        VertexConsumerProvider wrapper = l -> new ForcedColorVertexConsumer(base, argb);
+        self.renderItem(entity, item, mode, leftHanded, matrices, wrapper, light);
         if (realVcp instanceof VertexConsumerProvider.Immediate imm) imm.draw(layer);
     }
 
     /**
      * The swing/hit animation — always runs (both hands), purely additive on top of whatever
-     * Style set up. Default adds nothing (vanilla's own swing/equip bob plays normally). Every
-     * other choice relies on {@link CustomHand#freezeSwing()} having already frozen vanilla's own
-     * bob (see the two @Redirect hooks above) — otherwise vanilla's dip-then-return was still
-     * running underneath and fighting whatever got added here, which is why every non-Default
-     * style used to look broken. Simple/Spin rotate around the item's own mesh pivot (same
-     * {@link HandGeometryPivot} the Style rotation uses) so the item visibly stays in place and
-     * rotates rather than orbiting some off-center point.
+     * Style set up.
+     *
+     * <p><b>Default</b> deliberately adds nothing AND doesn't freeze vanilla ({@link
+     * CustomHand#freezeSwing()} returns false for it), so it's vanilla's normal animation,
+     * movement included. Every other choice freezes vanilla's own bob first (see the @Redirect
+     * hooks above) and then rotates the item IN PLACE around its own mesh pivot ({@link
+     * HandGeometryPivot}) — so the sword pivots where it stands instead of travelling through
+     * space. Use is the single exception that translates, and only straight down/back on Y.
+     *
+     * <p>Rotation sign is POSITIVE on X so the BLADE (the tip, pointing away up-forward) is what
+     * swings forward — vanilla's own swing uses the opposite sign, which visibly leads with the
+     * handle instead.
      */
     private static void applyAnimation(MatrixStack matrices, CustomHand ch, float swingProgress, ItemStack item) {
-        // Same hump vanilla's own applySwingOffset uses for its dominant rotation term (confirmed
-        // via bytecode: RotationAxis.POSITIVE_X.rotationDegrees(g * -80f), g = sin(sqrt(p)*pi)) —
-        // reused here on purpose so "Simple"/"Spin" tilt the same way vanilla's swing does, just
-        // without vanilla's other Y/Z "guard stance" terms mixed in (now that swingArm's own call
-        // is frozen, see the @Redirects above).
+        // Same 0→1→0 hump vanilla's own applySwingOffset uses (confirmed via bytecode:
+        // g = sin(sqrt(swingProgress) * pi)), so the timing/feel of the swing matches vanilla's
+        // even though the axis/sign and pivot here are ours.
         float g = MathHelper.sin(MathHelper.sqrt(swingProgress) * 3.1415927F);
         switch (ch.animation.index) {
-            case CustomHand.ANIM_DEFAULT -> {   // tilt LEFT and back, in place — the item never moves spatially
+            case CustomHand.ANIM_SIMPLE -> {   // blade tips forward and back, in place
                 Vector3f c = HandGeometryPivot.center(item);
                 matrices.translate(c.x, c.y, c.z);
-                matrices.multiply(RotationAxis.POSITIVE_Z.rotationDegrees(g * 45f));
+                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(g * 80f));
                 matrices.translate(-c.x, -c.y, -c.z);
             }
-            case CustomHand.ANIM_SIMPLE -> {   // forward tilt and back, in place
+            case CustomHand.ANIM_SPIN -> {   // full blade-first cartwheel, in place
                 Vector3f c = HandGeometryPivot.center(item);
                 matrices.translate(c.x, c.y, c.z);
-                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(g * -80f));
+                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(swingProgress * 360f));
                 matrices.translate(-c.x, -c.y, -c.z);
             }
-            case CustomHand.ANIM_SPIN -> {   // full forward cartwheel in place — same pivot, full turn
-                Vector3f c = HandGeometryPivot.center(item);
-                matrices.translate(c.x, c.y, c.z);
-                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(swingProgress * -360f));
-                matrices.translate(-c.x, -c.y, -c.z);
-            }
-            case CustomHand.ANIM_USE ->      // downward nudge and back ONLY — the one animation allowed to translate
+            case CustomHand.ANIM_USE ->      // straight down and back on Y, nothing else — no tilt, no X/Z drift
                     matrices.translate(0.0, -g * 0.16, 0.0);
-            default -> { /* No Animation */ }
+            default -> { /* Default (vanilla, unfrozen) / No Animation */ }
         }
     }
 
