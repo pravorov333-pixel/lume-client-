@@ -1,5 +1,6 @@
 package com.lume.client.nanovg;
 
+import com.lume.client.gui.Theme;
 import net.minecraft.client.MinecraftClient;
 import org.lwjgl.nanovg.NVGColor;
 import org.lwjgl.nanovg.NVGPaint;
@@ -103,6 +104,8 @@ public final class NanoVgRenderer {
         boolean depth   = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
         boolean cull    = GL11.glIsEnabled(GL11.GL_CULL_FACE);
         boolean scissor = GL11.glIsEnabled(GL11.GL_SCISSOR_TEST);
+        boolean stencil = GL11.glIsEnabled(GL11.GL_STENCIL_TEST);
+        boolean depthMaskOn = GL11.glGetBoolean(GL11.GL_DEPTH_WRITEMASK);
 
         try {
             if (scissor) GL11.glDisable(GL11.GL_SCISSOR_TEST);
@@ -121,6 +124,15 @@ public final class NanoVgRenderer {
             if (depth)   GL11.glEnable(GL11.GL_DEPTH_TEST); else GL11.glDisable(GL11.GL_DEPTH_TEST);
             if (cull)    GL11.glEnable(GL11.GL_CULL_FACE);  else GL11.glDisable(GL11.GL_CULL_FACE);
             if (scissor) GL11.glEnable(GL11.GL_SCISSOR_TEST);
+            // NanoVG's stencil-buffer stroke technique (NVG_STENCIL_STROKES) leaves the stencil
+            // test/func/mask in whatever state its last stroke pass used — MC never touches the
+            // stencil buffer itself, so an un-restored stencil test here silently discards terrain
+            // fragments on the next frame that doesn't call us (black ground right after a pin/stroke
+            // was drawn). Always put it back to MC's own baseline instead of just the enable bit.
+            if (stencil) GL11.glEnable(GL11.GL_STENCIL_TEST); else GL11.glDisable(GL11.GL_STENCIL_TEST);
+            GL11.glStencilMask(0xFF);
+            GL11.glStencilFunc(GL11.GL_ALWAYS, 0, 0xFF);
+            GL11.glDepthMask(depthMaskOn);
         }
     }
 
@@ -139,6 +151,10 @@ public final class NanoVgRenderer {
     public static void intersectScissor(long vg, float x, float y, float w, float h) { nvgIntersectScissor(vg, x, y, w, h); }
     public static void resetScissor(long vg) { nvgResetScissor(vg); }
     public static void rotate(long vg, float radians) { nvgRotate(vg, radians); }
+
+    /** Multiplies all fill/stroke alpha until the next {@link #restore} — wrap a whole panel's
+     *  draw calls in {@code save()}/{@code restore()} around this for a simple panel fade. */
+    public static void globalAlpha(long vg, float alpha) { nvgGlobalAlpha(vg, alpha); }
 
     /** Filled triangle (perfect AA edges). */
     public static void triangle(long vg, float x1, float y1, float x2, float y2, float x3, float y3, int argb) {
@@ -211,6 +227,23 @@ public final class NanoVgRenderer {
         }
     }
 
+    /** Strokes a connected polyline through the given points (e.g. a jagged lightning bolt) —
+     *  stroking rather than filling means this is safe even for self-crossing/zigzag shapes,
+     *  since (unlike a concave fill) it never needs NanoVG's stencil-buffer trick at all. */
+    public static void strokePolyline(long vg, float[] xs, float[] ys, int argb, float width) {
+        if (xs.length < 2) return;
+        try (MemoryStack s = MemoryStack.stackPush()) {
+            NVGColor col = NVGColor.malloc(s);
+            color(argb, col);
+            nvgBeginPath(vg);
+            nvgMoveTo(vg, xs[0], ys[0]);
+            for (int i = 1; i < xs.length; i++) nvgLineTo(vg, xs[i], ys[i]);
+            nvgStrokeColor(vg, col);
+            nvgStrokeWidth(vg, width);
+            nvgStroke(vg);
+        }
+    }
+
     /** Soft drop shadow / outer glow around a rounded rect (feathered box gradient). */
     public static void shadow(long vg, float x, float y, float w, float h, float r, float spread, int argb) {
         try (MemoryStack s = MemoryStack.stackPush()) {
@@ -255,29 +288,114 @@ public final class NanoVgRenderer {
         }
     }
 
-    /** Lume "Spark" mark: 3 nested diamonds — cream outer, mid-lavender, bright-lavender core. */
-    public static void logoMark(long vg, float x, float y, float s) {
-        float u = s / 100f;
-        float cx = x + 50 * u, cy = y + 50 * u;
-        int cream = 0xFFF5F0E6, acc2 = 0xFF8E7FC0, acc = 0xFFB7AAD9;
-        diamond(vg, cx, cy, 40 * u, cream);
-        diamond(vg, cx, cy, 24.8f * u, acc2);
-        diamond(vg, cx, cy, 10.4f * u, acc);
+    /** True circular soft glow via {@code nvgRadialGradient} — one smooth alpha falloff from
+     *  {@code innerR} to {@code outerR}, unlike stacking flat circles (which reads as rings, not
+     *  a blur). This is what actually matches a CSS {@code filter: blur(...)} glow blob look. */
+    public static void radialGlow(long vg, float cx, float cy, float innerR, float outerR, int rgb, int peakAlpha) {
+        try (MemoryStack s = MemoryStack.stackPush()) {
+            NVGColor c1 = NVGColor.malloc(s), c0 = NVGColor.malloc(s);
+            color(((peakAlpha & 0xFF) << 24) | (rgb & 0xFFFFFF), c1);
+            nvgRGBA((byte) 0, (byte) 0, (byte) 0, (byte) 0, c0);
+            NVGPaint p = NVGPaint.malloc(s);
+            nvgRadialGradient(vg, cx, cy, innerR, outerR, c1, c0, p);
+            nvgBeginPath(vg);
+            nvgRect(vg, cx - outerR, cy - outerR, outerR * 2, outerR * 2);
+            nvgFillPaint(vg, p);
+            nvgFill(vg);
+        }
     }
 
-    /** Filled diamond (rotated square) centred at (cx,cy) with vertex distance r. */
-    public static void diamond(long vg, float cx, float cy, float r, int argb) {
+    /** Lume "Sparkle" mark — big 4-point sparkle (bright→mid lavender gradient) + a smaller
+     *  sparkle (light lavender), the small one's bottom tip sitting directly above the big
+     *  one's right tip (x=72 for both). Same 0..100 coordinate space and exact path numbers
+     *  as the website/launcher's own SVG version (see their inline &lt;svg class="mark"&gt;
+     *  markup) — keep both in sync if this ever changes.
+     *
+     *  <p>Drawn as a triangle FAN from the shape's centre rather than one single concave
+     *  {@code nvgFill()} of the whole moveTo/quadTo outline — a sparkle's deep inward "waist"
+     *  between points is exactly the kind of sharp concave path NanoVG's stencil-based concave
+     *  fill can render as a solid bounding box instead of the actual silhouette on some
+     *  drivers/framebuffer setups (this is what showed up in-game as two plain squares).
+     *  Every wedge here is a plain triangle (always convex), so it can't hit that path at all. */
+    public static void logoMark(long vg, float x, float y, float s) {
+        float u = s / 100f;
+        // Follows the current accent (customisable via Customize Colors) instead of a fixed
+        // lavender — accent()/accent2() are the SAME two-stop gradient every other accent-filled
+        // pill/button in the UI uses; the small sparkle gets a lighter tint of accent(), same
+        // relationship the original fixed palette had (C9BEE0 is a lightened B7AAD9).
+        int bigC1 = Theme.accent(), bigC2 = Theme.accent2();
+        int smallC = 0xFF000000 | (Theme.colorLerp(Theme.accentRgb(), 0xFFFFFF, 0.25f) & 0xFFFFFF);
+        try (MemoryStack ms = MemoryStack.stackPush()) {
+            NVGColor c1 = NVGColor.malloc(ms), c2 = NVGColor.malloc(ms);
+            color(bigC1, c1); color(bigC2, c2);
+            NVGPaint p = NVGPaint.malloc(ms);
+            nvgLinearGradient(vg, x + 12 * u, y + 16 * u, x + 72 * u, y + 76 * u, c1, c2, p);
+            nvgFillPaint(vg, p);
+            fillSparkleFan(vg, x, y, u, 42, 46, 42, 16, 48.4f, 39.6f, 72, 46, 48.4f, 52.4f, 42, 76, 35.6f, 52.4f, 12, 46, 35.6f, 39.6f);
+        }
+        try (MemoryStack ms = MemoryStack.stackPush()) {
+            NVGColor col = NVGColor.malloc(ms);
+            color(smallC, col);
+            nvgFillColor(vg, col);
+            fillSparkleFan(vg, x, y, u, 72, 24, 72, 11, 74.8f, 21.2f, 85, 24, 74.8f, 26.8f, 72, 37, 69.2f, 26.8f, 59, 24, 69.2f, 21.2f);
+        }
+    }
+
+    /** Samples the sparkle's 4 quadratic-bezier "petals" (tip → control → tip, ×4) into a
+     *  dense perimeter point list, then fills consecutive (centre, point[i], point[i+1])
+     *  triangles — see {@link #logoMark}'s doc for why. Caller sets the fill colour/paint
+     *  before calling this (it only issues nvgBeginPath/Fill pairs, one per triangle). */
+    private static void fillSparkleFan(long vg, float x, float y, float u, float cxRaw, float cyRaw,
+                                        float t1x, float t1y, float c1x, float c1y,
+                                        float t2x, float t2y, float c2x, float c2y,
+                                        float t3x, float t3y, float c3x, float c3y,
+                                        float t4x, float t4y, float c4x, float c4y) {
+        List<float[]> pts = new ArrayList<>();
+        int steps = 8;
+        sampleQuad(pts, x, y, u, t1x, t1y, c1x, c1y, t2x, t2y, steps);
+        sampleQuad(pts, x, y, u, t2x, t2y, c2x, c2y, t3x, t3y, steps);
+        sampleQuad(pts, x, y, u, t3x, t3y, c3x, c3y, t4x, t4y, steps);
+        sampleQuad(pts, x, y, u, t4x, t4y, c4x, c4y, t1x, t1y, steps);
+        float cx = x + cxRaw * u, cy = y + cyRaw * u;
+        for (int i = 0; i < pts.size() - 1; i++) {
+            float[] a = pts.get(i), b = pts.get(i + 1);
+            // Each petal's own t=0/t=1 endpoints are shared with its neighbour (same tip
+            // coordinate sampled twice, once per adjacent sampleQuad call) — at those 3 seams
+            // a==b exactly, producing a zero-area (centre, P, P) triangle. NanoVG's AA fill
+            // computes a per-edge normal for the fringe by dividing by edge length; a
+            // zero-length edge there is a divide-by-zero -> NaN vertex, which crashed the
+            // Intel driver outright (access violation in igxelpicd64.dll) instead of just
+            // rendering wrong. Skipping degenerate triangles costs nothing visually.
+            if (Math.abs(a[0] - b[0]) < 1e-4f && Math.abs(a[1] - b[1]) < 1e-4f) continue;
+            nvgBeginPath(vg);
+            nvgMoveTo(vg, cx, cy);
+            nvgLineTo(vg, a[0], a[1]);
+            nvgLineTo(vg, b[0], b[1]);
+            nvgClosePath(vg);
+            nvgFill(vg);
+        }
+    }
+
+    private static void sampleQuad(List<float[]> out, float x, float y, float u,
+                                    float p0x, float p0y, float cpx, float cpy, float p1x, float p1y, int steps) {
+        for (int i = 0; i <= steps; i++) {
+            float t = i / (float) steps, mt = 1 - t;
+            float bx = mt * mt * p0x + 2 * mt * t * cpx + t * t * p1x;
+            float by = mt * mt * p0y + 2 * mt * t * cpy + t * t * p1y;
+            out.add(new float[]{ x + bx * u, y + by * u });
+        }
+    }
+
+    /** Stroked (outlined) ellipse — used for the Custom Hand rotation-gizmo rings. */
+    public static void strokeEllipse(long vg, float cx, float cy, float rx, float ry, float width, int argb) {
         try (MemoryStack s = MemoryStack.stackPush()) {
             NVGColor col = NVGColor.malloc(s);
             color(argb, col);
             nvgBeginPath(vg);
-            nvgMoveTo(vg, cx, cy - r);
-            nvgLineTo(vg, cx + r, cy);
-            nvgLineTo(vg, cx, cy + r);
-            nvgLineTo(vg, cx - r, cy);
-            nvgClosePath(vg);
-            nvgFillColor(vg, col);
-            nvgFill(vg);
+            nvgEllipse(vg, cx, cy, rx, ry);
+            nvgStrokeColor(vg, col);
+            nvgStrokeWidth(vg, width);
+            nvgStroke(vg);
         }
     }
 
@@ -306,6 +424,13 @@ public final class NanoVgRenderer {
             nvgTextAlign(vg, align);
             nvgText(vg, x, y, str);
         }
+    }
+
+    /** Shrinks the font just enough for {@code text} to fit {@code maxW}, never below {@code minSize}. */
+    public static float fitSize(long vg, float baseSize, String text, float maxW, float minSize) {
+        float w = textWidth(vg, baseSize, text);
+        if (w <= maxW || w <= 0) return baseSize;
+        return Math.max(minSize, baseSize * maxW / w);
     }
 
     public static float textWidth(long vg, float size, String str) {

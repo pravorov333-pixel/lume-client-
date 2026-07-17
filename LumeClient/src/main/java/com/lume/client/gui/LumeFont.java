@@ -1,6 +1,5 @@
 package com.lume.client.gui;
 
-import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.render.RenderLayer;
@@ -162,15 +161,15 @@ public final class LumeFont {
     }
 
     public static void draw(DrawContext ctx, String s, double x, double y, int color, float drawScale) {
-        float a = ((color >>> 24) & 0xFF) / 255f;
-        float r = ((color >> 16) & 0xFF) / 255f;
-        float g = ((color >> 8) & 0xFF) / 255f;
-        float b = (color & 0xFF) / 255f;
-        if (a == 0f) a = 1f;
-
-        ctx.draw(); // flush prior geometry while shader colour is still white
-        RenderSystem.enableBlend();
-        RenderSystem.setShaderColor(r, g, b, a);
+        // Tint via drawTexture's own `color` parameter (baked per-vertex), NOT
+        // RenderSystem.setShaderColor + a manual ctx.draw() flush — that global
+        // shader-state hack is exactly what caused the earlier "black box"
+        // artifacts on the vanilla hotbar (see UiTex, now disabled); any batched
+        // geometry that ends up flushed while the tint is still active — from
+        // this call or from something queued around it — paints solid black
+        // instead of its real texture. This overload avoids the shared state
+        // entirely, so nothing else on screen can be affected either way.
+        int argb = (color & 0xFF000000) == 0 ? (0xFF000000 | (color & 0xFFFFFF)) : color;
 
         var m = ctx.getMatrices();
         m.push();
@@ -180,15 +179,12 @@ public final class LumeFont {
         for (int i = 0; i < s.length(); i++) {
             int[] gl = glyphs.get(s.charAt(i));
             if (gl != null) {
-                ctx.drawTexture(RenderLayer::getGuiTextured, atlasId, penX, 0, (float) gl[0], (float) gl[1], cellW, cellH, atlasW, atlasH);
+                ctx.drawTexture(RenderLayer::getGuiTextured, atlasId, penX, 0, (float) gl[0], (float) gl[1], cellW, cellH, atlasW, atlasH, argb);
                 penX += gl[2];
             } else {
                 penX += FONT_PX / 2;
             }
         }
         m.pop();
-
-        ctx.draw(); // flush glyphs with the tint applied
-        RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
     }
 }

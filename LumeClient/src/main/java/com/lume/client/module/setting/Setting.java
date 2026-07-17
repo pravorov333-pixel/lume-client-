@@ -8,6 +8,10 @@ public abstract class Setting {
 
     public final String name;
 
+    /** True for settings that persist/load normally but are drawn by a module's own
+     *  custom UI block instead of the generic settings-list loop. */
+    public boolean hidden = false;
+
     protected Setting(String name) {
         this.name = name;
     }

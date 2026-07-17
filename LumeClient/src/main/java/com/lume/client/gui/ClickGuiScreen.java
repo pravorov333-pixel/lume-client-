@@ -6,6 +6,7 @@ import com.lume.client.module.Module;
 import com.lume.client.fthw.EventManager;
 import com.lume.client.fthw.ItemRule;
 import com.lume.client.fthw.ItemRules;
+import com.lume.client.nanovg.GlassRenderer;
 import com.lume.client.nanovg.NanoVgRenderer;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.TitleScreen;
@@ -20,9 +21,12 @@ import com.lume.client.module.setting.ColorSetting;
 import com.lume.client.module.setting.ModeSetting;
 import com.lume.client.module.setting.Setting;
 import com.lume.client.module.setting.SliderSetting;
+import com.lume.client.module.setting.StringSetting;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.item.ItemStack;
 import net.minecraft.text.Text;
+import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.RotationAxis;
 
 import java.util.ArrayList;
@@ -55,6 +59,7 @@ public class ClickGuiScreen extends Screen {
     private int[] segW = new int[0];
     private int segY = 0, segH = 0;
     private int[] themeBtn = new int[]{0, 0, 0, 0};
+    private int[] colorsBtn = new int[]{0, 0, 0, 0};
 
     // Per-element animation state: key -> {hover, enable, press 1→0, expand}.
     private final Map<String, float[]> anim = new HashMap<>();
@@ -103,8 +108,9 @@ public class ClickGuiScreen extends Screen {
     private Module bindingModule = null;             // module currently capturing a key
     private final List<Object[]> bindHits = new ArrayList<>();   // {Module, x, y, w, h}
 
-    // GUI text fields (Waypoints manager + search). focusedField: "search"/"name"/"coords"/null
+    // GUI text fields (Waypoints manager + search). focusedField: "search"/"name"/"coords"/"customstring"/null
     private String focusedField = null;
+    private StringSetting focusedString = null;   // which StringSetting "customstring" refers to
     private int[] searchBox = new int[]{0, 0, 0, 0};
     private String wpName = "", wpCoords = "";   // wpCoords: free-form "x y z" (space or comma separated)
     private final List<Object[]> wpHits = new ArrayList<>();      // {String kind, int x, y, w, h}
@@ -281,8 +287,8 @@ public class ClickGuiScreen extends Screen {
 
         // Header: logo + wordmark
         RenderUtil.drawLogo(ctx, x + 20 * S, y + 15 * S, 22 * S);
-        text(ctx, "lume", x + 20 * S + 28 * S, y + 17 * S, Theme.accent(), 0.6f);
-        text(ctx, "visuals", x + 20 * S + 28 * S + width("lume", 0.6f) + 6 * S, y + 18 * S, Theme.txtDim(), 0.6f);
+        text(ctx, "lume", x + 20 * S + 28 * S, y + 17 * S, Theme.txt(), 0.6f);
+        text(ctx, "visuals", x + 20 * S + 28 * S + width("lume", 0.6f) + 6 * S, y + 18 * S, Theme.accent(), 0.6f);
 
         // Theme toggle (right) — animated hover + press pulse
         int tbw = 56 * S, tbh = 22 * S, tbx = x + W - tbw - 20 * S, tby = y + 14 * S;
@@ -334,7 +340,7 @@ public class ClickGuiScreen extends Screen {
                 RenderUtil.gradientRoundedRect(ctx, cx2, segY, ww[i], segH, 12 * S, Theme.accent(), Theme.accent2());
             }
             int tw = width(tabTitle(i), 0.5f);
-            text(ctx, tabTitle(i), cx2 + (ww[i] - tw) / 2, segY + 8 * S, sel ? 0xFFFFFFFF : Theme.txtDim(), 0.5f);
+            text(ctx, tabTitle(i), cx2 + (ww[i] - tw) / 2, segY + 8 * S, sel ? Theme.activeText() : Theme.txtDim(), 0.5f);
             cx2 += ww[i];
         }
 
@@ -462,7 +468,7 @@ public class ClickGuiScreen extends Screen {
             if (pa > 0.01f) RenderUtil.roundedRect(ctx, dx, dy, dw, headerH, 11 * S, withAlpha(0xFFFFFF, Math.round(pa * 55)));
 
             // centred name (leave room on the right for the settings arrow)
-            int col2 = Theme.colorLerp(Theme.txt(), Theme.isDark() ? 0xFFFFFFFF : 0xFF3A3147, ea);
+            int col2 = Theme.colorLerp(Theme.txt(), Theme.activeText(), ea);
             int nameRightPad = m.hasSettings() ? 20 * S : 0;
             RenderUtil.textCentered(ctx, this.textRenderer, m.getName(), dx, dy, dw - nameRightPad, headerH, col2, 0.52f * scale);
 
@@ -526,7 +532,11 @@ public class ClickGuiScreen extends Screen {
 
         double cx = sw / 2.0, cy = sh / 2.0;
         float p = anim();
-        float total = (0.96f + 0.04f * p) * winScale * fitScale();
+        // Open transition used to zoom the window in from 96% — a visible size change, not
+        // wanted. Window is now always at its real size; a brief blur-dissolve (see the
+        // transitionOverlay call after this frame's NanoVG draw) carries the "just opened"
+        // feel instead.
+        float total = winScale * fitScale();
         this.curTotal = total;
         int mx = (int) Math.round((mouseX * S - winOffX * S - cx) / total + cx);
         int my = (int) Math.round((mouseY * S - winOffY * S - cy) / total + cy);
@@ -574,6 +584,24 @@ public class ClickGuiScreen extends Screen {
 
         final int fContentH = contentH, fVisH = visH;
 
+        // Window-local [x,y,W,H] → real on-screen framebuffer rect, for the raw-GL glass
+        // passes below (both need this outside any NanoVG frame — NanoVG's own transform
+        // only affects draws made through it).
+        double gsx0 = winOffX * S + cx + total * (x - cx), gsy0 = winOffY * S + cy + total * (y - cy);
+        double gsx1 = winOffX * S + cx + total * (x + W - cx), gsy1 = winOffY * S + cy + total * (y + H - cy);
+        final int panelSx = (int) Math.round(gsx0), panelSy = (int) Math.round(gsy0);
+        final int panelSw = (int) Math.round(gsx1 - gsx0), panelSh = (int) Math.round(gsy1 - gsy0);
+        final float panelSr = r * total;
+
+        // Premium Glass backdrop — real captured+blurred+refracted world/HUD behind the
+        // panel, sampled BEFORE the panel exists (raw GL, must happen outside any NanoVG
+        // frame). The translucent gradient fill drawn just below then tints it, same as
+        // it always tinted whatever was there before.
+        if (Theme.getGlassStyle() == 1) {
+            GlassRenderer.panel(panelSx, panelSy, panelSw, panelSh, panelSr, Theme.getGlassBlur(), Theme.getGlassDistort());
+        }
+
+        ctx.draw();   // flush DrawContext's own queued geometry (HudRenderer.render() etc.) before raw-GL NanoVG draws
         NanoVgRenderer.frame(vg -> {
             NanoVgRenderer.translate(vg, winOffX * S, winOffY * S);
             NanoVgRenderer.translate(vg, (float) cx, (float) cy);
@@ -581,7 +609,7 @@ public class ClickGuiScreen extends Screen {
             NanoVgRenderer.translate(vg, (float) -cx, (float) -cy);
 
             // ---- top nav bar (above the glass panel, in window-local coords) ----
-            drawTopNavNvg(vg, x, y, W, S, mxF, myF);
+            drawTopNavNvg(vg, x, y, W, S, mxF, myF, dt);
 
             // panel: soft dark shadow + faint accent glow + gradient glass + rim
             NanoVgRenderer.shadow(vg, x, y, W, H, r, 22 * S, 0x70000000);
@@ -594,8 +622,8 @@ public class ClickGuiScreen extends Screen {
             float w1w = NanoVgRenderer.textWidth(vg, hfs, "lume ");
             float w2w = NanoVgRenderer.textWidth(vg, hfs, "visuals");
             float hsx = x + W / 2f - (w1w + w2w) / 2f;
-            NanoVgRenderer.text(vg, hsx, hcy, hfs, Theme.accent(), NanoVgRenderer.ALIGN_MIDDLE, "lume");
-            NanoVgRenderer.text(vg, hsx + w1w, hcy, hfs, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, "visuals");
+            NanoVgRenderer.text(vg, hsx, hcy, hfs, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, "lume");
+            NanoVgRenderer.text(vg, hsx + w1w, hcy, hfs, Theme.accent(), NanoVgRenderer.ALIGN_MIDDLE, "visuals");
 
             // logo mark — top-left corner
             int logoS = 22 * S;
@@ -603,15 +631,25 @@ public class ClickGuiScreen extends Screen {
             NanoVgRenderer.bloom(vg, logoX, logoY, logoS, logoS, 6 * S, 8 * S, Theme.accentRgb(), 0x66);
             nvgLogo(vg, logoX, logoY, logoS);
 
-            // theme toggle (top-right)
-            int tbw = 56 * S, tbh = 22 * S, tbx = x + W - tbw - 20 * S, tby = y + 14 * S;
+            // Theme toggle (top-right) + Customize Colors — small square icon buttons,
+            // same shape/animation the launcher uses everywhere theme switching appears.
+            // Drawing itself lives in ThemeIcons so ClickGUI, the sub-screens, and the
+            // title-screen popover can never visually drift from each other.
+            int tbw = 22 * S, tbh = 22 * S, tby = y + 14 * S;
+            int tbx = x + W - tbw - 20 * S;
             boolean tbHov = inside(mxF, myF, tbx, tby, tbw, tbh);
             float[] ta = animFor("_theme");
             ta[0] = approach(ta[0], tbHov ? 1f : 0f, 12f, dt);
-            NanoVgRenderer.roundedRect(vg, tbx, tby, tbw, tbh, 11 * S, Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), ta[0]));
-            NanoVgRenderer.strokeRoundedRect(vg, tbx + 0.5f * S, tby + 0.5f * S, tbw - S, tbh - S, 11 * S, S, Theme.rim());
-            NanoVgRenderer.text(vg, tbx + tbw / 2f, tby + tbh / 2f, 10 * S, Theme.txt(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, Theme.isDark() ? "Dark" : "Light");
+
+            int cbw = 22 * S, cbh = 22 * S, cbx = tbx - cbw - 6 * S, cby = tby;
+            boolean cbHov = inside(mxF, myF, cbx, cby, cbw, cbh);
+            float[] ca2 = animFor("_colors");
+            ca2[0] = approach(ca2[0], cbHov ? 1f : 0f, 12f, dt);
+
+            ThemeIcons.drawTheme(vg, tbx, tby, S, ta[0]);
+            ThemeIcons.drawColors(vg, cbx, cby, S, ca2[0]);
             themeBtn = new int[]{ tbx, tby, tbw, tbh };
+            colorsBtn = new int[]{ cbx, cby, cbw, cbh };
 
             // search
             int sx = x + 20 * S, sy = y + 46 * S, swid = W - 40 * S, shei = 26 * S;
@@ -652,7 +690,7 @@ public class ClickGuiScreen extends Screen {
             }
             for (int i = 0; i < tabs; i++) {
                 boolean sel = i == selectedCat && search.isEmpty();
-                NanoVgRenderer.text(vg, segX[i] + segW[i] / 2f, segY + segH / 2f, tFont, sel ? 0xFFFFFFFF : Theme.txtDim(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, tabTitle(i));
+                NanoVgRenderer.text(vg, segX[i] + segW[i] / 2f, segY + segH / 2f, tFont, sel ? Theme.activeText() : Theme.txtDim(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, tabTitle(i));
             }
 
             if (fCards) {
@@ -694,7 +732,7 @@ public class ClickGuiScreen extends Screen {
                 NanoVgRenderer.roundedRect(vg, dx, dy, dw, dh, 11 * S, fill);
                 NanoVgRenderer.strokeRoundedRect(vg, dx + 0.5f * S, dy + 0.5f * S, dw - S, dh - S, 11 * S, S, withAlpha(0xFFFFFF, Math.round(0x30 + 0x40 * ha)));
 
-                int nameCol = Theme.colorLerp(Theme.txt(), Theme.isDark() ? 0xFFFFFFFF : 0xFF3A3147, ea);
+                int nameCol = Theme.colorLerp(Theme.txt(), Theme.activeText(), ea);
                 int namePad = m.hasSettings() ? 20 * S : 0;
                 NanoVgRenderer.text(vg, dx + (dw - namePad) / 2f, dy + headerH / 2f, 12 * S, nameCol, NanoVgRenderer.ALIGN_CENTER_MIDDLE, m.getName());
                 if (ea > 0.02f) NanoVgRenderer.circle(vg, dx + dw - 11 * S, dy + 9 * S, Math.max(1.5f, 2.5f * S * ea), withAlpha(Theme.accentRgb(), Math.round(255 * ea)));
@@ -755,6 +793,11 @@ public class ClickGuiScreen extends Screen {
                 NanoVgRenderer.roundedRect(vg, x + W - o - 2 * S, y + H - 5 * S, o, 2 * S, S, gripHov ? Theme.accent() : Theme.txtDim());
             }
         });
+
+        // Blur-dissolve open transition — replaces the old scale-up-from-96% pop (which
+        // visibly changed the window's size). Blur strength ramps 1→0 as p goes 0→1 over
+        // anim()'s ~200ms, so it reads as "coming into focus" rather than growing.
+        if (p < 1f) GlassRenderer.transitionOverlay(panelSx, panelSy, panelSw, panelSh, (1f - p) * 0.8f, 1f - p);
     }
 
     /** Lume logo mark: half-square (triangle) with a circle centred inside. */
@@ -771,17 +814,54 @@ public class ClickGuiScreen extends Screen {
         NanoVgRenderer.restore(vg);
     }
 
+    /** Custom Hand's Pos X/Y/Z/Scale sliders: only the currently-selected hand's (Right/Left
+     *  tab) are shown — Pos/Scale always work regardless of Custom/Style, so unlike before
+     *  they are NOT hidden just because Style owns the right hand's rotation. (Rotation pivot
+     *  is no longer a slider at all — see HandGeometryPivot, computed from the item's own
+     *  mesh.) */
+    private boolean hideCustomHandRightPos(Module m, Setting s) {
+        if (!(m instanceof com.lume.client.module.modules.render.CustomHand ch)) return false;
+        boolean isRightPos = s == ch.rPosX || s == ch.rPosY || s == ch.rPosZ || s == ch.rScale;
+        boolean isLeftPos  = s == ch.lPosX || s == ch.lPosY || s == ch.lPosZ || s == ch.lScale;
+        boolean rightTabActive = ch.hand.index == 0;
+        if (isRightPos) return !rightTabActive;
+        if (isLeftPos) return rightTabActive;
+        return false;
+    }
+
     /** Height of a module's NanoVG settings panel (bool/slider/mode/color only). */
     private int panelHeightNvg(Module m, int S) {
         int h = 4 * S;
         if (m instanceof CustomCrosshair) h += PREVIEW_H * S + 4 * S;
-        for (Setting s : m.getSettings()) h += settingHeight(s, S);
+        for (Setting s : m.getSettings()) { if (!s.hidden && !hideCustomHandRightPos(m, s)) h += settingHeight(s, S); }
         if (m instanceof com.lume.client.module.modules.performance.JvmOptimizer) h += 78 * S;
         if (m instanceof com.lume.client.module.modules.render.HitSound) {
             int n = com.lume.client.audio.CustomAudioPlayer.list("hitsound").length;
             h += 16 * S + 26 * S + Math.max(1, n) * 18 * S;
         }
+        if (m instanceof com.lume.client.module.modules.render.WorldParticles wp && wp.useMyParticle.value) {
+            int n = com.lume.client.fx.ParticleTexture.list(com.lume.client.module.modules.render.WorldParticles.FOLDER).length;
+            h += 16 * S + 26 * S + Math.max(1, n) * 18 * S;
+        }
+        if (m instanceof com.lume.client.module.modules.render.HitParticles hpz && hpz.useMyParticle.value) {
+            int n = com.lume.client.fx.ParticleTexture.list(com.lume.client.module.modules.render.HitParticles.FOLDER).length;
+            h += 16 * S + 26 * S + Math.max(1, n) * 18 * S;
+        }
         if (m instanceof com.lume.client.module.modules.visual.Hud) h += 26 * S;
+        if (m instanceof com.lume.client.module.modules.render.CustomHand ch) {
+            h += 20 * S + 4 * S;   // hand tabs
+            h += 15 * S + 4 * S;   // Idle/Sprint Sway toggle
+            boolean showStyle = ch.hand.index == 0;
+            h += (showStyle ? 2 : 1) * (15 * S + 4 * S);   // Style (right hand only) + Animation (always)
+            if (showStyle && ch.style.index == com.lume.client.module.modules.render.CustomHand.STYLE_CUSTOM)
+                h += 3 * (15 * S + 4 * S);   // Custom Rot X/Y/Z sliders
+            h += 2 * (15 * S + 4 * S);   // Outline toggle + Fill mode
+            if (ch.outline.value || ch.fill.index == 1)
+                h += 15 * S + (ch.handColor == openColor ? PAL_H * S : 0) + 4 * S;   // shared Outline/Fill colour
+            h += 15 * S + 4 * S;   // copy-pose text row
+            h += 22 * S + 4 * S;   // paste button
+            h += 26 * S;           // reset button
+        }
         if (m instanceof Waypoints) h += wpManagerHeight(S);
         return h + 8 * S;
     }
@@ -800,10 +880,12 @@ public class ClickGuiScreen extends Screen {
             yy += ph + 4 * S;
         }
         for (Setting s : m.getSettings()) {
+            if (s.hidden || hideCustomHandRightPos(m, s)) continue;
             int h = settingHeight(s, S);
             if (s instanceof BoolSetting bs) renderBoolNvg(vg, bs, sx, yy, swid, h, S);
             else if (s instanceof SliderSetting ss) renderSliderNvg(vg, ss, sx, yy, swid, h, S);
             else if (s instanceof ModeSetting ms) renderModeNvg(vg, ms, sx, yy, swid, h, S);
+            else if (s instanceof StringSetting ts) renderStringNvg(vg, ts, sx, yy, swid, h, S);
             else if (s instanceof ColorSetting cs) renderColorNvg(vg, cs, sx, yy, swid, S);
             yy += h;
         }
@@ -838,6 +920,12 @@ public class ClickGuiScreen extends Screen {
                 }
             }
         }
+        if (m instanceof com.lume.client.module.modules.render.WorldParticles wp2 && wp2.useMyParticle.value) {
+            yy = renderParticlePickerNvg(vg, com.lume.client.module.modules.render.WorldParticles.FOLDER, "world", wp2.selectedFile, sx, yy, swid, S);
+        }
+        if (m instanceof com.lume.client.module.modules.render.HitParticles hp2 && hp2.useMyParticle.value) {
+            yy = renderParticlePickerNvg(vg, com.lume.client.module.modules.render.HitParticles.FOLDER, "hit", hp2.selectedFile, sx, yy, swid, S);
+        }
         if (m instanceof com.lume.client.module.modules.visual.Hud) {
             int bh = 22 * S;
             NanoVgRenderer.roundedRect(vg, sx, yy, swid, bh, 8 * S, withAlpha(0xFFE05656, 0x33));
@@ -845,6 +933,84 @@ public class ClickGuiScreen extends Screen {
             NanoVgRenderer.text(vg, sx + swid / 2f, yy + bh / 2f, 9.5f * S, 0xFFE05656, NanoVgRenderer.ALIGN_CENTER_MIDDLE,
                     com.lume.client.Lang.tUI("Reset all HUD elements"));
             SHit rh = new SHit(); rh.s = null; rh.kind = 10; rh.x = sx; rh.y = yy; rh.w = swid; rh.h = bh; sHits.add(rh);
+            yy += bh;
+        }
+        if (m instanceof com.lume.client.module.modules.render.CustomHand ch) {
+            // --- hand tabs: Right | Left — picks which hand's Pos/Scale sliders show above ---
+            int tabH = 20 * S, tabGap = 4 * S;
+            int tabW = (swid - tabGap) / 2;
+            String[] tabNames = { com.lume.client.Lang.tUI("Right"), com.lume.client.Lang.tUI("Left") };
+            for (int i = 0; i < 2; i++) {
+                int tx = sx + i * (tabW + tabGap);
+                boolean sel = ch.hand.index == i;
+                NanoVgRenderer.roundedRect(vg, tx, yy, tabW, tabH, 7 * S, sel ? Theme.accent() : Theme.glassRow());
+                NanoVgRenderer.text(vg, tx + tabW / 2f, yy + tabH / 2f, 9 * S, sel ? Theme.activeText() : Theme.txtDim(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, tabNames[i]);
+                SHit th = new SHit(); th.s = ch.hand; th.kind = 15; th.channel = i; th.x = tx; th.y = yy; th.w = tabW; th.h = tabH; sHits.add(th);
+            }
+            yy += tabH + 4 * S;
+
+            // --- Idle/Sprint Sway on/off ---
+            renderBoolNvg(vg, ch.sway, sx, yy, swid, 15 * S, S);
+            yy += 15 * S + 4 * S;
+
+            // --- Style (right hand only) — named resting pose — then Animation, always shown
+            //     (it swings/freezes the item regardless of which Style is picked). ---
+            if (ch.hand.index == 0) {
+                renderModeNvg(vg, ch.style, sx, yy, swid, 15 * S, S);
+                yy += 15 * S + 4 * S;
+                if (ch.style.index == com.lume.client.module.modules.render.CustomHand.STYLE_CUSTOM) {
+                    renderSliderNvg(vg, ch.rRotX, sx, yy, swid, 15 * S, S); yy += 15 * S + 4 * S;
+                    renderSliderNvg(vg, ch.rRotY, sx, yy, swid, 15 * S, S); yy += 15 * S + 4 * S;
+                    renderSliderNvg(vg, ch.rRotZ, sx, yy, swid, 15 * S, S); yy += 15 * S + 4 * S;
+                }
+            }
+            renderModeNvg(vg, ch.animation, sx, yy, swid, 15 * S, S);
+            yy += 15 * S + 4 * S;
+
+            // --- Outline (enlarged rim behind the item) / Fill (recolour) — both hands ---
+            renderBoolNvg(vg, ch.outline, sx, yy, swid, 15 * S, S);
+            yy += 15 * S + 4 * S;
+            renderModeNvg(vg, ch.fill, sx, yy, swid, 15 * S, S);
+            yy += 15 * S + 4 * S;
+            if (ch.outline.value || ch.fill.index == 1) {
+                renderColorNvg(vg, ch.handColor, sx, yy, swid, S);
+                yy += 15 * S + (ch.handColor == openColor ? PAL_H * S : 0) + 4 * S;
+            }
+
+            // --- copy current pose as text (paste it back to build a new named Style from it) ---
+            {
+                int copyH = 15 * S;
+                int copyBtnW = 44 * S;
+                int textW = swid - copyBtnW - 4 * S;
+                NanoVgRenderer.roundedRect(vg, sx, yy, textW, copyH, 6 * S, Theme.glassRow());
+                String exportStr = ch.exportText();
+                float fitSize = NanoVgRenderer.fitSize(vg, 8 * S, exportStr, textW - 10 * S, 5.5f * S);
+                NanoVgRenderer.text(vg, sx + 6 * S, yy + copyH / 2f, fitSize, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, exportStr);
+                int copyBtnX = sx + textW + 4 * S;
+                NanoVgRenderer.roundedRect(vg, copyBtnX, yy, copyBtnW, copyH, 6 * S, Theme.glassHov());
+                NanoVgRenderer.text(vg, copyBtnX + copyBtnW / 2f, yy + copyH / 2f, 8 * S, Theme.accent(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Copy"));
+                SHit ch19 = new SHit(); ch19.s = null; ch19.kind = 19; ch19.x = copyBtnX; ch19.y = yy; ch19.w = copyBtnW; ch19.h = copyH; sHits.add(ch19);
+                yy += copyH + 4 * S;
+            }
+
+            // --- paste a pose (own text, or one you copied earlier) from the clipboard ---
+            {
+                int pasteH = 22 * S;
+                NanoVgRenderer.roundedRect(vg, sx, yy, swid, pasteH, 8 * S, Theme.glassHov());
+                NanoVgRenderer.strokeRoundedRect(vg, sx + 0.5f * S, yy + 0.5f * S, swid - S, pasteH - S, 8 * S, S, Theme.rim());
+                NanoVgRenderer.text(vg, sx + swid / 2f, yy + pasteH / 2f, 9.5f * S, Theme.accent(), NanoVgRenderer.ALIGN_CENTER_MIDDLE,
+                        com.lume.client.Lang.tUI("Paste"));
+                SHit ph20 = new SHit(); ph20.s = null; ph20.kind = 20; ph20.x = sx; ph20.y = yy; ph20.w = swid; ph20.h = pasteH; sHits.add(ph20);
+                yy += pasteH + 4 * S;
+            }
+
+            // --- reset ---
+            int bh = 22 * S;
+            NanoVgRenderer.roundedRect(vg, sx, yy, swid, bh, 8 * S, withAlpha(0xFFE05656, 0x33));
+            NanoVgRenderer.strokeRoundedRect(vg, sx + 0.5f * S, yy + 0.5f * S, swid - S, bh - S, 8 * S, S, withAlpha(0xFFE05656, 0x66));
+            NanoVgRenderer.text(vg, sx + swid / 2f, yy + bh / 2f, 9.5f * S, 0xFFE05656, NanoVgRenderer.ALIGN_CENTER_MIDDLE,
+                    com.lume.client.Lang.tUI("Reset to default"));
+            SHit rh = new SHit(); rh.s = null; rh.kind = 12; rh.x = sx; rh.y = yy; rh.w = swid; rh.h = bh; sHits.add(rh);
             yy += bh;
         }
         if (m instanceof Waypoints) renderWaypointManagerNvg(vg, sx, yy + 4 * S, swid, S);
@@ -863,12 +1029,13 @@ public class ClickGuiScreen extends Screen {
         fieldNvg(vg, "coords", fx, yy, coordsW, rh, "x y z", S);
         int addX = sx + swid - addW;
         NanoVgRenderer.gradientRoundedRect(vg, addX, yy, addW, rh, 5 * S, Theme.accent(), Theme.accent2());
-        NanoVgRenderer.text(vg, addX + addW / 2f, yy + rh / 2f, 9 * S, 0xFFFFFFFF, NanoVgRenderer.ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Add"));
+        NanoVgRenderer.text(vg, addX + addW / 2f, yy + rh / 2f, 9 * S, Theme.activeText(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Add"));
         wpHits.add(new Object[]{ "add", addX, yy, addW, rh });
 
         int ly = yy + 18 * S + 6 * S;
-        for (int i = 0; i < Waypoints.list.size(); i++) {
-            Waypoints.WP w = Waypoints.list.get(i);
+        List<Waypoints.WP> vis = Waypoints.visible();
+        for (int i = 0; i < vis.size(); i++) {
+            Waypoints.WP w = vis.get(i);
             int ry = ly + i * 16 * S, hh = 14 * S;
             NanoVgRenderer.roundedRect(vg, sx, ry, swid, hh, 4 * S, Theme.glassRow());
             NanoVgRenderer.roundedRect(vg, sx + 4 * S, ry + (hh - 8 * S) / 2, 8 * S, 8 * S, 2 * S, w.color);
@@ -879,6 +1046,40 @@ public class ClickGuiScreen extends Screen {
             NanoVgRenderer.text(vg, dx, ry + hh / 2f, 9 * S, 0xFFE05656, NanoVgRenderer.ALIGN_MIDDLE, "✕");
             wpHits.add(new Object[]{ "del:" + i, dx - 3 * S, ry, 16 * S, hh });
         }
+    }
+
+    /** "My Particles" — drop-in .png picker (Open Folder button + selectable file rows),
+     *  same idea as HitSound's "My Sounds". {@code tagPrefix} ("world"/"hit") disambiguates
+     *  which module's folder/selection a click belongs to (see handleSettingClick kinds 16/17).
+     *  Returns the y position after everything this drew. */
+    private int renderParticlePickerNvg(long vg, String folderKey, String tagPrefix, String selectedFile, int sx, int yy, int swid, int S) {
+        NanoVgRenderer.text(vg, sx, yy + 8 * S, 9 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, com.lume.client.Lang.tUI("My Particles"));
+        yy += 16 * S;
+        int bh = 22 * S;
+        NanoVgRenderer.roundedRect(vg, sx, yy, swid, bh, 8 * S, Theme.glassHov());
+        NanoVgRenderer.strokeRoundedRect(vg, sx + 0.5f * S, yy + 0.5f * S, swid - S, bh - S, 8 * S, S, Theme.rim());
+        NanoVgRenderer.text(vg, sx + swid / 2f, yy + bh / 2f, 9.5f * S, Theme.txt(), NanoVgRenderer.ALIGN_CENTER_MIDDLE,
+                com.lume.client.Lang.tUI("Open Particles Folder"));
+        SHit fh = new SHit(); fh.s = null; fh.kind = 16; fh.tag = folderKey; fh.x = sx; fh.y = yy; fh.w = swid; fh.h = bh; sHits.add(fh);
+        yy += bh + 4 * S;
+
+        java.io.File[] files = com.lume.client.fx.ParticleTexture.list(folderKey);
+        if (files.length == 0) {
+            NanoVgRenderer.text(vg, sx, yy + 8 * S, 8.5f * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE,
+                    com.lume.client.Lang.tUI("No files yet — drop a .png above"));
+            yy += 18 * S;
+        } else {
+            for (java.io.File f : files) {
+                boolean sel = f.getName().equals(selectedFile) || (selectedFile == null && f == files[0]);
+                int rh = 16 * S;
+                NanoVgRenderer.roundedRect(vg, sx, yy, swid, rh, 5 * S, sel ? withAlpha(Theme.accentRgb(), 0x44) : Theme.glassRow());
+                NanoVgRenderer.text(vg, sx + 8 * S, yy + rh / 2f, 8.5f * S, sel ? Theme.accent() : Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, f.getName());
+                SHit rhit = new SHit(); rhit.s = null; rhit.kind = 17; rhit.tag = tagPrefix + ":" + f.getName();
+                rhit.x = sx; rhit.y = yy; rhit.w = swid; rhit.h = rh; sHits.add(rhit);
+                yy += rh + 2 * S;
+            }
+        }
+        return yy;
     }
 
     private void fieldNvg(long vg, String id, int x, int y, int w, int h, String placeholder, int S) {
@@ -981,12 +1182,37 @@ public class ClickGuiScreen extends Screen {
         SHit hit = new SHit(); hit.s = ms; hit.kind = 4; hit.x = x; hit.y = y; hit.w = w; hit.h = h; sHits.add(hit);
     }
 
+    private void renderStringNvg(long vg, StringSetting ts, int x, int y, int w, int h, int S) {
+        NanoVgRenderer.text(vg, x, y + h / 2f, 10 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, com.lume.client.Lang.tUI(ts.name));
+        boolean foc = "customstring".equals(focusedField) && focusedString == ts;
+        int bw = Math.round(w * 0.55f), bh = 11 * S, bx = x + w - bw, by = y + (h - bh) / 2;
+        NanoVgRenderer.roundedRect(vg, bx, by, bw, bh, 4 * S, foc ? Theme.glassHov() : Theme.glassRow());
+        NanoVgRenderer.strokeRoundedRect(vg, bx + 0.5f * S, by + 0.5f * S, bw - S, bh - S, 4 * S, S, foc ? Theme.accent() : Theme.rim());
+        String shown = ts.value + (foc ? "|" : "");
+        NanoVgRenderer.text(vg, bx + 6 * S, by + bh / 2f, 9 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, shown);
+        SHit hit = new SHit(); hit.s = ts; hit.kind = 18; hit.x = bx; hit.y = y; hit.w = bw; hit.h = h; sHits.add(hit);
+    }
+
     private void renderColorNvg(long vg, ColorSetting cs, int x, int y, int w, int S) {
         int row = 15 * S;
         NanoVgRenderer.text(vg, x, y + row / 2f, 10 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, com.lume.client.Lang.tUI(cs.name));
-        // colour swatch button (click → open palette)
+
+        // "Accent" toggle pill — follow the theme accent instead of a fixed RGB.
+        // Without this, a ColorSetting that got saved with accent=true (e.g. from
+        // an older build) has NO way back to a custom colour: the swatch/HSV/hex
+        // below only ever write r/g/b, which onAttack-style readers ignore whenever
+        // accent is true — exactly the "picking a colour does nothing" bug.
         int sw = 30 * S, sh = 11 * S, sxb = x + w - sw, syb = y + (row - sh) / 2;
-        NanoVgRenderer.roundedRect(vg, sxb, syb, sw, sh, 4 * S, 0xFF000000 | cs.rgb());
+        int aw = 42 * S, agap = 4 * S, axb = sxb - agap - aw;
+        boolean acc = cs.accent;
+        NanoVgRenderer.roundedRect(vg, axb, syb, aw, sh, 4 * S, acc ? withAlpha(Theme.accentRgb(), 0x55) : Theme.glassRow());
+        NanoVgRenderer.strokeRoundedRect(vg, axb + 0.5f * S, syb + 0.5f * S, aw - S, sh - S, 4 * S, S, acc ? Theme.accent() : Theme.rim());
+        NanoVgRenderer.text(vg, axb + aw / 2f, syb + sh / 2f, 7.2f * S, acc ? Theme.accent() : Theme.txtDim(),
+                NanoVgRenderer.ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Accent"));
+        SHit accHit = new SHit(); accHit.s = cs; accHit.kind = 13; accHit.x = axb; accHit.y = y; accHit.w = aw; accHit.h = row; sHits.add(accHit);
+
+        // colour swatch button (click → open palette)
+        NanoVgRenderer.roundedRect(vg, sxb, syb, sw, sh, 4 * S, 0xFF000000 | (acc ? Theme.accentRgb() & 0xFFFFFF : cs.rgb()));
         NanoVgRenderer.strokeRoundedRect(vg, sxb + 0.5f * S, syb + 0.5f * S, sw - S, sh - S, 4 * S, S,
                 cs == openColor ? Theme.accent() : Theme.rim());
         SHit open = new SHit(); open.s = cs; open.kind = 2; open.x = sxb; open.y = y; open.w = sw; open.h = row; sHits.add(open);
@@ -1069,6 +1295,7 @@ public class ClickGuiScreen extends Screen {
         if (openColor == null) return;
         int c = hsvToRgb(pickH, pickS, pickV);
         openColor.r = (c >> 16) & 0xFF; openColor.g = (c >> 8) & 0xFF; openColor.b = c & 0xFF;
+        openColor.accent = false;   // dragging the picker means "I want this exact colour", not the theme accent
     }
 
     private void updatePicker(SHit h, double mx, double my) {
@@ -1088,6 +1315,7 @@ public class ClickGuiScreen extends Screen {
         try {
             int c = Integer.parseInt(colorHex, 16);
             openColor.r = (c >> 16) & 0xFF; openColor.g = (c >> 8) & 0xFF; openColor.b = c & 0xFF;
+            openColor.accent = false;
             openPicker(openColor);
         } catch (NumberFormatException ignored) {}
     }
@@ -1131,7 +1359,7 @@ public class ClickGuiScreen extends Screen {
             String kd = binding ? "нажми клавишу…" : keyDisplay(m.getKey());
             int chipW = (int) NanoVgRenderer.textWidth(vg, 10 * S, kd) + 16 * S, chipX = rx + listW - chipW - 8 * S, chipY = ry + (rowH - 15 * S) / 2;
             NanoVgRenderer.roundedRect(vg, chipX, chipY, chipW, 15 * S, 7 * S, binding ? withAlpha(Theme.accentRgb(), 0x66) : Theme.pillOff());
-            NanoVgRenderer.text(vg, chipX + chipW / 2f, chipY + 7.5f * S, 10 * S, binding ? 0xFFFFFFFF : Theme.accent(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, kd);
+            NanoVgRenderer.text(vg, chipX + chipW / 2f, chipY + 7.5f * S, 10 * S, binding ? Theme.activeText() : Theme.accent(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, kd);
             String md = m.getBindMode() == Module.BindMode.HOLD ? "HOLD" : "TOGGLE";
             int modeW = (int) NanoVgRenderer.textWidth(vg, 9 * S, md) + 12 * S, modeX = chipX - modeW - 6 * S;
             NanoVgRenderer.roundedRect(vg, modeX, chipY, modeW, 15 * S, 7 * S, Theme.pillOff());
@@ -1169,7 +1397,7 @@ public class ClickGuiScreen extends Screen {
             int bh = 32 * S, by = gy + 20 * S;
             NanoVgRenderer.shadow(vg, sx, by, w, bh, 11 * S, 12 * S, withAlpha(Theme.accentRgb(), 0x55));
             NanoVgRenderer.gradientRoundedRect(vg, sx, by, w, bh, 11 * S, Theme.accent(), Theme.accent2());
-            NanoVgRenderer.text(vg, sx + w / 2f, by + bh / 2f, 13 * S, 0xFFFFFFFF, NanoVgRenderer.ALIGN_CENTER_MIDDLE, "▶  FunTime");
+            NanoVgRenderer.text(vg, sx + w / 2f, by + bh / 2f, 13 * S, Theme.activeText(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, "▶  FunTime");
             serverHits.add(new Object[]{ "connect:funtime", sx, by, w, bh, null });
             return;
         }
@@ -1211,7 +1439,7 @@ public class ClickGuiScreen extends Screen {
                         String kd = cap ? "клавиша…" : keyDisplay(bs.key);
                         int chipW = (int) NanoVgRenderer.textWidth(vg, 9 * S, kd) + 12 * S, chipX = px - chipW - 8 * S;
                         NanoVgRenderer.roundedRect(vg, chipX, py, chipW, ph, ph / 2f, cap ? withAlpha(Theme.accentRgb(), 0x66) : Theme.pillOff());
-                        NanoVgRenderer.text(vg, chipX + chipW / 2f, py + ph / 2f, 9 * S, cap ? 0xFFFFFFFF : Theme.accent(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, kd);
+                        NanoVgRenderer.text(vg, chipX + chipW / 2f, py + ph / 2f, 9 * S, cap ? Theme.activeText() : Theme.accent(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, kd);
                         serverHits.add(new Object[]{ "subBind", chipX, py, chipW, ph, bs });
                     }
                 }
@@ -1228,7 +1456,7 @@ public class ClickGuiScreen extends Screen {
                     int left = -1;
                     for (EventManager.Active a : EventManager.active) if (a.rule == r) { left = a.secondsLeft(); break; }
                     int col; String line;
-                    if (left >= 0) { col = 0xFF6FCF7F; line = "● " + r.name + " — идёт, " + left + "с"; }
+                    if (left >= 0) { col = 0xFF6FCF7F; line = left > 0 ? "● " + r.name + " — идёт, " + left + "с" : "● " + r.name + " — идёт"; }
                     else {
                         long eta = r.etaSec(), ago = r.agoSec();
                         if (eta > 0) { col = 0xFFE8C15A; line = "◷ " + r.name + " — ≈ через " + fmtDur(eta); }
@@ -1258,7 +1486,7 @@ public class ClickGuiScreen extends Screen {
                     String kd = cap ? "клавиша…" : keyDisplay(c.key);
                     int chipW = (int) NanoVgRenderer.textWidth(vg, 9 * S, kd) + 12 * S, chipX = sbx - chipW - 6 * S, chipY = ry + S;
                     NanoVgRenderer.roundedRect(vg, chipX, chipY, chipW, 14 * S, 7 * S, cap ? withAlpha(Theme.accentRgb(), 0x66) : Theme.pillOff());
-                    NanoVgRenderer.text(vg, chipX + chipW / 2f, chipY + 7 * S, 9 * S, cap ? 0xFFFFFFFF : Theme.accent(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, kd);
+                    NanoVgRenderer.text(vg, chipX + chipW / 2f, chipY + 7 * S, 9 * S, cap ? Theme.activeText() : Theme.accent(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, kd);
                     serverHits.add(new Object[]{ "qcmdBind", chipX, chipY, chipW, 14 * S, c });
                 }
                 cur += 16 * S;
@@ -1345,7 +1573,7 @@ public class ClickGuiScreen extends Screen {
                     NanoVgRenderer.roundedRect(vg, sx, ry, 3 * S, rowH, 2 * S, dotCol);
                     NanoVgRenderer.text(vg, sx + 12 * S, ry + 11 * S, 12 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, r.name);
                     NanoVgRenderer.text(vg, sx + 12 * S, ry + 22 * S, 10 * S, statusCol, NanoVgRenderer.ALIGN_MIDDLE, status);
-                    String big = left >= 0 ? left + "с" : (eta > 0 ? fmtDur(eta) : "");
+                    String big = left > 0 ? left + "с" : (eta > 0 ? fmtDur(eta) : "");
                     if (!big.isEmpty()) {
                         float tw = NanoVgRenderer.textWidth(vg, 16 * S, big);
                         NanoVgRenderer.text(vg, sx + w - tw - 12 * S, ry + rowH / 2f, 16 * S, left >= 0 ? 0xFF6FCF7F : 0xFFE8C15A, NanoVgRenderer.ALIGN_MIDDLE, big);
@@ -1366,38 +1594,13 @@ public class ClickGuiScreen extends Screen {
 
     // ---- Top navigation bar (Menu / Events / Config / Friends) ---------------
 
-    private void drawTopNavNvg(long vg, int x, int y, int W, int S, int mx, int my) {
-        int navH = 28 * S, navGap = 6 * S;
-        int navY = y - navGap - navH;
-        String[] labels = { com.lume.client.Lang.tUI("Menu"), com.lume.client.Lang.tUI("Events"),
-                com.lume.client.Lang.tUI("Config"), com.lume.client.Lang.tUI("Friends") };
-        float font = 10 * S;
-        int pad = 12 * S;
-        int total = 0;
-        int[] ww = new int[4];
-        for (int i = 0; i < 4; i++) {
-            ww[i] = (int) NanoVgRenderer.textWidth(vg, font, labels[i]) + pad * 2;
-            total += ww[i];
-        }
-        int barX = x + (W - total) / 2;
-        NanoVgRenderer.shadow(vg, barX - 4 * S, navY - 3 * S, total + 8 * S, navH + 6 * S, 13 * S, 16 * S, 0x44000000);
-        NanoVgRenderer.roundedRect(vg, barX - 4 * S, navY - 3 * S, total + 8 * S, navH + 6 * S, 13 * S, Theme.glassRow());
-        NanoVgRenderer.strokeRoundedRect(vg, barX - 4 * S + 0.5f * S, navY - 3 * S + 0.5f * S, total + 8 * S - S, navH + 6 * S - S, 13 * S, S, Theme.rim());
-        int cx2 = barX;
-        for (int i = 0; i < 4; i++) {
-            topNavSegX[i] = cx2;
-            topNavSegW[i] = ww[i];
-            boolean sel = (i == topSection) && search.isEmpty();
-            if (sel) {
-                NanoVgRenderer.bloom(vg, cx2, navY, ww[i], navH, 12 * S, 10 * S, Theme.accentRgb(), 0x88);
-                NanoVgRenderer.gradientRoundedRect(vg, cx2, navY, ww[i], navH, 12 * S, Theme.accent(), Theme.accent2());
-            }
-            int lblCol = sel ? 0xFFFFFFFF : (Theme.isDark() ? Theme.txtDim() : 0xFFFFFFFF);
-            NanoVgRenderer.text(vg, cx2 + ww[i] / 2f, navY + navH / 2f, font, lblCol, NanoVgRenderer.ALIGN_CENTER_MIDDLE, labels[i]);
-            cx2 += ww[i];
-        }
-        topNavSegY = navY;
-        topNavSegH = navH;
+    private void drawTopNavNvg(long vg, int x, int y, int W, int S, int mx, int my, float dt) {
+        // Delegates to NavBar so the sliding pill is shared with LumeSubScreen's own
+        // Events/Config/Friends bar — one continuous animation across both screen classes
+        // instead of ClickGuiScreen owning a separate, unaware copy of the same bar.
+        int activeTab = search.isEmpty() ? topSection : -1;
+        int[] yh = NavBar.draw(vg, x, y, W, S, activeTab, dt, topNavSegX, topNavSegW);
+        topNavSegY = yh[0]; topNavSegH = yh[1];
     }
 
     // ---- NanoVG Config tab --------------------------------------------------
@@ -1428,7 +1631,7 @@ public class ClickGuiScreen extends Screen {
         int btnH = 22 * S, btnW = (w - 8 * S) / 2;
         int ry = gy + cur - scrollI;
         NanoVgRenderer.gradientRoundedRect(vg, sx, ry, btnW, btnH, 9 * S, Theme.accent(), Theme.accent2());
-        NanoVgRenderer.text(vg, sx + btnW / 2f, ry + btnH / 2f, 10 * S, 0xFFFFFFFF, NanoVgRenderer.ALIGN_CENTER_MIDDLE, "Сохранить");
+        NanoVgRenderer.text(vg, sx + btnW / 2f, ry + btnH / 2f, 10 * S, Theme.activeText(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, "Сохранить");
         configHits.add(new Object[]{ "save", active, sx, ry, btnW, btnH });
         NanoVgRenderer.roundedRect(vg, sx + btnW + 8 * S, ry, btnW, btnH, 9 * S, Theme.glassHov());
         NanoVgRenderer.strokeRoundedRect(vg, sx + btnW + 8 * S + 0.5f * S, ry + 0.5f * S, btnW - S, btnH - S, 9 * S, S, Theme.rim());
@@ -1569,7 +1772,7 @@ public class ClickGuiScreen extends Screen {
                         int kw = RenderUtil.vanillaWidth(this.textRenderer, kd, S);
                         int chipW = kw + 12 * S, chipX = px - chipW - 8 * S;
                         RenderUtil.roundedRect(ctx, chipX, py, chipW, ph, ph / 2, cap ? withAlpha(Theme.accentRgb(), 0x66) : Theme.pillOff());
-                        RenderUtil.vanillaText(ctx, this.textRenderer, kd, chipX + 6 * S, py + 3 * S, cap ? 0xFFFFFFFF : Theme.accent(), S);
+                        RenderUtil.vanillaText(ctx, this.textRenderer, kd, chipX + 6 * S, py + 3 * S, cap ? Theme.activeText() : Theme.accent(), S);
                         serverHits.add(new Object[]{ "subBind", chipX, py, chipW, ph, bs });
                     }
                 }
@@ -1620,7 +1823,7 @@ public class ClickGuiScreen extends Screen {
                     int left = -1;
                     for (EventManager.Active a : EventManager.active) if (a.rule == r) { left = a.secondsLeft(); break; }
                     int col; String line;
-                    if (left >= 0) { col = 0xFF6FCF7F; line = "● " + r.name + " — идёт, " + left + "с"; }
+                    if (left >= 0) { col = 0xFF6FCF7F; line = left > 0 ? "● " + r.name + " — идёт, " + left + "с" : "● " + r.name + " — идёт"; }
                     else {
                         long eta = r.etaSec(), ago = r.agoSec();
                         if (eta > 0) { col = 0xFFE8C15A; line = "◷ " + r.name + " — ≈ через " + fmtDur(eta); }
@@ -1687,7 +1890,7 @@ public class ClickGuiScreen extends Screen {
             int kw = RenderUtil.width(this.textRenderer, kd, 0.46f * S);
             int chipW = kw + 16 * S, chipX = rx + listW - chipW - 8 * S;
             RenderUtil.roundedRect(ctx, chipX, chipY, chipW, 15 * S, 7 * S, binding ? withAlpha(Theme.accentRgb(), 0x66) : Theme.pillOff());
-            RenderUtil.textVCentered(ctx, this.textRenderer, kd, chipX + 8 * S, chipY, 15 * S, binding ? 0xFFFFFFFF : Theme.accent(), 0.46f * S);
+            RenderUtil.textVCentered(ctx, this.textRenderer, kd, chipX + 8 * S, chipY, 15 * S, binding ? Theme.activeText() : Theme.accent(), 0.46f * S);
             // mode chip (HOLD / TOGGLE), left of the key chip
             String md = m.getBindMode() == Module.BindMode.HOLD ? "HOLD" : "TOGGLE";
             int mw = RenderUtil.width(this.textRenderer, md, 0.4f * S);
@@ -1742,14 +1945,12 @@ public class ClickGuiScreen extends Screen {
             int[] rc = rects.get(i);
             String label = names.get(i);
             boolean sel = label.equals(selectedHud);
-            boolean hov = sel || (dragMode == 3 && label.equals(dragHud))
-                    || (mouseX >= rc[0] && mouseX <= rc[0] + rc[2] && mouseY >= rc[1] && mouseY <= rc[1] + rc[3]);
+            boolean dragging = dragMode == 3 && label.equals(dragHud);
             int rx = rc[0] * S, ry = rc[1] * S, rw = rc[2] * S, rh = rc[3] * S;
-            RenderUtil.roundedRect(ctx, rx, ry, rw, rh, 5 * S, withAlpha(Theme.accentRgb(), hov ? 0x55 : 0x22));
-            RenderUtil.roundedRect(ctx, rx, ry, rw, Math.max(1, S), 1, sel ? Theme.accent() : withAlpha(Theme.accentRgb(), 0x88));
-            if (sel) RenderUtil.roundedRect(ctx, rx, ry, rw, rh, 5 * S, withAlpha(0xFFFFFF, 0x14));
-            int tw = RenderUtil.width(this.textRenderer, label, 0.42f * S);
-            RenderUtil.textVCentered(ctx, this.textRenderer, label, rx + (rw - tw) / 2, ry, rh, hov ? 0xFFFFFFFF : Theme.txt(), 0.42f * S);
+            // No idle overlay/label any more — the element itself is the grab target (see
+            // tryHudDrag's hit-test against the same rects). Only while actually being dragged
+            // does a plain white outline trace its exact bounds, as drag feedback.
+            if (dragging) RenderUtil.strokeRect(ctx, rx, ry, rw, rh, Math.max(1, S), 0xFFFFFFFF);
 
             // size slider + reset hint for the selected element
             if (sel) {
@@ -1788,20 +1989,20 @@ public class ClickGuiScreen extends Screen {
         if (s instanceof SliderSetting) return 22 * S;
         if (s instanceof ModeSetting) return 15 * S;
         if (s instanceof ColorSetting cs) return 15 * S + (cs == openColor ? PAL_H * S : 0);
-        return 15 * S; // bool
+        return 15 * S; // bool / string
     }
 
     private int panelHeight(Module m, int S) {
         int h = 4 * S;
         if (m instanceof CustomCrosshair) h += PREVIEW_H * S + 4 * S;
-        for (Setting s : m.getSettings()) h += settingHeight(s, S);
+        for (Setting s : m.getSettings()) { if (!s.hidden) h += settingHeight(s, S); }
         if (m instanceof Waypoints) h += wpManagerHeight(S);
         if (m instanceof ServerHelper) h += (EventManager.rules.size() + 1) * 12 * S + 6 * S;
         return h + 8 * S;
     }
 
     private int wpManagerHeight(int S) {
-        return 6 * S + 18 * S + 6 * S + Waypoints.list.size() * 16 * S;
+        return 6 * S + 18 * S + 6 * S + Waypoints.visible().size() * 16 * S;
     }
 
     private void renderSettings(DrawContext ctx, Module m, int x0, int yTop, int w, int S, int mx, int my) {
@@ -1820,10 +2021,12 @@ public class ClickGuiScreen extends Screen {
         }
 
         for (Setting s : m.getSettings()) {
+            if (s.hidden) continue;
             int h = settingHeight(s, S);
             if (s instanceof BoolSetting bs) renderBool(ctx, bs, sx, yy, swid, h, S);
             else if (s instanceof SliderSetting ss) renderSlider(ctx, ss, sx, yy, swid, h, S);
             else if (s instanceof ModeSetting ms) renderMode(ctx, ms, sx, yy, swid, h, S);
+            else if (s instanceof StringSetting ts) renderString(ctx, ts, sx, yy, swid, h, S);
             else if (s instanceof ColorSetting cs) renderColor(ctx, cs, sx, yy, swid, S);
             yy += h;
         }
@@ -1837,7 +2040,7 @@ public class ClickGuiScreen extends Screen {
         int ly = yy + 12 * S;
         for (EventRuleName er : eventRows()) {
             int col = er.left >= 0 ? 0xFF6FCF7F : Theme.txt();
-            String line = er.left >= 0 ? er.name + " — " + er.left + "с" : er.name;
+            String line = er.left > 0 ? er.name + " — " + er.left + "с" : er.name;
             RenderUtil.vanillaText(ctx, this.textRenderer, line, sx + 4 * S, ly, col, S);
             ly += 12 * S;
         }
@@ -1884,12 +2087,13 @@ public class ClickGuiScreen extends Screen {
         int addX = sx + swid - addW;
         RenderUtil.roundedRect(ctx, addX, yy, addW, rh, 5 * S, Theme.accent());
         int aw = RenderUtil.width(this.textRenderer, "Add", 0.42f * S);
-        RenderUtil.textVCentered(ctx, this.textRenderer, "Add", addX + (addW - aw) / 2, yy, rh, 0xFFFFFFFF, 0.42f * S);
+        RenderUtil.textVCentered(ctx, this.textRenderer, "Add", addX + (addW - aw) / 2, yy, rh, Theme.activeText(), 0.42f * S);
         wpHits.add(new Object[]{ "add", addX, yy, addW, rh });
 
         int ly = yy + 18 * S + 6 * S;
-        for (int i = 0; i < Waypoints.list.size(); i++) {
-            Waypoints.WP w = Waypoints.list.get(i);
+        List<Waypoints.WP> vis = Waypoints.visible();
+        for (int i = 0; i < vis.size(); i++) {
+            Waypoints.WP w = vis.get(i);
             int ry = ly + i * 16 * S, hh = 14 * S;
             RenderUtil.roundedRect(ctx, sx, ry, swid, hh, 4 * S, Theme.glassRow());
             RenderUtil.roundedRect(ctx, sx + 4 * S, ry + (hh - 8 * S) / 2, 8 * S, 8 * S, 2 * S, w.color);
@@ -1913,7 +2117,7 @@ public class ClickGuiScreen extends Screen {
         } else if (this.client.player != null) {
             px = this.client.player.getX(); py = this.client.player.getY(); pz = this.client.player.getZ();
         } else return;
-        String name = wpName.isEmpty() ? "WP" + (Waypoints.list.size() + 1) : wpName;
+        String name = wpName.isEmpty() ? "WP" + (Waypoints.visible().size() + 1) : wpName;
         Waypoints.add(name, px, py, pz, Waypoints.nextColor());
         wpName = wpCoords = ""; focusedField = null;
         com.lume.client.Config.save();
@@ -1923,12 +2127,14 @@ public class ClickGuiScreen extends Screen {
         if (kind.equals("add")) { wpAdd(); return; }
         if (kind.startsWith("del:")) {
             int i = Integer.parseInt(kind.substring(4));
-            if (i >= 0 && i < Waypoints.list.size()) { Waypoints.list.remove(i); com.lume.client.Config.save(); }
+            List<Waypoints.WP> vis = Waypoints.visible();
+            if (i >= 0 && i < vis.size()) { Waypoints.list.remove(vis.get(i)); com.lume.client.Config.save(); }
             return;
         }
         if (kind.startsWith("color:")) {
             int i = Integer.parseInt(kind.substring(6));
-            if (i >= 0 && i < Waypoints.list.size()) { Waypoints.list.get(i).color = Waypoints.nextColor(); com.lume.client.Config.save(); }
+            List<Waypoints.WP> vis = Waypoints.visible();
+            if (i >= 0 && i < vis.size()) { vis.get(i).color = Waypoints.nextColor(); com.lume.client.Config.save(); }
             return;
         }
         focusedField = kind;   // a text field
@@ -1940,6 +2146,16 @@ public class ClickGuiScreen extends Screen {
         int dw = RenderUtil.width(this.textRenderer, disp, 0.42f * S);
         RenderUtil.textVCentered(ctx, this.textRenderer, disp, x + w - dw, y, h, Theme.accent(), 0.42f * S);
         SHit hit = new SHit(); hit.s = ms; hit.kind = 4; hit.x = x; hit.y = y; hit.w = w; hit.h = h; sHits.add(hit);
+    }
+
+    private void renderString(DrawContext ctx, StringSetting ts, int x, int y, int w, int h, int S) {
+        RenderUtil.textVCentered(ctx, this.textRenderer, ts.name, x, y, h, Theme.txt(), 0.42f * S);
+        boolean foc = "customstring".equals(focusedField) && focusedString == ts;
+        int bw = Math.round(w * 0.55f), bh = 11 * S, bx = x + w - bw, by = y + (h - bh) / 2;
+        RenderUtil.roundedRect(ctx, bx, by, bw, bh, 4 * S, foc ? Theme.glassHov() : Theme.glassRow());
+        String shown = ts.value + (foc ? "|" : "");
+        RenderUtil.textVCentered(ctx, this.textRenderer, shown, bx + 6 * S, by, bh, Theme.txt(), 0.38f * S);
+        SHit hit = new SHit(); hit.s = ts; hit.kind = 18; hit.x = bx; hit.y = y; hit.w = bw; hit.h = h; sHits.add(hit);
     }
 
     private void renderBool(DrawContext ctx, BoolSetting bs, int x, int y, int w, int h, int S) {
@@ -2103,7 +2319,8 @@ public class ClickGuiScreen extends Screen {
             }
 
             if (inWindow) {
-                if (inside(mlx, mly, themeBtn[0], themeBtn[1], themeBtn[2], themeBtn[3])) { Theme.toggle(); animFor("_theme")[2] = 1f; return true; }
+                if (inside(mlx, mly, themeBtn[0], themeBtn[1], themeBtn[2], themeBtn[3])) { Theme.toggle(); animFor("_theme")[2] = 1f; ThemeSync.save(); return true; }
+                if (inside(mlx, mly, colorsBtn[0], colorsBtn[1], colorsBtn[2], colorsBtn[3])) { animFor("_colors")[2] = 1f; if (client != null) client.setScreen(new ColorsScreen(this)); return true; }
                 for (int i = 0; i < segX.length; i++) {
                     if (inside(mlx, mly, segX[i], segY - 3 * S, segW[i], segH + 6 * S)) { selectedCat = i; search = ""; scroll = scrollTarget = 0f; bindingModule = null; bindingSetting = null; bindingQuickCmd = null; return true; }
                 }
@@ -2247,8 +2464,19 @@ public class ClickGuiScreen extends Screen {
                 else { openColor = cs; openPicker(cs); }
                 if ("colorhex".equals(focusedField)) focusedField = null;
             }
+            case 13 -> ((ColorSetting) h.s).accent = !((ColorSetting) h.s).accent;   // "Accent" toggle pill
+            case 18 -> { focusedString = (StringSetting) h.s; focusedField = "customstring"; }   // focus a text setting
             case 1, 3 -> { activeSlider = h; updateSlider(h, mxNative); }
-            case 4 -> ((ModeSetting) h.s).cycle(mxNative < h.x + h.w / 2.0 ? -1 : 1);
+            case 4 -> {
+                ((ModeSetting) h.s).cycle(mxNative < h.x + h.w / 2.0 ? -1 : 1);
+                // Picking a Custom Hand Style also nudges Pos to that style's suggested
+                // starting position — a one-time convenience, not a continuous override
+                // (the Pos sliders remain the single source of truth afterward).
+                Module chM4 = LumeClient.MODULES.getByName("Custom Hand");
+                if (chM4 instanceof com.lume.client.module.modules.render.CustomHand ch4 && h.s == ch4.style) {
+                    ch4.applyStylePosPreset();
+                }
+            }
             case 7, 8 -> { // SV square / hue bar drag start
                 activePicker = h;
                 updatePicker(h, mxNative, myNative);
@@ -2270,6 +2498,45 @@ public class ClickGuiScreen extends Screen {
             case 11 -> { // "My Sounds" file row — select which dropped-in file to use
                 Module hsM = LumeClient.MODULES.getByName("HitSound");
                 if (hsM instanceof com.lume.client.module.modules.render.HitSound hs2) hs2.selectedFile = h.tag;
+            }
+            case 12 -> { // Custom Hand "Reset to default"
+                Module chM = LumeClient.MODULES.getByName("Custom Hand");
+                if (chM instanceof com.lume.client.module.modules.render.CustomHand ch) ch.resetToDefaults();
+                com.lume.client.Config.save();
+            }
+            case 19 -> { // Custom Hand "Copy" — current pose as text, to the system clipboard
+                Module chM5 = LumeClient.MODULES.getByName("Custom Hand");
+                if (chM5 instanceof com.lume.client.module.modules.render.CustomHand ch5) {
+                    this.client.keyboard.setClipboard(ch5.exportText());
+                }
+            }
+            case 20 -> { // Custom Hand "Paste" — parse a pose from the clipboard (same format as Copy)
+                Module chM6 = LumeClient.MODULES.getByName("Custom Hand");
+                if (chM6 instanceof com.lume.client.module.modules.render.CustomHand ch6) {
+                    String clip = this.client.keyboard.getClipboard();
+                    if (clip != null && ch6.importText(clip)) {
+                        com.lume.client.Config.save();
+                        Notifications.push("Pose pasted", Theme.accent(), 1500);
+                    } else {
+                        Notifications.push("Clipboard isn't a valid pose", 0xFFE05656, 2000);
+                    }
+                }
+            }
+            case 15 -> ((ModeSetting) h.s).index = h.channel;   // Custom Hand hand tab / preset slot pill
+            case 16 -> { // "Open Particles Folder" (World Particles / Hit Particles)
+                java.io.File dir = com.lume.client.fx.ParticleTexture.folder(h.tag).toFile();
+                net.minecraft.util.Util.getOperatingSystem().open(dir);
+            }
+            case 17 -> { // "My Particles" file row — tag is "world:name.png" or "hit:name.png"
+                int sep = h.tag.indexOf(':');
+                String owner = h.tag.substring(0, sep), file = h.tag.substring(sep + 1);
+                if (owner.equals("world")) {
+                    Module wpM = LumeClient.MODULES.getByName("World Particles");
+                    if (wpM instanceof com.lume.client.module.modules.render.WorldParticles wp) wp.selectedFile = file;
+                } else {
+                    Module hpM = LumeClient.MODULES.getByName("Hit Particles");
+                    if (hpM instanceof com.lume.client.module.modules.render.HitParticles hp) hp.selectedFile = file;
+                }
             }
         }
     }
@@ -2338,6 +2605,10 @@ public class ClickGuiScreen extends Screen {
             return true;
         }
         if ("search".equals(focusedField)) { search += chr; scroll = scrollTarget = 0f; return true; }
+        if ("customstring".equals(focusedField)) {
+            if (focusedString != null) focusedString.value += chr;
+            return true;
+        }
         if (focusedField != null) {                         // waypoint fields
             boolean coordsField = focusedField.equals("coords");
             boolean ok = focusedField.equals("name")
@@ -2391,6 +2662,17 @@ public class ClickGuiScreen extends Screen {
         if ("search".equals(focusedField)) {
             if (keyCode == 256) { focusedField = null; return true; }                                   // Esc
             if (keyCode == 259 && !search.isEmpty()) { search = search.substring(0, search.length() - 1); scroll = scrollTarget = 0f; }
+            return true;
+        }
+        if ("customstring".equals(focusedField)) {
+            if (keyCode == 256 || keyCode == 257 || keyCode == 335) { focusedField = null; com.lume.client.Config.save(); return true; }   // Esc/Enter
+            if (focusedString != null) {
+                if (keyCode == 259 && !focusedString.value.isEmpty()) focusedString.value = focusedString.value.substring(0, focusedString.value.length() - 1);
+                if (keyCode == 86 && (modifiers & 0x0002) != 0) {
+                    String clip = this.client.keyboard.getClipboard();
+                    if (clip != null) focusedString.value = clip.trim();
+                }
+            }
             return true;
         }
         if (focusedField != null) {                         // waypoint fields

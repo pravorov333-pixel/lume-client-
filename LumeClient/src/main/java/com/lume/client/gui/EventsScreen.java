@@ -1,24 +1,149 @@
 package com.lume.client.gui;
 
+import com.lume.client.fthw.CurrentAnarchy;
 import com.lume.client.fthw.EventManager;
+import com.lume.client.fthw.EventRule;
+import com.lume.client.fthw.TelegramEvents;
+import com.lume.client.module.modules.qol.Waypoints;
 import com.lume.client.nanovg.NanoVgRenderer;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.text.Text;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
-/** Full-screen Events tab — shows Telegram events or FT/HW local schedule. */
+/**
+ * Full-screen Events tab — a 3-per-row grid of anarchy cards (Telegram feed),
+ * or the local FT/HW learned schedule as a fallback list when Telegram isn't
+ * configured. One card per anarchy, listing EVERY event currently running or
+ * pending on it (an anarchy with 2 events shows both in the same card, not
+ * just the "best" one) — sorted: your own anarchy first, then by ascending
+ * time-to-next-thing.
+ */
 public class EventsScreen extends LumeSubScreen {
 
     private static final int WIN_W = 520, WIN_H = 356;
+    private static final int COLS = 3;
 
     private float scroll = 0, scrollTarget = 0;
     private long lastFrame = System.currentTimeMillis();
+    private final List<Object[]> titleHits = new ArrayList<>();   // {command, x, y, w, h}, rebuilt every render — click to copy
 
     public EventsScreen(Screen parent) {
         super(Text.literal("Events – Lume"), parent);
+    }
+
+    /** One card = one anarchy; holds EVERY event currently reported for it. */
+    private static final class Card {
+        final String anarchy;
+        final List<TelegramEvents.Ev> events;
+        Card(String anarchy, List<TelegramEvents.Ev> events) { this.anarchy = anarchy; this.events = events; }
+        TelegramEvents.Ev primary() { return events.get(0); }   // events are pre-sorted by priority — see buildCards
+    }
+
+    /**
+     * Active (incl. just-opened/erupting, see {@link TelegramEvents.Ev#justOpened()}) > voting >
+     * "opens in" (already appeared, counting down to open) > "appears in" (not spawned yet).
+     * Opening beats appearing because it's the more actionable state — you can already be on
+     * your way to it. A just-opened event is bumped to the same top tier as active — its
+     * countdown ran out, so it's presumably open/erupting right now, same urgency as "active".
+     */
+    private static int priorityRank(TelegramEvents.Ev e) {
+        if (e.isActive() || e.justOpened()) return 0;
+        if (e.isVoting()) return 1;
+        if (e.isWaiting() && e.isOpening()) return 2;
+        return 3;
+    }
+
+    /** Rarity + a known location (auto-placed via EventLocator/"Координаты ивента") — the fully "actionable" events. */
+    private static boolean resolved(TelegramEvents.Ev e) {
+        return !e.rarity.isEmpty() && hasCoords(e);
+    }
+
+    private static boolean hasCoords(TelegramEvents.Ev e) {
+        for (Waypoints.WP w : Waypoints.list) {
+            if (e.anarchy.equals(w.anarchy) && w.name.equalsIgnoreCase(e.name)) return true;
+        }
+        return false;
+    }
+
+    /** The "big" event types — bumped to the front whenever they're relevant (mainly matters while opening/counting down). */
+    private static final String[] PRIORITY_NAMES = { "вулкан", "маяк", "метеоритный дождь" };
+
+    private static boolean isPriorityEvent(TelegramEvents.Ev e) {
+        String n = e.name.toLowerCase();
+        for (String p : PRIORITY_NAMES) if (n.contains(p)) return true;
+        return false;
+    }
+
+    /** Вулкан/Маяк/Метеоритный дождь always first — above everything else, any tier. Then priority tier, then resolved, then soonest time. */
+    private static int compareEv(TelegramEvents.Ev a, TelegramEvents.Ev b) {
+        boolean pa = isPriorityEvent(a), pb = isPriorityEvent(b);
+        if (pa != pb) return pa ? -1 : 1;
+        int r = priorityRank(a) - priorityRank(b);
+        if (r != 0) return r;
+        boolean ra = resolved(a), rb = resolved(b);
+        if (ra != rb) return ra ? -1 : 1;
+        int sa = a.liveSecondsLeft(), sb = b.liveSecondsLeft();
+        if (sa < 0 && sb < 0) return 0;
+        if (sa < 0) return 1;
+        if (sb < 0) return -1;
+        return sa - sb;
+    }
+
+    private static final int APPEAR_SOON_SEC = 600;   // 10 minutes
+
+    private static List<Card> buildCards(List<TelegramEvents.Ev> all, String curAnarchy) {
+        Map<String, List<TelegramEvents.Ev>> byAnarchy = new LinkedHashMap<>();
+        for (TelegramEvents.Ev e : all) {
+            // Timer ran out client-side (stale until the next ~45s backend poll) — drop the
+            // event entirely rather than show a dead "0с". If that was the anarchy's only
+            // event, the whole card disappears too (nothing left to put in it). EXCEPT a
+            // just-opened/erupting event (see justOpened()) — that's a real, actionable state
+            // worth showing ("Открыт"/"Извергается"), not a stale dead timer.
+            if (e.liveSecondsLeft() == 0 && !e.justOpened()) continue;
+            // Nothing to do yet on a "not spawned" event more than 10 min out (or with no
+            // known time at all) — too far off to be useful, just clutters the list.
+            if (priorityRank(e) == 3) {
+                int s = e.liveSecondsLeft();
+                if (s < 0 || s > APPEAR_SOON_SEC) continue;
+            }
+            byAnarchy.computeIfAbsent(e.anarchy, k -> new ArrayList<>()).add(e);
+        }
+        List<Card> cards = new ArrayList<>();
+        for (Map.Entry<String, List<TelegramEvents.Ev>> en : byAnarchy.entrySet()) {
+            List<TelegramEvents.Ev> evs = en.getValue();
+            evs.sort(EventsScreen::compareEv);
+            cards.add(new Card(en.getKey(), evs));
+        }
+        cards.sort((a, b) -> {
+            boolean amine = a.anarchy.equals(curAnarchy), bmine = b.anarchy.equals(curAnarchy);
+            if (amine != bmine) return amine ? -1 : 1;
+            return compareEv(a.primary(), b.primary());
+        });
+        return cards;
+    }
+
+    /** Colour for one event's status line (text itself comes from {@link TelegramEvents.Ev#statusText()}). */
+    private static int statusColor(TelegramEvents.Ev e) {
+        if (e.isActive() || e.justOpened()) return 0xFF6FCF7F;
+        if (e.isVoting()) return Theme.accent();
+        return e.liveSecondsLeft() > 0 ? 0xFFE8C15A : Theme.txtDim();
+    }
+
+    /** Card height (native px) for an anarchy with {@code n} events: title row + one block per event. */
+    private static int cardHeight(int n, int S) {
+        return (18 + Math.max(1, n) * 26 + 8) * S;
+    }
+
+    /** Shrinks the font just enough for {@code text} to fit {@code maxW}, never below {@code minSize}. */
+    private static float fitSize(long vg, float baseSize, String text, float maxW, float minSize) {
+        float w = NanoVgRenderer.textWidth(vg, baseSize, text);
+        if (w <= maxW || w <= 0) return baseSize;
+        return Math.max(minSize, baseSize * maxW / w);
     }
 
     @Override
@@ -39,72 +164,115 @@ public class EventsScreen extends LumeSubScreen {
         computeTotal(WIN_W, WIN_H);
         int mx = localMx(mouseX, S, sw), my = localMy(mouseY, S, sh);
 
-        // Pre-compute events data outside lambda (no lambdas-capturing mutable locals)
         com.lume.client.fthw.TelegramEvents.load();
-        boolean tg = com.lume.client.fthw.TelegramEvents.available();
-        String hdr;
-        final List<com.lume.client.fthw.TelegramEvents.Ev> evs;
-        final List<com.lume.client.fthw.EventRule> localRules;
+        boolean tg = TelegramEvents.available();
+        final List<Card> cards;
+        final List<EventRule> localRules;
+        final String curAnarchy = CurrentAnarchy.get();
         if (tg) {
-            long age = com.lume.client.fthw.TelegramEvents.ageSec();
-            hdr = "Telegram · все анархии" + (age >= 0 ? " · " + (age < 60 ? age + "с" : (age / 60) + "м") + " назад" : "");
-            List<com.lume.client.fthw.TelegramEvents.Ev> tmp = new ArrayList<>(com.lume.client.fthw.TelegramEvents.events());
-            tmp.sort((a, b) -> a.anarchy.length() != b.anarchy.length() ? a.anarchy.length() - b.anarchy.length() : a.anarchy.compareTo(b.anarchy));
-            evs = tmp; localRules = null;
+            cards = buildCards(TelegramEvents.events(), curAnarchy);
+            localRules = null;
         } else {
-            hdr = "Подключи Telegram в лаунчере для ивентов всех анархий";
-            evs = null; localRules = new ArrayList<>(EventManager.rules);
+            cards = null; localRules = new ArrayList<>(EventManager.rules);
         }
-        int n = tg ? evs.size() : (localRules == null ? 0 : localRules.size());
-        int rowH = 38 * S, gapr = 8 * S;
-        int margin = 24 * S;
-        int gy = y + 42 * S;
+
+        int margin = 20 * S, selY = y + 34 * S, selH = 20 * S, gy = selY + selH + 8 * S;
         int clipTop = gy - 2 * S, clipBot = y + H - 12 * S, visH = clipBot - gy;
-        int contentH = 22 * S + n * (rowH + gapr);
+        final int sx = x + margin, ew = W - margin * 2;
+
+        int contentH;
+        int cardW = 0, colGap = 8 * S, rowGap = 8 * S;
+        // Masonry packing: each card goes into whichever column is shortest so far,
+        // right under the card already there — no row-height alignment, so a short
+        // card never leaves a big gap under it waiting for a taller neighbour.
+        final int[] cardH;
+        final int[] cardCol;
+        final int[] cardY;
+        if (tg) {
+            cardW = (ew - (COLS - 1) * colGap) / COLS;
+            cardH = new int[cards.size()];
+            cardCol = new int[cards.size()];
+            cardY = new int[cards.size()];
+            int[] colY = new int[COLS];
+            for (int i = 0; i < cards.size(); i++) {
+                cardH[i] = cardHeight(cards.get(i).events.size(), S);
+                int col = 0;
+                for (int c2 = 1; c2 < COLS; c2++) if (colY[c2] < colY[col]) col = c2;
+                cardCol[i] = col;
+                cardY[i] = colY[col];
+                colY[col] += cardH[i] + rowGap;
+            }
+            int maxColY = 0;
+            for (int c2 = 0; c2 < COLS; c2++) maxColY = Math.max(maxColY, colY[c2]);
+            contentH = maxColY > 0 ? maxColY - rowGap : 0;
+        } else {
+            cardH = null; cardCol = null; cardY = null;
+            int rowH = 38 * S;
+            contentH = (localRules == null ? 0 : localRules.size()) * (rowH + 8 * S);
+        }
         int maxScroll = Math.max(0, contentH - visH);
         scrollTarget = (float) Math.max(0, Math.min(scrollTarget, maxScroll));
         scroll = approach(scroll, scrollTarget, 16f, dt);
         if (Math.abs(scroll - scrollTarget) < 0.5f) scroll = scrollTarget;
         final int scrollI = Math.round(scroll);
         final int fMaxScroll = maxScroll, fContentH = contentH;
-        final String fHdr = hdr;
-        final int fRowH = rowH, fGapr = gapr, fN = n;
-        final int sx = x + margin, ew = W - margin * 2;
+        final int fCardW = cardW, fColGap = colGap;
 
+        drawGlassBackdrop(S, sw, sh, x, y, W, H, 18 * S);
+        ctx.draw();   // flush DrawContext's own queued geometry before raw-GL NanoVG draws
         NanoVgRenderer.frame(vg -> {
             applyTransform(vg, S, sw, sh);
-            drawWindowFrame(vg, x, y, W, H, S, mx, my, 1);
+            drawWindowFrame(vg, x, y, W, H, S, mx, my, 1, dt);
+
+            // Network selector — only FunTime for now; laid out so a second network
+            // (HolyWorld) just becomes another pill here once it's actually supported.
+            NanoVgRenderer.text(vg, sx + 2 * S, selY + selH / 2f, 9.5f * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, "Сервер:");
+            float lblW = NanoVgRenderer.textWidth(vg, 9.5f * S, "Сервер:");
+            int pillW = (int) NanoVgRenderer.textWidth(vg, 10 * S, "FunTime") + 20 * S;
+            int pillX = sx + (int) lblW + 8 * S;
+            NanoVgRenderer.gradientRoundedRect(vg, pillX, selY, pillW, selH, selH / 2f, Theme.accent(), Theme.accent2());
+            NanoVgRenderer.text(vg, pillX + pillW / 2f, selY + selH / 2f, 10 * S, Theme.activeText(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, "FunTime");
 
             NanoVgRenderer.save(vg);
             NanoVgRenderer.scissor(vg, x, clipTop, W, visH);
+            int cur = 0;
+            titleHits.clear();
 
-            NanoVgRenderer.text(vg, sx + 2 * S, gy - scrollI + 8 * S, 10 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, fHdr);
-            int cur = 22 * S;
+            if (tg && cards.isEmpty()) {
+                NanoVgRenderer.text(vg, sx + ew / 2f, gy + visH / 2f, 11 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, "Нет активных ивентов");
+            }
 
-            if (tg && evs != null) {
-                for (com.lume.client.fthw.TelegramEvents.Ev e : evs) {
-                    int ry = gy + cur - scrollI;
-                    if (ry + fRowH >= clipTop && ry <= clipBot) {
-                        boolean active = !e.phase.isEmpty() && !e.phase.toLowerCase().contains("ожидан");
-                        int dotCol = active ? 0xFF6FCF7F : 0xFFE8C15A;
-                        NanoVgRenderer.roundedRect(vg, sx, ry, ew, fRowH, 10 * S, Theme.glassRow());
-                        NanoVgRenderer.roundedRect(vg, sx, ry, 3 * S, fRowH, 2 * S, dotCol);
-                        NanoVgRenderer.text(vg, sx + 14 * S, ry + 15 * S, 13 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE,
-                                "Анархия " + e.anarchy + "  ·  " + e.name);
-                        NanoVgRenderer.text(vg, sx + 14 * S, ry + 29 * S, 10 * S,
-                                active ? 0xFF6FCF7F : Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE,
-                                e.phase + (e.rarity.isEmpty() ? "" : "  ·  " + e.rarity));
-                        if (!e.time.isEmpty() && !e.time.toLowerCase().contains("загруз")) {
-                            float tw = NanoVgRenderer.textWidth(vg, 14 * S, e.time);
-                            NanoVgRenderer.text(vg, sx + ew - tw - 14 * S, ry + fRowH / 2f, 14 * S, dotCol, NanoVgRenderer.ALIGN_MIDDLE, e.time);
+            if (tg) {
+                float innerW = fCardW - 20 * S;
+                for (int i = 0; i < cards.size(); i++) {
+                    Card c = cards.get(i);
+                    int cx = sx + cardCol[i] * (fCardW + fColGap);
+                    int h = cardH[i];
+                    int ry = gy + cardY[i] - scrollI;
+                    if (ry + h >= clipTop && ry <= clipBot) {
+                        boolean mine = c.anarchy.equals(curAnarchy);
+                        NanoVgRenderer.roundedRect(vg, cx, ry, fCardW, h, 10 * S, mine ? Theme.glassHov() : Theme.glassRow());
+                        String title = (mine ? "★ " : "") + "/an" + c.anarchy;
+                        float titleSize = fitSize(vg, 12 * S, title, innerW, 8 * S);
+                        NanoVgRenderer.text(vg, cx + 10 * S, ry + 15 * S, titleSize, Theme.accent(), NanoVgRenderer.ALIGN_MIDDLE, title);
+                        titleHits.add(new Object[]{ "/an" + c.anarchy, cx, ry, fCardW, 18 * S });
+                        int ey = ry + 18 * S;
+                        for (TelegramEvents.Ev e : c.events) {
+                            int col2 = statusColor(e);
+                            float nameSize = fitSize(vg, 9.5f * S, e.name, innerW, 7 * S);
+                            NanoVgRenderer.text(vg, cx + 10 * S, ey + 11 * S, nameSize, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, e.name);
+                            String status = e.statusText();
+                            float statusSize = fitSize(vg, 10 * S, status, innerW, 7 * S);
+                            NanoVgRenderer.text(vg, cx + 10 * S, ey + 23 * S, statusSize, col2, NanoVgRenderer.ALIGN_MIDDLE, status);
+                            ey += 26 * S;
                         }
                     }
-                    cur += fRowH + fGapr;
                 }
             } else if (localRules != null) {
-                for (com.lume.client.fthw.EventRule er : localRules) {
+                int rowH = 38 * S, gapr = 8 * S;
+                for (EventRule er : localRules) {
                     int ry = gy + cur - scrollI;
-                    if (ry + fRowH >= clipTop && ry <= clipBot) {
+                    if (ry + rowH >= clipTop && ry <= clipBot) {
                         int left = -1;
                         for (EventManager.Active a : EventManager.active) if (a.rule == er) { left = a.secondsLeft(); break; }
                         long eta = er.etaSec(), ago = er.agoSec();
@@ -113,18 +281,18 @@ public class EventsScreen extends LumeSubScreen {
                         else if (eta > 0) { dotCol = 0xFFE8C15A; status = "≈ через " + fmtDur(eta); statusCol = 0xFFE8C15A; }
                         else if (ago >= 0) { dotCol = Theme.txtDim(); status = "был " + fmtDur(ago) + " назад"; statusCol = Theme.txtDim(); }
                         else { dotCol = Theme.pillOff(); status = "ещё не видел"; statusCol = Theme.txtDim(); }
-                        NanoVgRenderer.roundedRect(vg, sx, ry, ew, fRowH, 10 * S, Theme.glassRow());
-                        NanoVgRenderer.roundedRect(vg, sx, ry, 3 * S, fRowH, 2 * S, dotCol);
+                        NanoVgRenderer.roundedRect(vg, sx, ry, ew, rowH, 10 * S, Theme.glassRow());
+                        NanoVgRenderer.roundedRect(vg, sx, ry, 3 * S, rowH, 2 * S, dotCol);
                         NanoVgRenderer.text(vg, sx + 14 * S, ry + 15 * S, 13 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, er.name);
                         NanoVgRenderer.text(vg, sx + 14 * S, ry + 29 * S, 10 * S, statusCol, NanoVgRenderer.ALIGN_MIDDLE, status);
-                        String big = left >= 0 ? left + "с" : (eta > 0 ? fmtDur(eta) : "");
+                        String big = left > 0 ? left + "с" : (eta > 0 ? fmtDur(eta) : "");
                         if (!big.isEmpty()) {
                             float tw = NanoVgRenderer.textWidth(vg, 18 * S, big);
-                            NanoVgRenderer.text(vg, sx + ew - tw - 14 * S, ry + fRowH / 2f, 18 * S,
+                            NanoVgRenderer.text(vg, sx + ew - tw - 14 * S, ry + rowH / 2f, 18 * S,
                                     left >= 0 ? 0xFF6FCF7F : 0xFFE8C15A, NanoVgRenderer.ALIGN_MIDDLE, big);
                         }
                     }
-                    cur += fRowH + fGapr;
+                    cur += rowH + gapr;
                 }
             }
 
@@ -138,13 +306,32 @@ public class EventsScreen extends LumeSubScreen {
                 NanoVgRenderer.roundedRect(vg, sbX, thumbY, sbW, thumbH, sbW / 2f, Theme.accent());
             }
         });
+        drawOpenTransition(S, sw, sh, x, y, W, H);
     }
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
         if (button == 0 && tryNavClick(mouseX, mouseY)) return true;
+        if (button == 0 && tryCopyClick(mouseX, mouseY)) return true;
         if (button == 0 && tryHudDrag(mouseX, mouseY)) return true;
         return super.mouseClicked(mouseX, mouseY, button);
+    }
+
+    /** Click a card's "/anXXX" title to copy the connect command to the clipboard. */
+    private boolean tryCopyClick(double mouseX, double mouseY) {
+        int S = (int) Math.max(1, client.getWindow().getScaleFactor());
+        int sw = width * S, sh = height * S;
+        int mx = localMx(mouseX, S, sw), my = localMy(mouseY, S, sh);
+        for (Object[] h : titleHits) {
+            int hx = (int) h[1], hy = (int) h[2], hw = (int) h[3], hh = (int) h[4];
+            if (mx >= hx && mx <= hx + hw && my >= hy && my <= hy + hh) {
+                String cmd = (String) h[0];
+                client.keyboard.setClipboard(cmd);
+                Notifications.push("Скопировано: " + cmd, Theme.accent(), 2000);
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override

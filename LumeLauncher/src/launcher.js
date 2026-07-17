@@ -7,6 +7,10 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
+// Mod auto-update lives on LumeFriendsServer (not the key server) — see
+// LumeFriendsServer/README.md "Publishing a mod update".
+const UPDATE_SERVER = 'https://friends-lume-server-production.up.railway.app';
+
 // --- Supported versions ----------------------------------------------------
 // Each entry: the MC + Fabric loader coords, which bundled jars to install, and
 // which Java to run with (1.16.5 needs Java 8; 1.21.4 needs Java 17+).
@@ -133,6 +137,47 @@ function ensureFabricInstalled(win, cfg) {
   });
 }
 
+// Auto-updated jars land here (separate from the dev override folder and the
+// bundled resources/ jar shipped in the installer) — see checkForUpdate().
+function updatesDir() {
+  return path.join(rootDir(), 'updates');
+}
+
+/**
+ * Asks LumeKeyServer whether a newer Lume jar has been published for this MC
+ * version; downloads it into updatesDir() if so. Best-effort: any failure
+ * (offline, server down) just leaves whatever's already cached/bundled in
+ * place — never blocks launching the game.
+ */
+async function checkForUpdate(win, cfg) {
+  try {
+    status(win, 'Checking for updates…');
+    const res = await fetch(`${UPDATE_SERVER}/api/version?mcVersion=${encodeURIComponent(cfg.mc)}`);
+    if (!res.ok) return; // nothing published for this version yet, or server hiccup
+    const data = await res.json();
+    if (!data || !data.version || !data.jarUrl) return;
+
+    const dir = updatesDir();
+    fs.mkdirSync(dir, { recursive: true });
+    const versionFile = path.join(dir, cfg.lume + '.version');
+    const current = fs.existsSync(versionFile) ? fs.readFileSync(versionFile, 'utf8').trim() : null;
+    if (current === data.version && fs.existsSync(path.join(dir, cfg.lume))) {
+      status(win, `Lume ${data.version} — up to date.`);
+      return;
+    }
+
+    status(win, `Downloading Lume update ${data.version}…`);
+    const jarRes = await fetch(data.jarUrl);
+    if (!jarRes.ok) throw new Error('download failed: ' + jarRes.status);
+    const buf = Buffer.from(await jarRes.arrayBuffer());
+    fs.writeFileSync(path.join(dir, cfg.lume), buf);
+    fs.writeFileSync(versionFile, data.version);
+    status(win, `Updated to Lume ${data.version}.`);
+  } catch (e) {
+    status(win, 'Update check skipped (offline?).');
+  }
+}
+
 function ensureMods(win, cfg, version) {
   const modsDir = path.join(profileDir(version), 'mods');
   // fresh mods each launch so a version never inherits another's jars
@@ -145,8 +190,16 @@ function ensureMods(win, cfg, version) {
     if (fs.existsSync(src)) fs.copyFileSync(src, path.join(modsDir, f));
   }
 
-  // DEV override: a jar dropped at <root>/override/<lume jar> replaces the bundled
-  // Lume mod — lets a fresh build be tested with just a relaunch (no exe rebuild).
+  // Auto-updated jar (see checkForUpdate) takes priority over the one bundled
+  // in the installer, if one's been downloaded.
+  const updated = path.join(updatesDir(), cfg.lume);
+  if (fs.existsSync(updated)) {
+    fs.copyFileSync(updated, path.join(modsDir, cfg.lume));
+    status(win, 'Using auto-updated Lume jar.');
+  }
+
+  // DEV override: a jar dropped at <root>/override/<lume jar> replaces everything
+  // above — lets a fresh local build be tested with just a relaunch (no exe rebuild).
   const override = path.join(rootDir(), 'override', cfg.lume);
   if (fs.existsSync(override)) {
     fs.copyFileSync(override, path.join(modsDir, cfg.lume));
@@ -194,11 +247,15 @@ async function launchGame(win, { username, memory, version }) {
 
   await ensureFabricInstalled(win, cfg);
   if (abort()) return { cancelled: true };
+  await checkForUpdate(win, cfg);
+  if (abort()) return { cancelled: true };
   ensureMods(win, cfg, ver);
   writeOptions(win, ver);
   if (abort()) return { cancelled: true };
 
-  const ram = (memory || 4) + 'G';
+  // Whole MB, not "G" suffix — the memory slider allows half-GB steps (e.g. 2.5) and
+  // -Xmx/-Xms don't reliably accept fractional G values across JVM builds.
+  const ram = Math.round((memory || 4) * 1024) + 'M';
   const launcher = new Client();
   const opts = {
     authorization: Promise.resolve(offlineAuth(username || 'LumePlayer')),
@@ -234,4 +291,23 @@ async function launchGame(win, { username, memory, version }) {
   return { ok: true };
 }
 
-module.exports = { launchGame, cancelLaunch, rootDir, profileDir };
+// Writes {key, hwid} into this version's profile config/lume.json under "license" so the
+// MOD (which has no other way to know the key) can check subscription status against
+// LumeKeyServer itself for the account widget. Merges with whatever the mod already wrote
+// there (module settings etc.) instead of clobbering the file — read-modify-write.
+function writeLicense(version, key, hwid) {
+  try {
+    const ver = resolveVersion(version);
+    const cfgDir = path.join(profileDir(ver), 'config');
+    fs.mkdirSync(cfgDir, { recursive: true });
+    const file = path.join(cfgDir, 'lume.json');
+    let data = {};
+    if (fs.existsSync(file)) {
+      try { data = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { data = {}; }
+    }
+    data.license = { key, hwid };
+    fs.writeFileSync(file, JSON.stringify(data, null, 2));
+  } catch (e) { /* best-effort — don't block launch over this */ }
+}
+
+module.exports = { launchGame, cancelLaunch, rootDir, profileDir, writeLicense };

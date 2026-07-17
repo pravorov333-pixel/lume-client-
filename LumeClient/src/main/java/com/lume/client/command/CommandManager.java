@@ -3,12 +3,15 @@ package com.lume.client.command;
 import com.lume.client.LumeClient;
 import com.lume.client.fthw.ServerType;
 import com.lume.client.module.Module;
+import com.lume.client.module.modules.qol.ChatFilters;
 import com.lume.client.module.modules.qol.Waypoints;
+import com.lume.client.social.Friends;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 import org.lwjgl.glfw.GLFW;
 
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -30,6 +33,7 @@ public final class CommandManager {
             switch (a[0].toLowerCase(Locale.ROOT)) {
                 case "wp", "waypoint" -> wp(a);
                 case "macro" -> macro(a, msg);
+                case "filter" -> filter(a, msg);
                 case "bind" -> bind(a);
                 case "ft", "hw" -> ft();
                 case "help", "lume" -> help();
@@ -46,10 +50,13 @@ public final class CommandManager {
     private static void wp(String[] a) {
         MinecraftClient mc = MinecraftClient.getInstance();
         String sub = a.length > 1 ? a[1].toLowerCase(Locale.ROOT) : "here";
+        // Waypoints are per-server (and per-anarchy on FunTime) — every index below
+        // refers to Waypoints.visible(), the current server/anarchy's own subset,
+        // never the full cross-server Waypoints.list.
         switch (sub) {
             case "here" -> {
                 if (mc.player == null) { msg("Not in world."); return; }
-                String name = a.length > 2 ? join(a, 2) : "WP" + (Waypoints.list.size() + 1);
+                String name = a.length > 2 ? join(a, 2) : "WP" + (Waypoints.visible().size() + 1);
                 Waypoints.add(name, mc.player.getX(), mc.player.getY(), mc.player.getZ(), Waypoints.nextColor());
                 msg("Added §d" + name + "§r at your position.");
                 save();
@@ -57,7 +64,7 @@ public final class CommandManager {
             case "add" -> {
                 if (a.length < 5) { msg("Usage: §d.wp add <x> <y> <z> [name] [hexColor]"); return; }
                 double x = Double.parseDouble(a[2]), y = Double.parseDouble(a[3]), z = Double.parseDouble(a[4]);
-                String name = a.length > 5 ? a[5] : "WP" + (Waypoints.list.size() + 1);
+                String name = a.length > 5 ? a[5] : "WP" + (Waypoints.visible().size() + 1);
                 int color = a.length > 6 ? parseColor(a[6]) : Waypoints.nextColor();
                 Waypoints.add(name, x, y, z, color);
                 msg("Added §d" + name + "§r at " + (int) x + " " + (int) y + " " + (int) z + ".");
@@ -66,26 +73,76 @@ public final class CommandManager {
             case "color" -> {
                 if (a.length < 4) { msg("Usage: §d.wp color <index> <hex/name>"); return; }
                 int i = Integer.parseInt(a[2]);
-                if (i < 0 || i >= Waypoints.list.size()) { msg("Bad index."); return; }
-                Waypoints.list.get(i).color = parseColor(a[3]);
-                msg("Recoloured §d" + Waypoints.list.get(i).name + "§r.");
+                List<Waypoints.WP> vis = Waypoints.visible();
+                if (i < 0 || i >= vis.size()) { msg("Bad index."); return; }
+                vis.get(i).color = parseColor(a[3]);
+                msg("Recoloured §d" + vis.get(i).name + "§r.");
                 save();
             }
             case "del", "remove" -> {
                 int i = Integer.parseInt(a[2]);
-                if (i < 0 || i >= Waypoints.list.size()) { msg("Bad index."); return; }
-                msg("Removed §d" + Waypoints.list.remove(i).name + "§r.");
+                List<Waypoints.WP> vis = Waypoints.visible();
+                if (i < 0 || i >= vis.size()) { msg("Bad index."); return; }
+                Waypoints.WP w = vis.get(i);
+                Waypoints.list.remove(w);
+                msg("Removed §d" + w.name + "§r.");
                 save();
             }
-            case "clear" -> { Waypoints.list.clear(); msg("Cleared all waypoints."); save(); }
+            case "clear" -> {
+                Waypoints.list.removeAll(Waypoints.visible());
+                msg("Cleared waypoints on this server/anarchy.");
+                save();
+            }
             case "list" -> {
-                if (Waypoints.list.isEmpty()) { msg("No waypoints."); return; }
-                for (int i = 0; i < Waypoints.list.size(); i++) {
-                    Waypoints.WP w = Waypoints.list.get(i);
+                List<Waypoints.WP> vis = Waypoints.visible();
+                if (vis.isEmpty()) { msg("No waypoints."); return; }
+                for (int i = 0; i < vis.size(); i++) {
+                    Waypoints.WP w = vis.get(i);
                     msg("§7[" + i + "]§r §d" + w.name + "§r  " + (int) w.x + " " + (int) w.y + " " + (int) w.z);
                 }
             }
-            default -> msg("§d.wp§r here|add|color|del|clear|list");
+            case "share" -> {
+                if (a.length < 3) { msg("Usage: §d.wp share <index> <friend|all>"); return; }
+                List<Waypoints.WP> vis = Waypoints.visible();
+                int i = Integer.parseInt(a[2]);
+                if (i < 0 || i >= vis.size()) { msg("Bad index."); return; }
+                String to = a.length > 3 ? a[3] : "all";
+                Waypoints.WP w = vis.get(i);
+                MinecraftClient m = MinecraftClient.getInstance();
+                String me = Friends.myName();
+                if (m.player == null || me == null) { msg("Not in world."); return; }
+                com.lume.client.social.FriendsNet.sharePoint(me, Friends.ensureDeviceId(), to, w.name,
+                        w.x, w.y, w.z, Waypoints.currentServerKey(),
+                        m.world != null ? m.world.getRegistryKey().getValue().toString() : "");
+                msg("Shared §d" + w.name + "§r with §d" + to);
+            }
+            default -> msg("§d.wp§r here|add|color|del|clear|list|share");
+        }
+    }
+
+    // --- .filter ---------------------------------------------------------
+
+    private static void filter(String[] a, String full) {
+        if (a.length < 2) { msg("§d.filter§r add <word…> | del <word…> | list"); return; }
+        switch (a[1].toLowerCase(Locale.ROOT)) {
+            case "add" -> {
+                if (a.length < 3) { msg("Usage: §d.filter add <word…>"); return; }
+                String word = full.substring(full.indexOf(a[2])).trim();
+                ChatFilters.add(word);
+                msg("Filtering messages containing §d" + word);
+                save();
+            }
+            case "del", "remove" -> {
+                if (a.length < 3) { msg("Usage: §d.filter del <word…>"); return; }
+                String word = full.substring(full.indexOf(a[2])).trim();
+                msg(ChatFilters.remove(word) ? "Removed filter §d" + word : "No such filter.");
+                save();
+            }
+            case "list" -> {
+                if (ChatFilters.keywords.isEmpty()) { msg("No filters."); return; }
+                for (String w : ChatFilters.keywords) msg("§d" + w);
+            }
+            default -> msg("§d.filter§r add|del|list");
         }
     }
 
@@ -140,8 +197,9 @@ public final class CommandManager {
 
     private static void help() {
         msg("§dLume commands:");
-        msg("§d.wp§r here|add <x y z>|color|del|clear|list");
+        msg("§d.wp§r here|add <x y z>|color|del|clear|list|share <i> <friend|all>");
         msg("§d.macro§r add <key> <text>|del|list");
+        msg("§d.filter§r add <word>|del <word>|list");
         msg("§d.bind§r <module> <key|none>");
         msg("§d.ft§r — server helper status");
     }

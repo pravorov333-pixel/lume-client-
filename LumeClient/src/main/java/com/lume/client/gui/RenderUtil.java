@@ -5,7 +5,6 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.text.Style;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
-import net.minecraft.util.math.RotationAxis;
 
 /**
  * Small drawing helpers. Vanilla DrawContext has no rounded-rect primitive,
@@ -145,24 +144,91 @@ public final class RenderUtil {
         }
     }
 
-    /** The Lume "Spark" logo mark: 3 nested diamonds (cream / mid-lavender / bright-lavender core). */
+    /**
+     * The Lume "Sparkle" logo mark — same shape/coordinates as {@link com.lume.client.nanovg.NanoVgRenderer#logoMark}
+     * and the website/launcher's SVG mark (big gradient sparkle + small light-lavender sparkle,
+     * its bottom tip directly above the big sparkle's right tip), rebuilt here via scanline
+     * polygon fill since DrawContext has no curved-path API — each quadratic-bezier "petal" is
+     * densely sampled into straight segments first,
+     * which is invisible at this icon's size. Used by the "Menu Logo" HUD watermark and the
+     * (effectively unreachable) pre-NanoVG ClickGUI fallback.
+     */
     public static void drawLogo(DrawContext ctx, int x, int y, int s) {
-        int cream = 0xFFF5F0E6, acc2 = 0xFF8E7FC0, acc = 0xFFB7AAD9;
-        float cx = x + s * 0.5f, cy = y + s * 0.5f;
-        diamond(ctx, cx, cy, s * 0.40f, cream);
-        diamond(ctx, cx, cy, s * 0.248f, acc2);
-        diamond(ctx, cx, cy, s * 0.104f, acc);
+        float u = s / 100f;
+        // Follows the current accent (see NanoVgRenderer.logoMark, same relationship) instead
+        // of a fixed lavender, so Customize Colors re-tints this fallback too.
+        int bigC1 = Theme.accent(), bigC2 = Theme.accent2();
+        int smallC = 0xFF000000 | (Theme.colorLerp(Theme.accentRgb(), 0xFFFFFF, 0.25f) & 0xFFFFFF);
+        float[][] big = sparkleOutline(x, y, u, 42, 16, 48.4f, 39.6f, 72, 46, 48.4f, 52.4f, 42, 76, 35.6f, 52.4f, 12, 46, 35.6f, 39.6f);
+        fillPolygonGradient(ctx, big[0], big[1], bigC1, bigC2);
+        float[][] small = sparkleOutline(x, y, u, 72, 11, 74.8f, 21.2f, 85, 24, 74.8f, 26.8f, 72, 37, 69.2f, 26.8f, 59, 24, 69.2f, 21.2f);
+        fillPolygon(ctx, small[0], small[1], smallC);
     }
 
-    /** Filled diamond (square rotated 45°) centred at (cx,cy), vertex distance r — via matrix rotation. */
-    public static void diamond(DrawContext ctx, float cx, float cy, float r, int argb) {
-        float half = r * 0.70710678f;   // rotated-square half-side so its vertices sit at distance r
-        var m = ctx.getMatrices();
-        m.push();
-        m.translate(cx, cy, 0);
-        m.multiply(RotationAxis.POSITIVE_Z.rotationDegrees(45f));
-        ctx.fill(Math.round(-half), Math.round(-half), Math.round(half), Math.round(half), argb);
-        m.pop();
+    /** Densely samples the sparkle's 4 quadratic-bezier "petals" (tip → control → tip, ×4)
+     *  into a closed straight-edge polygon, in the shared 0..100 mark space scaled by u and
+     *  offset by (x,y) — same coordinate convention as NanoVgRenderer's beginSparklePath. */
+    private static float[][] sparkleOutline(float x, float y, float u,
+                                             float t1x, float t1y, float c1x, float c1y,
+                                             float t2x, float t2y, float c2x, float c2y,
+                                             float t3x, float t3y, float c3x, float c3y,
+                                             float t4x, float t4y, float c4x, float c4y) {
+        java.util.List<float[]> pts = new java.util.ArrayList<>();
+        int steps = 8;
+        sampleQuad(pts, x + t1x * u, y + t1y * u, x + c1x * u, y + c1y * u, x + t2x * u, y + t2y * u, steps);
+        sampleQuad(pts, x + t2x * u, y + t2y * u, x + c2x * u, y + c2y * u, x + t3x * u, y + t3y * u, steps);
+        sampleQuad(pts, x + t3x * u, y + t3y * u, x + c3x * u, y + c3y * u, x + t4x * u, y + t4y * u, steps);
+        sampleQuad(pts, x + t4x * u, y + t4y * u, x + c4x * u, y + c4y * u, x + t1x * u, y + t1y * u, steps);
+        float[] xs = new float[pts.size()], ys = new float[pts.size()];
+        for (int i = 0; i < pts.size(); i++) { xs[i] = pts.get(i)[0]; ys[i] = pts.get(i)[1]; }
+        return new float[][]{ xs, ys };
+    }
+
+    private static void sampleQuad(java.util.List<float[]> out, float p0x, float p0y, float cx, float cy, float p1x, float p1y, int steps) {
+        for (int i = 0; i <= steps; i++) {
+            float t = i / (float) steps, mt = 1 - t;
+            float x = mt * mt * p0x + 2 * mt * t * cx + t * t * p1x;
+            float y = mt * mt * p0y + 2 * mt * t * cy + t * t * p1y;
+            out.add(new float[]{ x, y });
+        }
+    }
+
+    /** Fills an arbitrary closed polygon (even-odd rule) via horizontal scanlines — DrawContext's
+     *  only real primitive is the axis-aligned rect fill, so this is how anything curved/irregular
+     *  (the sparkle logo) has to be drawn. */
+    private static void fillPolygon(DrawContext ctx, float[] xs, float[] ys, int color) {
+        fillPolygonGradient(ctx, xs, ys, color, color);
+    }
+
+    /** Same as {@link #fillPolygon} but lerps top→bottom between two colours per scanline row —
+     *  an approximation of the sparkle's true diagonal gradient (this file's rect gradient helper
+     *  above is vertical-only too; close enough at icon size that the difference isn't visible). */
+    private static void fillPolygonGradient(DrawContext ctx, float[] xs, float[] ys, int colorTop, int colorBot) {
+        int n = xs.length;
+        if (n < 3) return;
+        float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
+        for (float v : ys) { if (v < minY) minY = v; if (v > maxY) maxY = v; }
+        int y0 = (int) Math.floor(minY), y1 = (int) Math.ceil(maxY);
+        float[] xCross = new float[n];
+        for (int y = y0; y < y1; y++) {
+            float sy = y + 0.5f;
+            int cnt = 0;
+            for (int i = 0; i < n; i++) {
+                int j = (i + 1) % n;
+                float ya = ys[i], yb = ys[j];
+                if ((ya <= sy && yb > sy) || (yb <= sy && ya > sy)) {
+                    float t = (sy - ya) / (yb - ya);
+                    xCross[cnt++] = xs[i] + t * (xs[j] - xs[i]);
+                }
+            }
+            java.util.Arrays.sort(xCross, 0, cnt);
+            float rowT = maxY > minY ? (sy - minY) / (maxY - minY) : 0f;
+            int color = lerp(colorTop, colorBot, rowT);
+            for (int i = 0; i + 1 < cnt; i += 2) {
+                int xa = Math.round(xCross[i]), xb = Math.round(xCross[i + 1]);
+                if (xb > xa) ctx.fill(xa, y, xb, y + 1, color);
+            }
+        }
     }
 
     /**
@@ -206,6 +272,15 @@ public final class RenderUtil {
 
     public static void roundedRect(DrawContext ctx, int x, int y, int w, int h, int r, int color) {
         roundedRectRaw(ctx, x, y, w, h, r, color);
+    }
+
+    /** Plain sharp-cornered outline, exactly on {@code x,y,w,h} — four thin edge fills, no rounding/fill. */
+    public static void strokeRect(DrawContext ctx, int x, int y, int w, int h, int thickness, int color) {
+        if (w <= 0 || h <= 0 || thickness <= 0) return;
+        ctx.fill(x, y, x + w, y + thickness, color);                     // top
+        ctx.fill(x, y + h - thickness, x + w, y + h, color);              // bottom
+        ctx.fill(x, y + thickness, x + thickness, y + h - thickness, color);             // left
+        ctx.fill(x + w - thickness, y + thickness, x + w, y + h - thickness, color);     // right
     }
 
     // Anti-aliased rounded rect, optimised: the straight middle is ONE fill,

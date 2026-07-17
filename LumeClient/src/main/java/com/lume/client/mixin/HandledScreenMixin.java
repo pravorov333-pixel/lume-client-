@@ -39,7 +39,8 @@ public abstract class HandledScreenMixin {
             return;
         }
         int a = Math.max(0, Math.min(255, (int) (inv.opacity.value * 255)));
-        int rgb = inv.style.index == 0 ? (Theme.winBg() & 0xFFFFFF) : (inv.color.rgb() & 0xFFFFFF);
+        int rgb = inv.style.index == 0 ? (Theme.winBg() & 0xFFFFFF)
+                : ((inv.color.accent ? Theme.accentRgb() : inv.color.rgb()) & 0xFFFFFF);
         RenderUtil.roundedRect(ctx, x - 5, y - 5, backgroundWidth + 10, backgroundHeight + 10, 8, (a << 24) | rgb);
         for (Slot s : self.getScreenHandler().slots)
             RenderUtil.roundedRect(ctx, x + s.x - 1, y + s.y - 1, 18, 18, 3, 0x55000000);

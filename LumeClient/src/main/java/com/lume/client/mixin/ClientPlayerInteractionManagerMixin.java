@@ -15,6 +15,7 @@ public class ClientPlayerInteractionManagerMixin {
 
     @Inject(method = "attackEntity", at = @At("HEAD"), require = 0)
     private void lume$onAttack(PlayerEntity player, Entity target, CallbackInfo ci) {
+        System.out.println("[Lume][attack debug] attackEntity fired, target=" + (target == null ? "null" : target.getName().getString()));
         HitEffects.onAttack(target);
     }
 }

@@ -3,23 +3,22 @@ package com.lume.client.module.modules.render;
 import com.lume.client.module.Category;
 import com.lume.client.module.Module;
 import com.lume.client.module.setting.BoolSetting;
-import com.lume.client.module.setting.ColorSetting;
-import com.lume.client.module.setting.SliderSetting;
+import com.lume.client.module.setting.ModeSetting;
 
 /**
- * Death Animations — an extra ragdoll tumble on top of vanilla's own death tilt,
- * plus a coloured particle burst at the moment of death. Applied to any living
- * entity that dies in view (see LivingEntityRendererMixin, which reads the
- * entity's own render-state {@code deathTime}).
+ * Death Animations — replaces vanilla's own death tilt/sink with a custom
+ * one. One style picker covers everything now (Soul/Anvil/Thunderstrike/
+ * Beam are all peers) — there's no separate particle picker any more, and
+ * vanilla's own death render is suppressed whenever a style is chosen.
+ * Applied in LivingEntityRendererMixin (suppresses vanilla) + DeathFx (the
+ * actual custom visuals, world-rendered).
  */
 public class DeathAnimations extends Module {
 
-    public final BoolSetting   ragdoll = add(new BoolSetting("Ragdoll Spin", true));
-    public final BoolSetting   burst   = add(new BoolSetting("Particle Burst", true));
-    public final ColorSetting  color   = add(new ColorSetting("Color", true, 183, 170, 217));
-    public final SliderSetting count   = add(new SliderSetting("Burst Count", 20, 5, 60, true));
+    public final ModeSetting animation = add(new ModeSetting("Animation", 0, "Off", "Soul", "Anvil", "Thunderstrike", "Beam"));
+    public final BoolSetting sound = add(new BoolSetting("Sound", true));
 
     public DeathAnimations() {
-        super("Death Animations", "Раг-долл при смерти + вспышка частиц", Category.RENDER, -1);
+        super("Death Animations", "Custom death animation", Category.RENDER, -1);
     }
 }

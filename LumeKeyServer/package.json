@@ -1,0 +1,19 @@
+{
+  "name": "lume-key-server",
+  "version": "0.1.0",
+  "description": "License key issuing/validation backend for Lume Client (scaffold — no payment integration yet)",
+  "private": true,
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1"
+  }
+}

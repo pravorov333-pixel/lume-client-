@@ -12,7 +12,6 @@ import org.joml.Quaternionf;
 import org.joml.Vector3f;
 
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 
 /**
@@ -53,6 +52,11 @@ public final class ParticleEngine {
 
     public static void burst(double x, double y, double z, int rgb, int count,
                              float speed, float size, float lifeSec, int shape) {
+        burst(x, y, z, rgb, count, speed, size, lifeSec, shape, null);
+    }
+
+    public static void burst(double x, double y, double z, int rgb, int count,
+                             float speed, float size, float lifeSec, int shape, net.minecraft.util.Identifier tex) {
         for (int i = 0; i < count; i++) {
             GlowParticle p = new GlowParticle(x, y, z, rgb);
             double theta = RND.nextDouble() * Math.PI * 2;
@@ -67,6 +71,7 @@ public final class ParticleEngine {
             p.alpha = 1f;
             p.maxLife = p.life = lifeSec;
             p.shape = shape;
+            p.texture = tex;
             add(p);
         }
     }
@@ -77,6 +82,10 @@ public final class ParticleEngine {
     }
 
     public static void hit(int style, double x, double y, double z, int rgb, int count, float speed, float size, int shape) {
+        hit(style, x, y, z, rgb, count, speed, size, shape, null);
+    }
+
+    public static void hit(int style, double x, double y, double z, int rgb, int count, float speed, float size, int shape, net.minecraft.util.Identifier tex) {
         switch (style) {
             case 1 -> { // Spark — fast, gravity-heavy sparks with trails
                 for (int i = 0; i < count; i++) {
@@ -86,6 +95,7 @@ public final class ParticleEngine {
                     p.vx = Math.sin(phi) * Math.cos(theta) * sp; p.vy = Math.abs(Math.cos(phi)) * sp; p.vz = Math.sin(phi) * Math.sin(theta) * sp;
                     p.gravity = 6f; p.drag = 0.8f; p.size = size * 0.6f; p.sizeEnd = 0f; p.alpha = 1f; p.maxLife = p.life = 0.6;
                     p.shape = shape;
+                    p.texture = tex;
                     add(p);
                 }
             }
@@ -96,14 +106,15 @@ public final class ParticleEngine {
                     p.vx = Math.cos(a) * speed; p.vz = Math.sin(a) * speed; p.vy = 0;
                     p.gravity = 0f; p.drag = 0.25f; p.size = size; p.sizeEnd = size * 0.2f; p.alpha = 1f; p.maxLife = p.life = 0.5;
                     p.shape = shape;
+                    p.texture = tex;
                     add(p);
                 }
             }
             case 3 -> { // Nova — bright dense sphere flash: main burst + a lightened-tint inner core
-                burst(x, y, z, rgb, count * 2, speed * 0.7f, size * 1.2f, 0.4f, shape);
-                burst(x, y, z, tint(rgb, 0.6f), count, speed * 0.4f, size * 0.8f, 0.3f, shape);
+                burst(x, y, z, rgb, count * 2, speed * 0.7f, size * 1.2f, 0.4f, shape, tex);
+                burst(x, y, z, tint(rgb, 0.6f), count, speed * 0.4f, size * 0.8f, 0.3f, shape, tex);
             }
-            default -> burst(x, y, z, rgb, count, speed, size, 0.5f, shape); // Burst
+            default -> burst(x, y, z, rgb, count, speed, size, 0.5f, shape, tex); // Burst
         }
     }
 
@@ -250,9 +261,16 @@ public final class ParticleEngine {
         long now = System.nanoTime();
         double dt = Math.min(0.1, (now - lastNanos) / 1e9);
         lastNanos = now;
-        for (Iterator<GlowParticle> it = PARTICLES.iterator(); it.hasNext(); ) {
-            if (!it.next().tick(dt)) it.remove();
+        // Compact in place instead of Iterator.remove(): ArrayList.remove() shifts every
+        // trailing element (O(n) per call), so removing a whole wave of same-age particles
+        // that die together (e.g. the first batch spawned right after the module is enabled)
+        // costs O(n*k) in one frame — a real stutter. This does one O(n) pass + O(dead) tail-trim.
+        int w = 0;
+        for (int r = 0, n = PARTICLES.size(); r < n; r++) {
+            GlowParticle p = PARTICLES.get(r);
+            if (p.tick(dt)) PARTICLES.set(w++, p);
         }
+        for (int i = PARTICLES.size() - 1; i >= w; i--) PARTICLES.remove(i);
         if (PARTICLES.isEmpty()) return;
 
         Vec3d cam = ctx.camera().getPos();
@@ -269,7 +287,7 @@ public final class ParticleEngine {
         // next time a quad particle tries to write — exactly the Star-shape crash.
         VertexConsumer vc = vcp.getBuffer(RenderLayer.getDebugQuads());
         for (GlowParticle p : PARTICLES) {
-            if (p.shape >= SHAPE_STAR) continue;
+            if (p.texture != null || p.shape >= SHAPE_STAR) continue;
             float t = p.progress();
             float a = p.alpha * (1f - t);                       // fade out over life
             if (a <= 0.01f) continue;
@@ -283,7 +301,7 @@ public final class ParticleEngine {
         if (vcp instanceof VertexConsumerProvider.Immediate immQuads) immQuads.draw(RenderLayer.getDebugQuads());
 
         for (GlowParticle p : PARTICLES) {
-            if (p.shape < SHAPE_STAR) continue;
+            if (p.texture != null || p.shape < SHAPE_STAR) continue;
             float t = p.progress();
             float a = p.alpha * (1f - t);
             if (a <= 0.01f) continue;
@@ -292,9 +310,40 @@ public final class ParticleEngine {
             int rgb = p.rgb & 0xFFFFFF;
             fanShape(vcp, mat, cx, cy, cz, right, up, p.shape, rad * 1.6f, rgb, (int) (a * 255));
         }
+
+        // Custom drop-in PNG particles — textured billboard, one draw call per particle
+        // (each may use a different texture; batching by texture isn't worth the complexity here).
+        for (GlowParticle p : PARTICLES) {
+            if (p.texture == null) continue;
+            float t = p.progress();
+            float a = p.alpha * (1f - t);
+            if (a <= 0.01f) continue;
+            float rad = p.size + (p.sizeEnd - p.size) * t;
+            float cx = (float) (p.x - cam.x), cy = (float) (p.y - cam.y), cz = (float) (p.z - cam.z);
+            texturedQuad(vcp, mat, p.texture, cx, cy, cz, right, up, rad * 1.4f, p.rgb & 0xFFFFFF, (int) (a * 255));
+        }
     }
 
-    private static void quad(VertexConsumer vc, Matrix4f m, float cx, float cy, float cz,
+    /** One custom-texture billboard (camera-facing, additive-ish translucent), tinted by the
+     *  particle's colour. Flushed immediately, same reasoning as {@link #fanShape}. */
+    private static void texturedQuad(VertexConsumerProvider vcp, Matrix4f m, net.minecraft.util.Identifier tex,
+                                     float cx, float cy, float cz, Vector3f right, Vector3f up, float r, int rgb, int alpha) {
+        alpha = Math.max(0, Math.min(255, alpha));
+        int argb = (alpha << 24) | rgb;
+        int light = 0xF000F0;   // full bright — matches other always-lit Lume world overlays (waypoints, etc.)
+        RenderLayer layer = RenderLayer.getText(tex);
+        VertexConsumer vc = vcp.getBuffer(layer);
+        float rx = right.x * r, ry = right.y * r, rz = right.z * r;
+        float ux = up.x * r, uy = up.y * r, uz = up.z * r;
+        vc.vertex(m, cx - rx - ux, cy - ry - uy, cz - rz - uz).color(argb).texture(0f, 1f).light(light);
+        vc.vertex(m, cx - rx + ux, cy - ry + uy, cz - rz + uz).color(argb).texture(0f, 0f).light(light);
+        vc.vertex(m, cx + rx + ux, cy + ry + uy, cz + rz + uz).color(argb).texture(1f, 0f).light(light);
+        vc.vertex(m, cx + rx - ux, cy + ry - uy, cz + rz - uz).color(argb).texture(1f, 1f).light(light);
+        if (vcp instanceof VertexConsumerProvider.Immediate imm) imm.draw(layer);
+    }
+
+    /** Package-visible for DeathFx's bubble-ring effect. */
+    static void quad(VertexConsumer vc, Matrix4f m, float cx, float cy, float cz,
                              Vector3f right, Vector3f up, float r, int rgb, int alpha) {
         alpha = Math.max(0, Math.min(255, alpha));
         int argb = (alpha << 24) | rgb;
@@ -309,9 +358,17 @@ public final class ParticleEngine {
 
     // ---- shaped (non-Minecraft-looking) particle silhouettes --------------
 
+    // shapeOutline() only ever depends on `shape`, never on per-particle state, but used to
+    // rebuild (and for star/sparkle, re-run Math.cos/sin over) a fresh float[][] on EVERY
+    // fanShape() call — i.e. every frame, for every star/sparkle/triangle/diamond particle
+    // alive. Cached by shape id the same way heartOutline() already cached itself.
+    private static final float[][][] SHAPE_OUTLINE_CACHE = new float[7][][];
+
     /** Outline points (normalized -1..1) for each fan-drawn shape, in order around the perimeter. */
     private static float[][] shapeOutline(int shape) {
-        return switch (shape) {
+        float[][] cached = SHAPE_OUTLINE_CACHE[shape];
+        if (cached != null) return cached;
+        float[][] out = switch (shape) {
             case SHAPE_SPARKLE -> starOutline(4, 0.22f);   // thin 4-point glint/sparkle
             case SHAPE_TRIANGLE -> new float[][] {
                     { 0f, -1f }, { 0.87f, 0.5f }, { -0.87f, 0.5f }
@@ -322,6 +379,8 @@ public final class ParticleEngine {
             case SHAPE_HEART -> heartOutline();
             default -> starOutline(5, 0.45f);   // SHAPE_STAR
         };
+        SHAPE_OUTLINE_CACHE[shape] = out;
+        return out;
     }
 
     private static float[][] starOutline(int points, float innerRatio) {

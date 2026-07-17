@@ -1,0 +1,15 @@
+{
+  "name": "lume-telegram-bot",
+  "version": "0.1.0",
+  "description": "Telegram bot for buying Lume Client license keys — manual payment confirmation, auto-issues keys via LumeKeyServer",
+  "private": true,
+  "main": "src/bot.js",
+  "scripts": {
+    "start": "node src/bot.js",
+    "dev": "node --watch src/bot.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "telegraf": "^4.16.3"
+  }
+}

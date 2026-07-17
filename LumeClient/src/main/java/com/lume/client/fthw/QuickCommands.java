@@ -28,6 +28,7 @@ public final class QuickCommands {
         list.add(new Cmd("Аукцион", "/ah"));
         list.add(new Cmd("Продать", "/sell hand"));
         list.add(new Cmd("Дом", "/home"));
+        list.add(new Cmd("Координаты ивента", "/event delay"));
     }
 
     private QuickCommands() {}
@@ -53,5 +54,7 @@ public final class QuickCommands {
         if (mc.player == null || mc.getNetworkHandler() == null) return;
         if (c.command.startsWith("/")) mc.getNetworkHandler().sendChatCommand(c.command.substring(1));
         else mc.getNetworkHandler().sendChatMessage(c.command);
+        // any "/event ..." command's reply is expected to carry coordinates — open the capture window (see EventLocator)
+        if (c.command.toLowerCase(java.util.Locale.ROOT).contains("event")) EventLocator.arm();
     }
 }

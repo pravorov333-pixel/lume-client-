@@ -2,15 +2,17 @@ package com.lume.client.module.modules.render;
 
 import com.lume.client.module.Category;
 import com.lume.client.module.Module;
-import com.lume.client.module.setting.SliderSetting;
 
-/** Tunes dropped-item physics client-side: fall gravity strength and ground bounce. */
+/**
+ * Dropped items tumble on all 3 axes while falling and freeze at whatever
+ * angle they land at, resting flush on the ground instead of vanilla's
+ * perpetual float+spin — fixed, natural-feeling physics, no tunable knobs
+ * (see {@code ItemEntityMixin} for the fall/landing physics, {@code
+ * ItemEntityRendererMixin} for replacing vanilla's own draw with it).
+ */
 public class ItemPhysics extends Module {
 
-    public final SliderSetting gravity = add(new SliderSetting("Gravity", 1.0, 0.2, 3.0, false));
-    public final SliderSetting bounce  = add(new SliderSetting("Bounce", 0.0, 0.0, 0.9, false));
-
     public ItemPhysics() {
-        super("Item Physics", "Гравитация и отскок выпавших предметов", Category.RENDER, -1);
+        super("Item Physics", "Предметы падают и катятся как в реальном мире", Category.RENDER, -1);
     }
 }

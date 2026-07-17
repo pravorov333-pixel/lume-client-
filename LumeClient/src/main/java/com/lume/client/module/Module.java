@@ -70,6 +70,13 @@ public abstract class Module {
         return setting;
     }
 
+    /** Marks a setting as hidden from the generic settings-list rendering (it still
+     *  persists normally) — for settings a module draws via its own custom UI block. */
+    protected <T extends Setting> T hide(T setting) {
+        setting.hidden = true;
+        return setting;
+    }
+
     public List<Setting> getSettings() { return settings; }
     public boolean hasSettings() { return !settings.isEmpty(); }
 

@@ -1,5 +1,7 @@
 package com.lume.client.gui;
 
+import com.lume.client.command.MacroManager;
+import com.lume.client.module.modules.qol.ChatFilters;
 import com.lume.client.nanovg.NanoVgRenderer;
 import com.lume.client.util.ConfigProfiles;
 import net.minecraft.client.gui.DrawContext;
@@ -24,6 +26,11 @@ public class ConfigScreen extends LumeSubScreen {
 
     // Texture pack picker (GUI-only pending selection until Confirm is pressed)
     private String pendingPack = null;
+
+    // Chat Filters "add keyword" text field
+    private String filterText = "";
+    private boolean filterFocused = false;
+    private int[] filterBox = { 0, 0, 0, 0 };
 
     // Hit testing (filled per frame)
     private final List<Object[]> hits = new ArrayList<>();
@@ -84,8 +91,12 @@ public class ConfigScreen extends LumeSubScreen {
         int packRowH = 18 * S;
 
         int rowH = 30 * S, gap = 8 * S, btnH = 28 * S;
+        int macroCount = Math.max(1, MacroManager.macros.size());
+        int filterCount = Math.max(1, ChatFilters.keywords.size());
         int contentH = 22 * S + btnH + gap + btnH + gap + profiles.size() * (rowH + gap)
-                + 20 * S + btnH + gap + packs.size() * (packRowH + 2 * S) + gap + btnH;
+                + 20 * S + btnH + gap + packs.size() * (packRowH + 2 * S) + gap + btnH
+                + gap + 20 * S + macroCount * (rowH + gap)
+                + gap + 20 * S + filterCount * (rowH + gap) + btnH + gap;
         int maxScroll = Math.max(0, contentH - visH);
         scrollTarget = (float) Math.max(0, Math.min(scrollTarget, maxScroll));
         scroll = approach(scroll, scrollTarget, 16f, dt);
@@ -96,9 +107,11 @@ public class ConfigScreen extends LumeSubScreen {
         final List<String> fProfiles = new ArrayList<>(profiles);
         final String fActive = active;
 
+        drawGlassBackdrop(S, sw, sh, x, y, W, H, 18 * S);
+        ctx.draw();   // flush DrawContext's own queued geometry before raw-GL NanoVG draws
         NanoVgRenderer.frame(vg -> {
             applyTransform(vg, S, sw, sh);
-            drawWindowFrame(vg, x, y, W, H, S, mx, my, 2);
+            drawWindowFrame(vg, x, y, W, H, S, mx, my, 2, dt);
 
             NanoVgRenderer.save(vg);
             NanoVgRenderer.scissor(vg, x, clipTop, W, visH);
@@ -114,7 +127,7 @@ public class ConfigScreen extends LumeSubScreen {
             if (bry + fBtnH >= clipTop && bry <= clipBot) {
                 NanoVgRenderer.shadow(vg, sx, bry, btnW, fBtnH, 9 * S, 8 * S, withAlpha(Theme.accentRgb(), 0x44));
                 NanoVgRenderer.gradientRoundedRect(vg, sx, bry, btnW, fBtnH, 9 * S, Theme.accent(), Theme.accent2());
-                NanoVgRenderer.text(vg, sx + btnW / 2f, bry + fBtnH / 2f, 11 * S, 0xFFFFFFFF, NanoVgRenderer.ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Save"));
+                NanoVgRenderer.text(vg, sx + btnW / 2f, bry + fBtnH / 2f, 11 * S, Theme.activeText(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Save"));
                 hits.add(new Object[]{ "save", fActive, sx, bry, btnW, fBtnH });
 
                 int bx2 = sx + btnW + 8 * S;
@@ -203,10 +216,81 @@ public class ConfigScreen extends LumeSubScreen {
             int cby = gy + cur - scrollI;
             if (packChanged && cby + fBtnH >= clipTop && cby <= clipBot) {
                 NanoVgRenderer.gradientRoundedRect(vg, sx, cby, ew, fBtnH, 9 * S, Theme.accent(), Theme.accent2());
-                NanoVgRenderer.text(vg, sx + ew / 2f, cby + fBtnH / 2f, 11 * S, 0xFFFFFFFF, NanoVgRenderer.ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Confirm"));
+                NanoVgRenderer.text(vg, sx + ew / 2f, cby + fBtnH / 2f, 11 * S, Theme.activeText(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Confirm"));
                 hits.add(new Object[]{ "confirmPack", "", sx, cby, ew, fBtnH });
             }
             cur += fBtnH;
+
+            // Chat Macros — key -> command/message binds (added via ".macro add <key> <text>" in chat)
+            cur += fGap;
+            NanoVgRenderer.text(vg, sx, gy + cur - scrollI + 8 * S, 10 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE,
+                    com.lume.client.Lang.tUI("Chat Macros") + "  ·  .macro add <key> <text>");
+            cur += 20 * S;
+            if (MacroManager.macros.isEmpty()) {
+                int ry = gy + cur - scrollI;
+                if (ry + fRowH >= clipTop && ry <= clipBot) {
+                    NanoVgRenderer.text(vg, sx, ry + fRowH / 2f, 9.5f * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE,
+                            com.lume.client.Lang.tUI("No macros yet"));
+                }
+                cur += fRowH + fGap;
+            } else {
+                for (MacroManager.Macro mac : new ArrayList<>(MacroManager.macros)) {
+                    int ry = gy + cur - scrollI;
+                    if (ry + fRowH >= clipTop && ry <= clipBot) {
+                        NanoVgRenderer.roundedRect(vg, sx, ry, ew, fRowH, 9 * S, Theme.glassRow());
+                        NanoVgRenderer.text(vg, sx + 12 * S, ry + fRowH / 2f, 10.5f * S, Theme.accent(), NanoVgRenderer.ALIGN_MIDDLE,
+                                com.lume.client.command.CommandManager.keyName(mac.key));
+                        NanoVgRenderer.text(vg, sx + 46 * S, ry + fRowH / 2f, 10 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, mac.text);
+                        NanoVgRenderer.text(vg, sx + ew - 16 * S, ry + fRowH / 2f, 10 * S, 0xFFE05656, NanoVgRenderer.ALIGN_MIDDLE, "✕");
+                        hits.add(new Object[]{ "delMacro", String.valueOf(mac.key), sx + ew - 22 * S, ry, 22 * S, fRowH });
+                    }
+                    cur += fRowH + fGap;
+                }
+            }
+
+            // Chat Filters — keywords that hide matching chat lines (Chat Filters module must be on)
+            cur += fGap;
+            NanoVgRenderer.text(vg, sx, gy + cur - scrollI + 8 * S, 10 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE,
+                    com.lume.client.Lang.tUI("Chat Filters"));
+            cur += 20 * S;
+            if (ChatFilters.keywords.isEmpty()) {
+                int ry = gy + cur - scrollI;
+                if (ry + fRowH >= clipTop && ry <= clipBot) {
+                    NanoVgRenderer.text(vg, sx, ry + fRowH / 2f, 9.5f * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE,
+                            com.lume.client.Lang.tUI("No filters yet"));
+                }
+                cur += fRowH + fGap;
+            } else {
+                for (String word : new ArrayList<>(ChatFilters.keywords)) {
+                    int ry = gy + cur - scrollI;
+                    if (ry + fRowH >= clipTop && ry <= clipBot) {
+                        NanoVgRenderer.roundedRect(vg, sx, ry, ew, fRowH, 9 * S, Theme.glassRow());
+                        NanoVgRenderer.text(vg, sx + 12 * S, ry + fRowH / 2f, 10.5f * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, word);
+                        NanoVgRenderer.text(vg, sx + ew - 16 * S, ry + fRowH / 2f, 10 * S, 0xFFE05656, NanoVgRenderer.ALIGN_MIDDLE, "✕");
+                        hits.add(new Object[]{ "delFilter", word, sx + ew - 22 * S, ry, 22 * S, fRowH });
+                    }
+                    cur += fRowH + fGap;
+                }
+            }
+
+            int filterFieldW = ew - 80 * S, filterFieldH = fBtnH;
+            int flX = sx, flY = gy + cur - scrollI;
+            if (flY + filterFieldH >= clipTop && flY <= clipBot) {
+                NanoVgRenderer.roundedRect(vg, flX, flY, filterFieldW, filterFieldH, 8 * S, filterFocused ? Theme.glassHov() : Theme.glassRow());
+                NanoVgRenderer.strokeRoundedRect(vg, flX + 0.5f * S, flY + 0.5f * S, filterFieldW - S, filterFieldH - S, 8 * S, S,
+                        filterFocused ? Theme.accent() : Theme.rim());
+                String placeholder = com.lume.client.Lang.tUI("keyword…");
+                String shown = filterText.isEmpty() && !filterFocused ? placeholder : filterText + (filterFocused ? "|" : "");
+                NanoVgRenderer.text(vg, flX + 10 * S, flY + filterFieldH / 2f, 10 * S,
+                        filterText.isEmpty() && !filterFocused ? Theme.txtDim() : Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, shown);
+
+                int faX = flX + filterFieldW + 8 * S, faW = ew - filterFieldW - 8 * S;
+                NanoVgRenderer.gradientRoundedRect(vg, faX, flY, faW, filterFieldH, 8 * S, Theme.accent(), Theme.accent2());
+                NanoVgRenderer.text(vg, faX + faW / 2f, flY + filterFieldH / 2f, 10 * S, Theme.activeText(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Add"));
+                hits.add(new Object[]{ "addFilter", "", faX, flY, faW, filterFieldH });
+            }
+            filterBox = new int[]{ flX, flY, filterFieldW, filterFieldH };
+            cur += filterFieldH;
 
             NanoVgRenderer.restore(vg);
 
@@ -237,9 +321,10 @@ public class ConfigScreen extends LumeSubScreen {
 
             int applyX = ibX + ibW + 8 * S, applyW = ew - ibW - 8 * S;
             NanoVgRenderer.gradientRoundedRect(vg, applyX, ibY, applyW, ibH, 8 * S, Theme.accent(), Theme.accent2());
-            NanoVgRenderer.text(vg, applyX + applyW / 2f, ibY + ibH / 2f, 10 * S, 0xFFFFFFFF, NanoVgRenderer.ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Apply"));
+            NanoVgRenderer.text(vg, applyX + applyW / 2f, ibY + ibH / 2f, 10 * S, Theme.activeText(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Apply"));
             hits.add(new Object[]{ "import", "", applyX, ibY, applyW, ibH });
         });
+        drawOpenTransition(S, sw, sh, x, y, W, H);
     }
 
     @Override
@@ -258,6 +343,14 @@ public class ConfigScreen extends LumeSubScreen {
             return true;
         }
         importFocused = false;
+
+        // Chat Filters "add keyword" field
+        if (mx >= filterBox[0] && mx <= filterBox[0] + filterBox[2]
+                && my >= filterBox[1] && my <= filterBox[1] + filterBox[3]) {
+            filterFocused = true;
+            return true;
+        }
+        filterFocused = false;
 
         for (Object[] h : hits) {
             String kind = (String) h[0];
@@ -282,6 +375,11 @@ public class ConfigScreen extends LumeSubScreen {
                         importCode = "";
                     }
                 }
+                case "delMacro" -> { MacroManager.remove(Integer.parseInt(name)); com.lume.client.Config.save(); }
+                case "delFilter" -> { ChatFilters.remove(name); com.lume.client.Config.save(); }
+                case "addFilter" -> {
+                    if (!filterText.isBlank()) { ChatFilters.add(filterText); com.lume.client.Config.save(); filterText = ""; }
+                }
                 case "resetMenu" -> ClickGuiScreen.resetToDefaults();
                 case "openTexFolder" -> openFolder("resourcepacks");
                 case "openModsFolder" -> openFolder("mods");
@@ -304,6 +402,7 @@ public class ConfigScreen extends LumeSubScreen {
     @Override
     public boolean charTyped(char chr, int modifiers) {
         if (importFocused && chr >= 32 && chr != 127) { importCode += chr; return true; }
+        if (filterFocused && chr >= 32 && chr != 127) { filterText += chr; return true; }
         return super.charTyped(chr, modifiers);
     }
 
@@ -312,6 +411,15 @@ public class ConfigScreen extends LumeSubScreen {
         if (importFocused) {
             if (key == 256) { importFocused = false; return true; }
             if (key == 259 && !importCode.isEmpty()) { importCode = importCode.substring(0, importCode.length() - 1); return true; }
+            return true;
+        }
+        if (filterFocused) {
+            if (key == 256) { filterFocused = false; return true; }
+            if (key == 257 || key == 335) { // Enter
+                if (!filterText.isBlank()) { ChatFilters.add(filterText); com.lume.client.Config.save(); filterText = ""; }
+                return true;
+            }
+            if (key == 259 && !filterText.isEmpty()) { filterText = filterText.substring(0, filterText.length() - 1); return true; }
             return true;
         }
         return super.keyPressed(key, scan, mods);

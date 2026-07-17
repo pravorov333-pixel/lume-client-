@@ -21,6 +21,8 @@ abstract class LumeSubScreen extends Screen {
     protected final long openTime = System.currentTimeMillis();
     protected float total = 1f;                       // last computed window scale
     protected int[] themeBtn = { 0, 0, 0, 0 };        // window-local coords
+    protected int[] colorsBtn = { 0, 0, 0, 0 };       // window-local coords
+    private float themeHoverT = 0f, colorsHoverT = 0f;
 
     // HUD editor state (drag HUD elements from any catalog)
     protected String selectedHud = null, dragHud = null;
@@ -50,10 +52,28 @@ abstract class LumeSubScreen extends Screen {
         return Math.min(1f, Math.min(fw, fh));
     }
 
-    /** Compute + store the current window scale (open-anim × user scale × auto-fit). */
+    /** Compute + store the current window scale (user scale × auto-fit). Used to zoom in
+     *  from 96% on open too — a visible size change on every catalog switch, not wanted —
+     *  now always at real size; {@link #drawOpenTransition} does a blur-dissolve instead. */
     protected float computeTotal(int winW, int winH) {
-        total = (0.96f + 0.04f * anim()) * ClickGuiScreen.getWinScale() * fitScale(winW, winH);
+        total = ClickGuiScreen.getWinScale() * fitScale(winW, winH);
         return total;
+    }
+
+    /** Blur-dissolve open transition (see ClickGuiScreen's own copy of this idea) — call
+     *  AFTER the NanoVG frame that drew [x,y,W,H] (window-local) so it captures the freshly
+     *  drawn sharp content and blurs THAT, fading out as anim() finishes. */
+    protected void drawOpenTransition(int S, int sw, int sh, int x, int y, int W, int H) {
+        float p = anim();
+        if (p >= 1f) return;
+        double cx = sw / 2.0, cy = sh / 2.0;
+        double sx0 = ClickGuiScreen.getWinOffX() * S + cx + total * (x - cx);
+        double sy0 = ClickGuiScreen.getWinOffY() * S + cy + total * (y - cy);
+        double sx1 = ClickGuiScreen.getWinOffX() * S + cx + total * (x + W - cx);
+        double sy1 = ClickGuiScreen.getWinOffY() * S + cy + total * (y + H - cy);
+        int gx = (int) Math.round(sx0), gy = (int) Math.round(sy0);
+        int gw = (int) Math.round(sx1 - sx0), gh = (int) Math.round(sy1 - sy0);
+        com.lume.client.nanovg.GlassRenderer.transitionOverlay(gx, gy, gw, gh, (1f - p) * 0.8f, 1f - p);
     }
 
     protected int localMx(double mouseX, int S, int sw) {
@@ -75,6 +95,17 @@ abstract class LumeSubScreen extends Screen {
         NanoVgRenderer.translate(vg, (float) -cx, (float) -cy);
     }
 
+    /** Premium Glass backdrop — must be called BEFORE ctx.draw()/NanoVgRenderer.frame() (raw
+     *  GL, not routed through NanoVG), using the SAME window-local [x,y,W,H] the subclass is
+     *  about to hand to drawWindowFrame. No-op unless Full Glass is the active style. */
+    protected void drawGlassBackdrop(int S, int sw, int sh, int x, int y, int W, int H, int r) {
+        if (Theme.getGlassStyle() != 1) return;
+        double cx = sw / 2.0, cy = sh / 2.0;
+        com.lume.client.nanovg.GlassRenderer.panelWindowLocal(
+                ClickGuiScreen.getWinOffX() * S, ClickGuiScreen.getWinOffY() * S, cx, cy, total,
+                x, y, W, H, r, Theme.getGlassBlur(), Theme.getGlassDistort());
+    }
+
     /** The lume logo mark: half-square (triangle) with a circle centred inside. */
     protected void nvgLogo(long vg, float x, float y, float s) {
         NanoVgRenderer.logoMark(vg, x, y, s);
@@ -85,8 +116,8 @@ abstract class LumeSubScreen extends Screen {
      * layered shadows, gradient glass, rim, header (logo + wordmark) and theme
      * toggle. Content is drawn afterwards by the subclass.
      */
-    protected void drawWindowFrame(long vg, int x, int y, int W, int H, int S, int mx, int my, int activeTab) {
-        drawNavBar(vg, x, y, W, S, mx, my, activeTab);
+    protected void drawWindowFrame(long vg, int x, int y, int W, int H, int S, int mx, int my, int activeTab, float dt) {
+        drawNavBar(vg, x, y, W, S, mx, my, activeTab, dt);
 
         int r = 18 * S;
         NanoVgRenderer.shadow(vg, x, y, W, H, r, 22 * S, 0x70000000);
@@ -99,49 +130,32 @@ abstract class LumeSubScreen extends Screen {
         float w1w = NanoVgRenderer.textWidth(vg, hfs, "lume ");
         float w2w = NanoVgRenderer.textWidth(vg, hfs, "visuals");
         float hsx = x + W / 2f - (w1w + w2w) / 2f;
-        NanoVgRenderer.text(vg, hsx, hcy, hfs, Theme.accent(), NanoVgRenderer.ALIGN_MIDDLE, "lume");
-        NanoVgRenderer.text(vg, hsx + w1w, hcy, hfs, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, "visuals");
+        NanoVgRenderer.text(vg, hsx, hcy, hfs, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, "lume");
+        NanoVgRenderer.text(vg, hsx + w1w, hcy, hfs, Theme.accent(), NanoVgRenderer.ALIGN_MIDDLE, "visuals");
 
-        // theme toggle
-        int tbw = 56 * S, tbh = 22 * S, tbx = x + W - tbw - 20 * S, tby = y + 14 * S;
+        // Theme toggle + Customize Colors — identical icon buttons to ClickGuiScreen's
+        // header (and the title-screen popover), drawn via the shared ThemeIcons helper
+        // so this can't visually drift from the main menu.
+        int tbw = 22 * S, tbh = 22 * S, tbx = x + W - tbw - 20 * S, tby = y + 14 * S;
         boolean tbHov = mx >= tbx && mx <= tbx + tbw && my >= tby && my <= tby + tbh;
-        NanoVgRenderer.roundedRect(vg, tbx, tby, tbw, tbh, 11 * S, tbHov ? Theme.glassHov() : Theme.glassRow());
-        NanoVgRenderer.strokeRoundedRect(vg, tbx + 0.5f * S, tby + 0.5f * S, tbw - S, tbh - S, 11 * S, S, Theme.rim());
-        NanoVgRenderer.text(vg, tbx + tbw / 2f, tby + tbh / 2f, 10 * S, Theme.txt(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, Theme.isDark() ? "Dark" : "Light");
+        themeHoverT = approach(themeHoverT, tbHov ? 1f : 0f, 12f, dt);
+
+        int cbw = 22 * S, cbh = 22 * S, cbx = tbx - cbw - 6 * S, cby = tby;
+        boolean cbHov = mx >= cbx && mx <= cbx + cbw && my >= cby && my <= cby + cbh;
+        colorsHoverT = approach(colorsHoverT, cbHov ? 1f : 0f, 12f, dt);
+
+        ThemeIcons.drawTheme(vg, tbx, tby, S, themeHoverT);
+        ThemeIcons.drawColors(vg, cbx, cby, S, colorsHoverT);
         themeBtn = new int[]{ tbx, tby, tbw, tbh };
+        colorsBtn = new int[]{ cbx, cby, cbw, cbh };
     }
 
-    protected void drawNavBar(long vg, int x, int y, int W, int S, int mx, int my, int activeTab) {
-        int navH = 28 * S, navGap = 6 * S;
-        int nY = y - navGap - navH;
-        String[] labels = { com.lume.client.Lang.tUI("Menu"), com.lume.client.Lang.tUI("Events"),
-                com.lume.client.Lang.tUI("Config"), com.lume.client.Lang.tUI("Friends") };
-        float font = 10 * S;
-        int pad = 12 * S;
-        int total = 0;
-        int[] ww = new int[4];
-        for (int i = 0; i < 4; i++) {
-            ww[i] = (int) NanoVgRenderer.textWidth(vg, font, labels[i]) + pad * 2;
-            total += ww[i];
-        }
-        int barX = x + (W - total) / 2;
-        NanoVgRenderer.shadow(vg, barX - 4 * S, nY - 3 * S, total + 8 * S, navH + 6 * S, 13 * S, 16 * S, 0x44000000);
-        NanoVgRenderer.roundedRect(vg, barX - 4 * S, nY - 3 * S, total + 8 * S, navH + 6 * S, 13 * S, Theme.glassRow());
-        NanoVgRenderer.strokeRoundedRect(vg, barX - 4 * S + 0.5f * S, nY - 3 * S + 0.5f * S,
-                total + 8 * S - S, navH + 6 * S - S, 13 * S, S, Theme.rim());
-        int cx = barX;
-        for (int i = 0; i < 4; i++) {
-            navX[i] = cx; navW[i] = ww[i];
-            if (i == activeTab) {
-                NanoVgRenderer.bloom(vg, cx, nY, ww[i], navH, 12 * S, 10 * S, Theme.accentRgb(), 0x88);
-                NanoVgRenderer.gradientRoundedRect(vg, cx, nY, ww[i], navH, 12 * S, Theme.accent(), Theme.accent2());
-            }
-            int lblCol = i == activeTab ? 0xFFFFFFFF : (Theme.isDark() ? Theme.txtDim() : 0xFFFFFFFF);
-            NanoVgRenderer.text(vg, cx + ww[i] / 2f, nY + navH / 2f, font,
-                    lblCol, NanoVgRenderer.ALIGN_CENTER_MIDDLE, labels[i]);
-            cx += ww[i];
-        }
-        navBarY = nY; navBarH = navH;
+    protected void drawNavBar(long vg, int x, int y, int W, int S, int mx, int my, int activeTab, float dt) {
+        // Delegates to NavBar so the sliding pill is shared with ClickGuiScreen's own
+        // "Menu" tab — one continuous animation across both screen classes instead of
+        // each owning a separate, unaware-of-each-other copy of the same bar.
+        int[] yh = NavBar.draw(vg, x, y, W, S, activeTab, dt, navX, navW);
+        navBarY = yh[0]; navBarH = yh[1];
     }
 
     // ---- HUD editor: draggable element frames, shown in every catalog ----
@@ -157,13 +171,11 @@ abstract class LumeSubScreen extends Screen {
             int[] rc = rects.get(i);
             String label = names.get(i);
             boolean sel = label.equals(selectedHud);
-            boolean hov = sel || (dragMode == 3 && label.equals(dragHud))
-                    || (mouseX >= rc[0] && mouseX <= rc[0] + rc[2] && mouseY >= rc[1] && mouseY <= rc[1] + rc[3]);
+            boolean dragging = dragMode == 3 && label.equals(dragHud);
             int rx = rc[0] * S, ry = rc[1] * S, rw = rc[2] * S, rh = rc[3] * S;
-            RenderUtil.roundedRect(ctx, rx, ry, rw, rh, 5 * S, withAlpha(Theme.accentRgb(), hov ? 0x55 : 0x22));
-            RenderUtil.roundedRect(ctx, rx, ry, rw, Math.max(1, S), 1, sel ? Theme.accent() : withAlpha(Theme.accentRgb(), 0x88));
-            int tw = RenderUtil.width(textRenderer, label, 0.42f * S);
-            RenderUtil.textVCentered(ctx, textRenderer, label, rx + (rw - tw) / 2, ry, rh, hov ? 0xFFFFFFFF : Theme.txt(), 0.42f * S);
+            // No idle overlay/label — the element itself is the grab target. Only while actually
+            // being dragged does a plain white outline trace its exact bounds (drag feedback).
+            if (dragging) RenderUtil.strokeRect(ctx, rx, ry, rw, rh, Math.max(1, S), 0xFFFFFFFF);
 
             // window-style corner resize handle (independent w/h) — "HUD" panel only for now
             if (sel && label.equals("HUD")) {
@@ -253,6 +265,13 @@ abstract class LumeSubScreen extends Screen {
         if (mx >= themeBtn[0] && mx <= themeBtn[0] + themeBtn[2]
                 && my >= themeBtn[1] && my <= themeBtn[1] + themeBtn[3]) {
             Theme.toggle();
+            ThemeSync.save();
+            return true;
+        }
+        // Customize Colors
+        if (mx >= colorsBtn[0] && mx <= colorsBtn[0] + colorsBtn[2]
+                && my >= colorsBtn[1] && my <= colorsBtn[1] + colorsBtn[3]) {
+            if (client != null) client.setScreen(new ColorsScreen(this));
             return true;
         }
         // nav tabs

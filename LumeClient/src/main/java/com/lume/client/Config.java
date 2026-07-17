@@ -11,6 +11,7 @@ import com.lume.client.fthw.EventRule;
 import com.lume.client.gui.ClickGuiScreen;
 import com.lume.client.gui.HudLayout;
 import com.lume.client.gui.Theme;
+import com.lume.client.menu.FastConnect;
 import com.lume.client.module.Module;
 import com.lume.client.module.modules.qol.Waypoints;
 import com.lume.client.module.setting.BoolSetting;
@@ -18,6 +19,7 @@ import com.lume.client.module.setting.ColorSetting;
 import com.lume.client.module.setting.ModeSetting;
 import com.lume.client.module.setting.Setting;
 import com.lume.client.module.setting.SliderSetting;
+import com.lume.client.module.setting.StringSetting;
 import net.fabricmc.loader.api.FabricLoader;
 
 import java.nio.file.Files;
@@ -33,6 +35,18 @@ public final class Config {
 
     private static final com.google.gson.Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
+    /** {key, hwid} the LAUNCHER writes at Play time — the mod only ever reads this (never
+     *  invents/overwrites it), but must round-trip it through save()/load() so its own
+     *  Config.save() calls don't wipe out what the launcher wrote. See social.License. */
+    private static JsonObject licenseRaw = null;
+    public static JsonObject getLicenseRaw() { return licenseRaw; }
+
+    /** Saved offline nicknames (mod-side account list) + which one is "preferred" — the
+     *  launcher can read this to pre-select a nickname on next login. Switching this does
+     *  NOT change the identity of the already-running game session (not possible client-side). */
+    public static final java.util.List<String> savedAccounts = new java.util.ArrayList<>();
+    public static String preferredAccount = null;
+
     private Config() {}
 
     private static Path file() {
@@ -43,6 +57,7 @@ public final class Config {
         try {
             JsonObject root = new JsonObject();
             root.addProperty("theme", Theme.isDark() ? "dark" : "light");
+            root.addProperty("friendsDeviceId", com.lume.client.social.Friends.ensureDeviceId());
 
             JsonObject win = new JsonObject();
             win.addProperty("x", ClickGuiScreen.getWinOffX());
@@ -62,6 +77,7 @@ public final class Config {
                         if (s instanceof BoolSetting b) so.addProperty(s.name, b.value);
                         else if (s instanceof SliderSetting sl) so.addProperty(s.name, sl.value);
                         else if (s instanceof ModeSetting md) so.addProperty(s.name, md.get());
+                        else if (s instanceof StringSetting ts) so.addProperty(s.name, ts.value);
                         else if (s instanceof ColorSetting c) {
                             JsonObject co = new JsonObject();
                             co.addProperty("accent", c.accent);
@@ -97,6 +113,9 @@ public final class Config {
                 o.addProperty("name", w.name);
                 o.addProperty("x", w.x); o.addProperty("y", w.y); o.addProperty("z", w.z);
                 o.addProperty("color", w.color);
+                if (w.server != null) o.addProperty("server", w.server);
+                if (w.anarchy != null) o.addProperty("anarchy", w.anarchy);
+                if (w.eventLinked) o.addProperty("eventLinked", true);
                 wps.add(o);
             }
             root.add("waypoints", wps);
@@ -109,6 +128,10 @@ public final class Config {
                 macros.add(o);
             }
             root.add("macros", macros);
+
+            JsonArray filters = new JsonArray();
+            for (String w : com.lume.client.module.modules.qol.ChatFilters.keywords) filters.add(w);
+            root.add("chatFilters", filters);
 
             JsonObject events = new JsonObject();
             for (EventRule r : EventManager.rules) {
@@ -140,6 +163,22 @@ public final class Config {
             for (com.lume.client.fthw.QuickCommands.Cmd c : com.lume.client.fthw.QuickCommands.list) qcmds.addProperty(c.label, c.key);
             root.add("quickCmds", qcmds);
 
+            JsonArray fastConnect = new JsonArray();
+            for (FastConnect.Entry e : FastConnect.list) {
+                JsonObject o = new JsonObject();
+                o.addProperty("name", e.name);
+                o.addProperty("address", e.address);
+                fastConnect.add(o);
+            }
+            root.add("fastConnect", fastConnect);
+
+            if (licenseRaw != null) root.add("license", licenseRaw);
+
+            JsonArray accounts = new JsonArray();
+            for (String a : savedAccounts) accounts.add(a);
+            root.add("savedAccounts", accounts);
+            if (preferredAccount != null) root.addProperty("preferredAccount", preferredAccount);
+
             Files.createDirectories(file().getParent());
             Files.writeString(file(), GSON.toJson(root));
         } catch (Exception e) {
@@ -160,6 +199,7 @@ public final class Config {
                     if (s instanceof BoolSetting b) so.addProperty(s.name, b.value);
                     else if (s instanceof SliderSetting sl) so.addProperty(s.name, sl.value);
                     else if (s instanceof ModeSetting md) so.addProperty(s.name, md.get());
+                    else if (s instanceof StringSetting ts) so.addProperty(s.name, ts.value);
                     else if (s instanceof ColorSetting c) {
                         JsonObject co = new JsonObject();
                         co.addProperty("accent", c.accent);
@@ -192,6 +232,7 @@ public final class Config {
                         if (s instanceof BoolSetting b) b.value = so.get(s.name).getAsBoolean();
                         else if (s instanceof SliderSetting sl) sl.value = so.get(s.name).getAsDouble();
                         else if (s instanceof ModeSetting md) md.setByName(so.get(s.name).getAsString());
+                        else if (s instanceof StringSetting ts) ts.value = so.get(s.name).getAsString();
                         else if (s instanceof ColorSetting c) {
                             JsonObject co = so.getAsJsonObject(s.name);
                             c.accent = co.get("accent").getAsBoolean();
@@ -212,6 +253,13 @@ public final class Config {
             JsonObject root = JsonParser.parseString(Files.readString(f)).getAsJsonObject();
 
             if (root.has("theme")) Theme.setDark("dark".equals(root.get("theme").getAsString()));
+            if (root.has("friendsDeviceId")) com.lume.client.social.Friends.deviceId = root.get("friendsDeviceId").getAsString();
+            if (root.has("license")) licenseRaw = root.getAsJsonObject("license");
+            if (root.has("savedAccounts")) {
+                savedAccounts.clear();
+                for (JsonElement el : root.getAsJsonArray("savedAccounts")) savedAccounts.add(el.getAsString());
+            }
+            if (root.has("preferredAccount")) preferredAccount = root.get("preferredAccount").getAsString();
 
             if (root.has("window")) {
                 JsonObject w = root.getAsJsonObject("window");
@@ -257,8 +305,18 @@ public final class Config {
                 Waypoints.list.clear();
                 for (JsonElement el : root.getAsJsonArray("waypoints")) {
                     JsonObject o = el.getAsJsonObject();
-                    Waypoints.add(o.get("name").getAsString(), o.get("x").getAsDouble(),
-                            o.get("y").getAsDouble(), o.get("z").getAsDouble(), o.get("color").getAsInt());
+                    // Built directly (not via Waypoints.add) so we restore the server/anarchy
+                    // this waypoint was actually saved under, instead of stamping it with
+                    // whatever server we happen to be loading on (there usually isn't one yet).
+                    // Entries saved before per-server scoping existed have no "server" field —
+                    // default those to "singleplayer" (not null/wildcard) so they can't leak
+                    // onto every multiplayer server; singleplayer is where they were almost
+                    // certainly placed during testing anyway.
+                    Waypoints.list.add(new Waypoints.WP(o.get("name").getAsString(), o.get("x").getAsDouble(),
+                            o.get("y").getAsDouble(), o.get("z").getAsDouble(), o.get("color").getAsInt(),
+                            o.has("server") ? o.get("server").getAsString() : "singleplayer",
+                            o.has("anarchy") ? o.get("anarchy").getAsString() : null,
+                            o.has("eventLinked") && o.get("eventLinked").getAsBoolean()));
                 }
             }
 
@@ -268,6 +326,11 @@ public final class Config {
                     JsonObject o = el.getAsJsonObject();
                     MacroManager.add(o.get("key").getAsInt(), o.get("text").getAsString());
                 }
+            }
+
+            if (root.has("chatFilters")) {
+                com.lume.client.module.modules.qol.ChatFilters.keywords.clear();
+                for (JsonElement el : root.getAsJsonArray("chatFilters")) com.lume.client.module.modules.qol.ChatFilters.add(el.getAsString());
             }
 
             if (root.has("events")) {
@@ -301,6 +364,14 @@ public final class Config {
                 JsonObject qc = root.getAsJsonObject("quickCmds");
                 for (com.lume.client.fthw.QuickCommands.Cmd c : com.lume.client.fthw.QuickCommands.list)
                     if (qc.has(c.label)) c.key = qc.get(c.label).getAsInt();
+            }
+
+            if (root.has("fastConnect")) {
+                FastConnect.list.clear();
+                for (JsonElement el : root.getAsJsonArray("fastConnect")) {
+                    JsonObject o = el.getAsJsonObject();
+                    FastConnect.add(o.get("name").getAsString(), o.get("address").getAsString());
+                }
             }
         } catch (Exception e) {
             System.out.println("[Lume] config load failed: " + e);

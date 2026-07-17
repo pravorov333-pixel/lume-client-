@@ -6,6 +6,7 @@ import com.lume.client.gui.Theme;
 import com.lume.client.module.Module;
 import com.lume.client.module.modules.render.HitParticles;
 import com.lume.client.module.modules.render.HitSound;
+import com.lume.client.module.modules.render.NoHitParticles;
 import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.client.MinecraftClient;
@@ -41,6 +42,16 @@ public final class HitEffects {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (target == null || mc.player == null) return;
         boolean crit = isCrit(mc.player, target);
+        com.lume.client.module.modules.visual.TargetEsp.onHit(target.getId());   // Square ESP marker spins faster on hit
+
+        // Fake Player is never actually damaged (no server round-trip), so vanilla's own hurt-flash
+        // state (LivingEntityRenderState.hurt, driven by hurtTime) never gets set the normal way —
+        // HitColor reads exactly that flag, so without this it silently never triggers on it.
+        // animateDamage() is vanilla's own "play the local hurt animation" entry point (what a real
+        // hurt packet from the server would trigger), safe to call directly for our local-only entity.
+        if (target instanceof com.lume.client.entity.LumeFakePlayerEntity && target instanceof LivingEntity le) {
+            le.animateDamage(0f);
+        }
 
         Module hs = LumeClient.MODULES.getByName("HitSound");
         if (hs instanceof HitSound s && s.isEnabled() && (!s.onlyOnCrit.value || crit)) {
@@ -68,11 +79,11 @@ public final class HitEffects {
         }
 
         Module hpM = LumeClient.MODULES.getByName("Hit Particles");
-        if (hpM instanceof HitParticles hp && hp.isEnabled() && !hp.isDefault()) {
+        if (!NoHitParticles.active() && hpM instanceof HitParticles hp && hp.isEnabled() && (!hp.onlyOnCrit.value || crit)) {
             Box b = target.getBoundingBox();
             int rgb = hp.color.accent ? Theme.accentRgb() : hp.color.rgb();
-            ParticleEngine.hit(hp.engineStyle(), (b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2, (b.minZ + b.maxZ) / 2,
-                    rgb, hp.count.getInt(), (float) hp.speed.value, (float) hp.size.value, hp.shape.index);
+            ParticleEngine.hit(hp.style.index, (b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2, (b.minZ + b.maxZ) / 2,
+                    rgb, hp.count.getInt(), (float) hp.speed.value, (float) hp.size.value, hp.shape.index, hp.resolveTexture());
         }
     }
 }

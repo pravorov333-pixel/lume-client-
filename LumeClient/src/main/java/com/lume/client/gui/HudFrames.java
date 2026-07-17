@@ -4,6 +4,8 @@ import com.lume.client.LumeClient;
 import com.lume.client.module.Module;
 import com.lume.client.module.modules.fthw.ServerHelper;
 import com.lume.client.module.modules.performance.JvmOptimizer;
+import com.lume.client.module.modules.visual.ArmorHud;
+import com.lume.client.module.modules.visual.TargetEsp;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -23,14 +25,22 @@ public final class HudFrames {
         add(rects, names, "HUD", 6, 6, 134, 32);
         add(rects, names, "Potion HUD", sw - 150, 6, 144, 18);
         add(rects, names, "Module List", sw - 110, 6, 106, 40);
-        add(rects, names, "Target HUD", sw / 2 - 95, 10, 190, 44);
+        TargetEsp espM = (TargetEsp) LumeClient.MODULES.getByName("Target ESP");
+        addIf(rects, names, "Target HUD", sw / 2 - 95, 10, 190, 44, espM != null && espM.isEnabled() && espM.hud.value);
         add(rects, names, "Block Info", sw / 2 - 70, 10, 140, 32);
         add(rects, names, "Keystrokes", 12, sh - 150, 70, 70);
         add(rects, names, "Crit Helper", sw / 2 - 30, sh / 2 + 10, 60, 16);
         JvmOptimizer jvmM = (JvmOptimizer) LumeClient.MODULES.getByName("System Info");
         addIf(rects, names, "RAM Bar", 6, sh - 20, 100, 16, jvmM != null && jvmM.isEnabled() && jvmM.showRam.value);
         add(rects, names, "Inventory HUD", sw / 2 - 85, sh - 80, 170, 58);
-        add(rects, names, "Armor HUD", sw / 2 + 87, sh - 22, 84, 20);
+        // Armor HUD's own footprint flips between a 4-wide row and a 4-tall column with its
+        // "Flip Y axis" setting (see HudRenderer.renderArmor) — the drag frame has to flip with
+        // it, or it stays stuck in the old orientation's shape and no longer traces the icons.
+        ArmorHud armorM = (ArmorHud) LumeClient.MODULES.getByName("Armor HUD");
+        boolean armorVert = armorM != null && armorM.flipY.value;
+        int armorAx = sw / 2 + 95, armorAy = armorVert ? sh - 19 - 3 * 18 : sh - 19;
+        if (armorVert) add(rects, names, "Armor HUD", armorAx - 6, armorAy - 1, 30, 74);
+        else add(rects, names, "Armor HUD", armorAx - 6, armorAy - 1, 84, 20);
         add(rects, names, "Totem Counter", sw / 2 - 138, sh - 22, 46, 20);
         ServerHelper shm = (ServerHelper) LumeClient.MODULES.getByName("Server Helper");
         boolean ftOn = shm != null && shm.isEnabled();

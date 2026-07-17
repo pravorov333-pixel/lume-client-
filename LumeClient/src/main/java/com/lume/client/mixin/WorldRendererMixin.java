@@ -12,26 +12,18 @@ import org.joml.Matrix4f;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.ModifyArg;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** Recolours the block-selection outline (Block Outline) + World Customizer "No Clouds". */
+/** Replaces the block-selection outline (Block Outline) + World Customizer "No Clouds". */
 @Mixin(WorldRenderer.class)
 public class WorldRendererMixin {
 
-    // 1.21.4: drawBlockOutline calls drawOutline(ms, vcp, shape, x, y, z, ARGB int color) —
-    // the old float r/g/b/a overload (drawCuboidShapeOutline) no longer exists.
-    @ModifyArg(
-            method = "drawBlockOutline",
-            at = @At(value = "INVOKE",
-                    target = "Lnet/minecraft/client/render/WorldRenderer;drawOutline(Lnet/minecraft/client/util/math/MatrixStack;Lnet/minecraft/client/render/VertexConsumerProvider;Lnet/minecraft/util/shape/VoxelShape;DDDI)V"),
-            index = 6,
-            require = 0)
-    private int lume$recolorOutline(int color) {
-        int argb = BlockOutline.argbOrZero();
-        if (argb == 0) return color;
-        int a = Math.max((color >>> 24) & 0xFF, (int) (0.8f * 255));
-        return (a << 24) | (argb & 0xFFFFFF);
+    /** Block Outline draws its own full-block, no-depth wireframe instead (see
+     *  BlockOutline#renderOutline) — vanilla's shape-following, depth-tested one is
+     *  cancelled outright rather than just recoloured. */
+    @Inject(method = "drawBlockOutline", at = @At("HEAD"), cancellable = true, require = 0)
+    private void lume$skipVanillaOutline(CallbackInfo ci) {
+        if (BlockOutline.active()) ci.cancel();
     }
 
     @Inject(method = "renderClouds", at = @At("HEAD"), cancellable = true, require = 0)

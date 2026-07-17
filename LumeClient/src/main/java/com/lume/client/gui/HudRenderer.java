@@ -1,19 +1,24 @@
 package com.lume.client.gui;
 
+import com.lume.client.Lang;
 import com.lume.client.LumeClient;
-import com.lume.client.fthw.EventManager;
+import com.lume.client.fthw.CurrentAnarchy;
 import com.lume.client.fthw.ItemRule;
 import com.lume.client.fthw.ItemRules;
 import com.lume.client.fthw.ServerType;
+import com.lume.client.fthw.TelegramEventNotifier;
+import com.lume.client.fthw.TelegramEvents;
+import com.lume.client.nanovg.NanoVgRenderer;
 import com.lume.client.module.Module;
 import com.lume.client.module.modules.cosmetic.CustomCrosshair;
 import com.lume.client.module.modules.fthw.ServerHelper;
+import com.lume.client.module.modules.render.CustomHand;
 import com.lume.client.module.modules.qol.Waypoints;
 import com.lume.client.module.modules.visual.BlockInfo;
 import com.lume.client.module.modules.visual.ShiftIndicator;
 import com.lume.client.module.modules.visual.TargetEsp;
-import com.lume.client.module.modules.visual.TargetHud;
 import com.lume.client.module.setting.Setting;
+import com.lume.client.social.Friends;
 import com.lume.client.module.setting.SliderSetting;
 import com.lume.client.util.ClickTracker;
 import com.lume.client.util.SpeedTracker;
@@ -23,6 +28,7 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.ingame.InventoryScreen;
 import net.minecraft.client.network.PlayerListEntry;
 import net.minecraft.client.render.Camera;
+import net.minecraft.client.render.RenderLayer;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.util.math.Vec3d;
@@ -31,6 +37,7 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
+import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.RotationAxis;
 
 import java.util.ArrayList;
@@ -92,7 +99,14 @@ public final class HudRenderer {
         int S = (int) Math.max(1, mc.getWindow().getScaleFactor());
         int sw = mc.getWindow().getScaledWidth(), sh = mc.getWindow().getScaledHeight();
 
-        LivingEntity target = on("Target HUD") ? findTarget(mc) : null;
+        // Keep the Telegram events feed warm (self-throttled) even when the Events
+        // screen isn't open — EventLocator/waypoint linking still needs live data.
+        TelegramEvents.load();
+        // TelegramEventNotifier.tick();  // event toasts disabled for now (user request)
+
+        TargetEsp espMod = (TargetEsp) LumeClient.MODULES.getByName("Target ESP");
+        boolean espActive = espMod != null && espMod.isEnabled() && (espMod.hud.value || espMod.hpAboveTarget.value);
+        LivingEntity target = espActive ? findTarget(mc, espMod) : null;
 
         // --- GUI-space item overlays (offset + scaled around their anchor) ---
         if (on("Inventory HUD"))
@@ -112,10 +126,10 @@ public final class HudRenderer {
         if (on("Potion HUD")) transform(ctx, "Potion HUD", sizeOf("Potion HUD"), nsw, 6 * S, S, () -> renderPotions(ctx, mc, tr, S));
         if (on("Keystrokes")) transform(ctx, "Keystrokes", sizeOf("Keystrokes"), 12 * S, nsh, S, () -> renderKeystrokes(ctx, mc, tr, S));
         if (on("Custom Crosshair")) renderCrosshair(ctx, mc, S);
-        if (on("Waypoints")) renderWaypoints(ctx, mc, tr, S);
         if (on("Server Helper")) {
             ServerHelper shm = (ServerHelper) LumeClient.MODULES.getByName("Server Helper");
-            if (shm == null || shm.eventsHud.value) transform(ctx, "FT Events", sizeOf("FT Events"), 6 * S, 150 * S, S, () -> renderServerHelper(ctx, mc, tr, S));
+            if (shm == null || shm.showServer.value) transform(ctx, "FT Events", sizeOf("FT Events"), 6 * S, 150 * S, S, () -> renderServerHelper(ctx, mc, tr, S));
+            // Anarchy Event HUD panel disabled for now (user request) — event info lives in the Events tab instead.
             if (shm == null || shm.itemHelper.value) transform(ctx, "Item Helper", sizeOf("Item Helper"), nsw / 2.0, nsh, S, () -> renderItemHelper(ctx, mc, tr, S));
             if (shm == null || shm.effects.value) transform(ctx, "Effects", sizeOf("Effects"), 6 * S, nsh / 2.0, S, () -> renderEffects(ctx, mc, tr, S));
             if (shm == null || shm.quickCmds.value) transform(ctx, "Quick Commands", sizeOf("Quick Commands"), nsw, nsh / 2.0, S, () -> renderQuickBar(ctx, mc, tr, S));
@@ -129,7 +143,7 @@ public final class HudRenderer {
         if (jvmMod != null && jvmMod.isEnabled() && jvmMod.showRam.value)
             transform(ctx, "RAM Bar", com.lume.client.gui.HudLayout.getScale("RAM Bar"), 6 * S, nsh - 10 * S, S,
                     () -> renderRamBar(ctx, tr, S));
-        if (target != null) {
+        if (target != null && espMod.hud.value) {
             float es = sizeOf("Target HUD");
             LivingEntity ft = target;
             transform(ctx, "Target HUD", es, nsw / 2.0, 10 * S, S, () -> renderTargetPanel(ctx, mc, tr, ft, S));
@@ -151,9 +165,65 @@ public final class HudRenderer {
         m.pop();
 
         // Heads / item icons drawn last (GUI space) so they sit ON TOP of the panel bg.
-        if (target != null) renderTargetHead(ctx, mc, target, S, sizeOf("Target HUD"));
+        if (target != null && espMod.hud.value) {
+            renderTargetHead(ctx, mc, target, S, sizeOf("Target HUD"));
+            renderTargetArmor(ctx, mc, tr, target, S, sizeOf("Target HUD"));
+        }
         if (blockHit != null && !biSimple)
             renderBlockIcon(ctx, mc, blockHit, S, sizeOf("Block Info"));
+
+        // Both NanoVG consumers (target HP pin + waypoint pins) go dead last, back to back, with
+        // NOTHING DrawContext-based after either — NanoVgRenderer.frame() is documented "draw it
+        // last": any ctx.fill/drawText/drawTexture call queued into DrawContext's own BufferBuilder
+        // AFTER an nvg frame (even something as small as the block-info item icon above, which used
+        // to sit BETWEEN the two nvg calls) flushes with leftover NanoVG GL/shader state and
+        // intermittently paints solid black — this is exactly what happened whenever the Target HP
+        // pin was showing (i.e. whenever you're looking at a target). Own matrix push/scale for
+        // Waypoints since it now runs outside the shared native-res block above.
+        if (target != null && espMod.hpAboveTarget.value) renderTargetHpPin(ctx, mc, target, espMod);
+        // Fast Waypoint pings render through the same pass as personal Waypoints (both are "pins"),
+        // but they're a SEPARATE module — gating this on just "Waypoints" meant a ping never showed
+        // at all (not even to yourself) unless that unrelated module also happened to be on.
+        if (on("Waypoints") || !Friends.activePings.isEmpty()) {
+            var m2 = ctx.getMatrices();
+            m2.push();
+            m2.scale(1f / S, 1f / S, 1f);
+            renderWaypoints(ctx, mc, tr, S);
+            m2.pop();
+        }
+
+        if (mc.currentScreen instanceof ClickGuiScreen) renderHandOffscreenHint(ctx, mc, tr, S);
+    }
+
+    /**
+     * Custom Hand editing aid, only while the ClickGUI is open: if the picked Pos offset has
+     * pushed the held item far enough that it's likely off-screen, point an edge arrow (same
+     * technique as the Waypoints one) toward it with a label, instead of leaving you hunting for
+     * it. Pos X/Y are treated directly as a screen-space direction (right/up) — the item's Pos
+     * offset is applied in camera-relative viewmodel space, not world space, so there's no real
+     * "project to screen" math to do here, just this direction heuristic.
+     */
+    private static void renderHandOffscreenHint(DrawContext ctx, MinecraftClient mc, TextRenderer tr, int S) {
+        Module m = LumeClient.MODULES.getByName("Custom Hand");
+        if (!(m instanceof CustomHand ch) || !ch.isEnabled() || mc.player == null) return;
+        boolean right = ch.hand.index == 0;
+        double px = right ? ch.rPosX.value : ch.lPosX.value;
+        double py = right ? ch.rPosY.value : ch.lPosY.value;
+        double mag = Math.hypot(px, py);
+        if (mag < 0.45) return;   // still roughly on-screen — no hint needed
+
+        int sw = mc.getWindow().getScaledWidth(), sh = mc.getWindow().getScaledHeight();
+        int cx = sw / 2, cy = sh / 2;
+        double dirX = px, dirY = -py;   // screen up = -Y in pixel space
+        int accent = Theme.accent();
+        drawEdgeArrow(ctx, cx, cy, sw, sh, dirX, dirY, accent, S);
+
+        double nx = dirX / mag, ny = dirY / mag;
+        ItemStack held = right ? mc.player.getMainHandStack() : mc.player.getOffHandStack();
+        String label = held.getName().getString() + " " + Lang.tUI("is this way");
+        int lx = cx + (int) Math.round(nx * 46 * S) - RenderUtil.width(tr, label, 0.4f * S) / 2;
+        int ly = cy + (int) Math.round(ny * 46 * S);
+        RenderUtil.text(ctx, tr, label, lx, ly, accent, true, 0.4f * S);
     }
 
     /** PvP Helper — pulsing green highlight over the hotbar slot with the best food to eat. */
@@ -170,23 +240,128 @@ public final class HudRenderer {
         RenderUtil.roundedRect(ctx, x + 1, y + 1, 18, 18, 3, (a << 24) | 0x00FF66);
     }
 
-    /** The living entity we can hit: vanilla targeted entity (reach + wall checked), not invisible. */
-    private static LivingEntity findTarget(MinecraftClient mc) {
+    /** The living entity we can hit: vanilla targeted entity (reach + wall checked), not invisible, passes the Target ESP filter. */
+    private static LivingEntity findTarget(MinecraftClient mc, TargetEsp esp) {
         if (mc.player == null) return null;
         Entity e = mc.targetedEntity;
         if (e instanceof LivingEntity le && le.isAlive() && !le.isSpectator()
-                && !le.isInvisible() && le != mc.player) {
+                && !le.isInvisible() && le != mc.player && TargetEsp.passesFilter(esp, le)) {
             return le;
         }
         return null;
     }
 
+    // Show HP pin — smooth HP follow, independent of the Target HUD panel's own animation state
+    // (so it still animates even when the panel itself is off).
+    private static int hpPinId = -1;
+    private static float hpPinDisp = 0f, hpPinGhost = 0f;
+    private static long hpPinNanos = System.nanoTime();
+
+    /** "Show HP" — a NanoVG pin floating above the crosshair target (hearts or bar), projected from its world position. */
+    private static void renderTargetHpPin(DrawContext ctx, MinecraftClient mc, LivingEntity t, TargetEsp esp) {
+        Camera cam = mc.gameRenderer.getCamera();
+        Vec3d cp = cam.getPos();
+        double yaw = Math.toRadians(-cam.getYaw());
+        double pitch = Math.toRadians(cam.getPitch());
+        double cyaw = Math.cos(yaw), syaw = Math.sin(yaw), cpit = Math.cos(pitch), spit = Math.sin(pitch);
+        double fx = syaw * cpit, fy = -spit, fz = cyaw * cpit;
+        double rx = -fz, rz = fx;
+        double rl = Math.sqrt(rx * rx + rz * rz); if (rl < 1e-6) { rx = 1; rz = 0; rl = 1; } rx /= rl; rz /= rl;
+        double ux = -rz * fy, uy = rz * fx - rx * fz, uz = rx * fy;
+
+        int sw = mc.getWindow().getScaledWidth(), sh = mc.getWindow().getScaledHeight();
+        double tanV = Math.tan(Math.toRadians((double) (int) mc.options.getFov().getValue()) / 2.0);
+        double aspect = (double) sw / sh;
+
+        double wx = t.getX(), wy = t.getY() + t.getHeight() + 0.3, wz = t.getZ();
+        double dx = wx - cp.x, dy = wy - cp.y, dz = wz - cp.z;
+        double depth = dx * fx + dy * fy + dz * fz;
+        if (depth <= 0.1) return;
+        double rc = dx * rx + dz * rz, uc = dx * ux + dy * uy + dz * uz;
+        double scrX = (0.5 + 0.5 * (rc / depth) / (aspect * tanV)) * sw;
+        double scrY = (0.5 - 0.5 * (uc / depth) / tanV) * sh;
+        if (scrX < 0 || scrX > sw || scrY < 0 || scrY > sh) return;
+
+        int S = (int) Math.max(1, mc.getWindow().getScaleFactor());
+        float nx = (float) (scrX * S), ny = (float) (scrY * S);
+
+        float max = Math.max(1f, t.getMaxHealth());
+        float real = Math.max(0f, Math.min(max, t.getHealth()));
+        long now = System.nanoTime();
+        float dt = (float) Math.min(0.1, (now - hpPinNanos) / 1e9);
+        hpPinNanos = now;
+        if (t.getId() != hpPinId) { hpPinId = t.getId(); hpPinDisp = real; hpPinGhost = real; }
+        hpPinDisp += (real - hpPinDisp) * Math.min(1f, dt * 16f);
+        if (real >= hpPinGhost) hpPinGhost = real; else hpPinGhost += (real - hpPinGhost) * Math.min(1f, dt * 3.5f);
+
+        boolean hearts = esp.hpStyle.index == 0;
+        boolean showText = esp.hpText.value;
+        float ratioMain = hpPinDisp / max, ratioGhost = hpPinGhost / max;
+        String hpStr = (int) Math.ceil(real) + " / " + (int) max;
+
+        NanoVgRenderer.ensureInit();
+        if (!NanoVgRenderer.ready()) return;
+        ctx.draw();   // flush DrawContext's own queued geometry (e.g. the Target HUD panel's text) before raw-GL NanoVG draws
+        NanoVgRenderer.frame(vg -> {
+            if (hearts) drawHpHearts(vg, nx, ny, S, ratioMain);
+            else drawHpBar(vg, nx, ny, S, ratioMain, ratioGhost);
+            if (showText) {
+                float ty = ny - (hearts ? 17 : 13) * S;
+                NanoVgRenderer.text(vg, nx, ty, 9 * S, 0xFFFFFFFF, NanoVgRenderer.ALIGN_CENTER_MIDDLE, hpStr);
+            }
+        });
+    }
+
+    /** Row of up to 10 hearts (vanilla-style, health scaled to a 20-unit display), half-heart precision via a clipped overlay. */
+    private static void drawHpHearts(long vg, float nx, float ny, int S, float ratioMain) {
+        int totalHearts = 10;
+        float heartSize = 8 * S, gap = 1.5f * S;
+        float rowW = totalHearts * heartSize + (totalHearts - 1) * gap;
+        float startX = nx - rowW / 2f + heartSize / 2f;
+        float y = ny - 6 * S;
+        float filledUnits = Math.max(0f, ratioMain) * totalHearts * 2;
+        for (int i = 0; i < totalHearts; i++) {
+            float cx = startX + i * (heartSize + gap);
+            float need = (i + 1) * 2;
+            boolean full = filledUnits >= need;
+            boolean half = !full && filledUnits >= need - 1;
+            drawHeart(vg, cx, y, heartSize, 0x33FFFFFF);
+            if (full) {
+                drawHeart(vg, cx, y, heartSize, 0xFFE05656);
+            } else if (half) {
+                NanoVgRenderer.save(vg);
+                NanoVgRenderer.scissor(vg, cx - heartSize, y - heartSize, heartSize, heartSize * 2);
+                drawHeart(vg, cx, y, heartSize, 0xFFE05656);
+                NanoVgRenderer.restore(vg);
+            }
+        }
+    }
+
+    private static void drawHeart(long vg, float cx, float cy, float size, int argb) {
+        float r = size * 0.28f;
+        NanoVgRenderer.circle(vg, cx - r * 0.95f, cy - r * 0.35f, r, argb);
+        NanoVgRenderer.circle(vg, cx + r * 0.95f, cy - r * 0.35f, r, argb);
+        NanoVgRenderer.triangle(vg, cx - r * 1.85f, cy - r * 0.15f, cx + r * 1.85f, cy - r * 0.15f, cx, cy + r * 1.7f, argb);
+    }
+
+    /** Health bar (main fill + a slower-trailing "ghost" showing recent damage). */
+    private static void drawHpBar(long vg, float nx, float ny, int S, float ratioMain, float ratioGhost) {
+        float barW = 56 * S, barH = 5 * S;
+        float x = nx - barW / 2f, y = ny - 10 * S - barH;
+        NanoVgRenderer.roundedRect(vg, x, y, barW, barH, barH / 2f, 0x99000000);
+        float gw = barW * Math.max(0f, Math.min(1f, ratioGhost));
+        if (gw > 0) NanoVgRenderer.roundedRect(vg, x, y, gw, barH, barH / 2f, 0xFFD98C8C);
+        int mainCol = ratioMain > 0.5f ? 0xFF6FCF7F : ratioMain > 0.25f ? 0xFFE8C15A : 0xFFE05656;
+        float mw = barW * Math.max(0f, Math.min(1f, ratioMain));
+        if (mw > 0) NanoVgRenderer.roundedRect(vg, x, y, mw, barH, barH / 2f, mainCol);
+    }
+
     /** Geometry for the target panel (native px). Indices documented inline. */
-    private static int[] targetLayout(MinecraftClient mc, TextRenderer tr, LivingEntity t, int S, boolean showHead) {
+    private static int[] targetLayout(MinecraftClient mc, TextRenderer tr, LivingEntity t, int S, boolean showHead, boolean showArmor) {
         int pad = 8 * S, gap = 5 * S;
-        int nameH = 11 * S, barH = 6 * S, hpH = 9 * S, barW = 120 * S;
+        int nameH = 11 * S, barH = 6 * S, hpH = 9 * S, barW = 120 * S, armorH = 16 * S;
         float nameScale = 0.5f * S;
-        int textBlockH = nameH + gap + barH + gap + hpH;
+        int textBlockH = nameH + gap + barH + gap + hpH + (showArmor ? gap + armorH : 0);
         int headSize = showHead ? textBlockH : 0;
         int leftPad = showHead ? headSize + 8 * S : 0;
         int textBlockW = Math.max(barW, RenderUtil.width(tr, t.getDisplayName().getString(), nameScale));
@@ -196,12 +371,14 @@ public final class HudRenderer {
         int x = sw / 2 - pw / 2, y = 10 * S;
         int textX = x + pad + leftPad;
         int barY = y + pad + nameH + gap;
+        int hpY = barY + barH + gap;
         return new int[]{
                 x, y, pw, ph,                    // 0..3 panel
                 x + pad, y + pad, headSize,      // 4..6 head x,y,size
                 textX, barY, barW,               // 7..9 textX, barY, barW
-                y + pad, barY + barH + gap,      // 10 nameY, 11 hpY
-                nameH, hpH, barH                 // 12 nameH, 13 hpH, 14 barH
+                y + pad, hpY,                    // 10 nameY, 11 hpY
+                nameH, hpH, barH,                // 12 nameH, 13 hpH, 14 barH
+                hpY + hpH + gap, armorH           // 15 armorY, 16 armorH
         };
     }
 
@@ -210,12 +387,13 @@ public final class HudRenderer {
     private static float hpDisp = 0f, hpGhost = 0f;
     private static long hpTime = 0L;
 
-    /** Glass panel (top-centre): name + animated HP bar. Head drawn separately. */
+    /** Glass panel (top-centre): name + animated HP bar. Head + armor drawn separately (GUI space). */
     private static void renderTargetPanel(DrawContext ctx, MinecraftClient mc, TextRenderer tr, LivingEntity t, int S) {
-        TargetHud mod = (TargetHud) LumeClient.MODULES.getByName("Target HUD");
-        boolean showHead = mod == null || mod.head.value;
-        boolean showBar = mod == null || mod.healthBar.value;
-        boolean animate = mod == null || mod.animate.value;
+        TargetEsp mod = (TargetEsp) LumeClient.MODULES.getByName("Target ESP");
+        boolean showHead = true;   // always reserved — hudHead now only switches 3D model vs 2D face icon, see renderTargetHead
+        boolean showBar = mod == null || mod.hudHealthBar.value;
+        boolean showArmor = mod != null && mod.hudArmor.value;
+        boolean animate = mod == null || mod.hudAnimate.value;
 
         String name = t.getDisplayName().getString();
         float max = Math.max(1f, t.getMaxHealth());
@@ -234,7 +412,7 @@ public final class HudRenderer {
             hpId = t.getId(); hpDisp = real; hpGhost = real;
         }
 
-        int[] L = targetLayout(mc, tr, t, S, showHead);
+        int[] L = targetLayout(mc, tr, t, S, showHead, showArmor);
         int x = L[0], y = L[1], pw = L[2], ph = L[3];
         float nameScale = 0.5f * S, hpScale = 0.42f * S;
         int accentRgb = (mod != null && !mod.color.accent) ? mod.color.rgb() : Theme.accentRgb();
@@ -262,11 +440,17 @@ public final class HudRenderer {
         RenderUtil.textVCentered(ctx, tr, hpStr, L[7], L[11], L[13], Theme.txtDim(), hpScale);
     }
 
-    /** 3D head/model of the target, matched to the (possibly scaled) panel's left box. */
+    /**
+     * The target's head, matched to the (possibly scaled) panel's left box.
+     * "3D Head" on → full 3D model preview (as before). Off → a flat 2D face
+     * icon instead (player skin face+hat layer, Minecraft's classic "head
+     * icon" look) — for non-player entities there's no vanilla 2D head
+     * texture to draw, so those keep the 3D model regardless of the setting.
+     */
     private static void renderTargetHead(DrawContext ctx, MinecraftClient mc, LivingEntity t, int S, float es) {
-        TargetHud mod = (TargetHud) LumeClient.MODULES.getByName("Target HUD");
-        if (mod != null && !mod.head.value) return;
-        int[] L = targetLayout(mc, mc.textRenderer, t, S, true);
+        TargetEsp mod = (TargetEsp) LumeClient.MODULES.getByName("Target ESP");
+        boolean showArmor = mod != null && mod.hudArmor.value;
+        int[] L = targetLayout(mc, mc.textRenderer, t, S, true, showArmor);
         int hs = L[6];
         if (hs <= 0) return;
         // mirror the panel's scale-around-anchor so the head lines up
@@ -276,12 +460,51 @@ public final class HudRenderer {
         int[] off = HudLayout.get("Target HUD");
         int x1 = (int) (hx / S) + off[0], y1 = (int) (hy / S) + off[1];
         int x2 = (int) ((hx + hsz) / S) + off[0], y2 = (int) ((hy + hsz) / S) + off[1];
-        int entSize = Math.max(8, Math.round((y2 - y1) * 0.5f));
-        float cxp = (x1 + x2) / 2f, cyp = (y1 + y2) / 2f;
-        try {
-            InventoryScreen.drawEntity(ctx, x1, y1, x2, y2, entSize, 0.0625f, cxp, cyp, t);
-        } catch (Throwable ignored) {
-            // some modded/edge entities can't render in a GUI — skip the head, keep the panel
+
+        boolean use3d = mod == null || mod.hudHead.value || !(t instanceof net.minecraft.client.network.AbstractClientPlayerEntity);
+        if (use3d) {
+            int entSize = Math.max(8, Math.round((y2 - y1) * 0.5f));
+            float cxp = (x1 + x2) / 2f, cyp = (y1 + y2) / 2f;
+            try {
+                InventoryScreen.drawEntity(ctx, x1, y1, x2, y2, entSize, 0.0625f, cxp, cyp, t);
+            } catch (Throwable ignored) {
+                // some modded/edge entities can't render in a GUI — skip the head, keep the panel
+            }
+        } else {
+            net.minecraft.client.network.AbstractClientPlayerEntity acpe = (net.minecraft.client.network.AbstractClientPlayerEntity) t;
+            var skin = acpe.getSkinTextures();
+            int size = x2 - x1;
+            ctx.drawTexture(RenderLayer::getGuiTextured, skin.texture(), x1, y1, 8f, 8f, size, size, 64, 64);   // base face
+            ctx.drawTexture(RenderLayer::getGuiTextured, skin.texture(), x1, y1, 40f, 8f, size, size, 64, 64);  // hat overlay layer
+        }
+    }
+
+    private static final net.minecraft.entity.EquipmentSlot[] ARMOR_SLOTS = {
+            net.minecraft.entity.EquipmentSlot.HEAD, net.minecraft.entity.EquipmentSlot.CHEST,
+            net.minecraft.entity.EquipmentSlot.LEGS, net.minecraft.entity.EquipmentSlot.FEET };
+
+    /** Target's equipped armor — a row of icons under the HP bar, matched to the panel's scale-around-anchor. */
+    private static void renderTargetArmor(DrawContext ctx, MinecraftClient mc, TextRenderer tr, LivingEntity t, int S, float es) {
+        TargetEsp mod = (TargetEsp) LumeClient.MODULES.getByName("Target ESP");
+        if (mod != null && !mod.hudArmor.value) return;
+        int[] L = targetLayout(mc, tr, t, S, true, true);
+        int cell = L[16];
+        double ax = mc.getWindow().getScaledWidth() * S / 2.0, ay = 10 * S;
+        double rowX = ax + (L[7] - ax) * es, rowY = ay + (L[15] - ay) * es;
+        int[] off = HudLayout.get("Target HUD");
+        int gx = (int) (rowX / S) + off[0], gy = (int) (rowY / S) + off[1];
+        float scaledCell = cell / (float) S * es;
+        for (net.minecraft.entity.EquipmentSlot slot : ARMOR_SLOTS) {
+            ItemStack st = t.getEquippedStack(slot);
+            if (st.isEmpty()) { gx += Math.round(scaledCell); continue; }
+            var mstack = ctx.getMatrices();
+            mstack.push();
+            mstack.translate(gx, gy, 0);
+            mstack.scale(scaledCell / 16f, scaledCell / 16f, 1f);
+            ctx.drawItem(st, 0, 0);
+            ctx.drawStackOverlay(tr, st, 0, 0);
+            mstack.pop();
+            gx += Math.round(scaledCell);
         }
     }
 
@@ -413,11 +636,15 @@ public final class HudRenderer {
         if (coords) parts.add(String.format("%.0f %.0f %.0f", mc.player.getX(), mc.player.getY(), mc.player.getZ()));
         if (ping) {
             PlayerListEntry e = mc.getNetworkHandler().getPlayerListEntry(mc.player.getUuid());
-            if (e != null) parts.add(e.getLatency() + com.lume.client.Lang.t("ms"));
+            // Always English here, never Lang.t() — the in-game HUD renders through our own
+            // Lume/Poppins font (no Cyrillic glyphs at all), so a Russian label would silently
+            // fall back to vanilla's blocky font for the whole line. Language only translates
+            // menu/settings text, never the HUD overlay itself.
+            if (e != null) parts.add(e.getLatency() + "ms");
         }
-        if (day) parts.add(com.lume.client.Lang.t("Day") + " " + (mc.world.getTimeOfDay() / 24000L));
+        if (day) parts.add("Day " + (mc.world.getTimeOfDay() / 24000L));
         if (cps) parts.add(ClickTracker.left() + "|" + ClickTracker.right());
-        if (speed) parts.add(String.format("%.1f ", SpeedTracker.get()) + com.lume.client.Lang.t("b/s"));
+        if (speed) parts.add(String.format("%.1f ", SpeedTracker.get()) + "b/s");
         if (clock) {
             long tod = mc.world.getTimeOfDay() % 24000L;
             if (tod < 0) tod += 24000L;
@@ -443,9 +670,29 @@ public final class HudRenderer {
         ctx.disableScissor();
     }
 
-    /** Draws saved waypoints as 2D markers (name + distance) + edge arrows when off-screen. */
+    /** Hide every waypoint marker within this many blocks of the world spawn (the anarchy hub) — guessed radius, tune if wrong. */
+    private static final double SPAWN_HIDE_RADIUS = 150.0;
+
+    private static boolean nearSpawn(MinecraftClient mc) {
+        BlockPos sp = mc.world.getSpawnPos();
+        if (sp == null) return false;
+        double dx = mc.player.getX() - sp.getX(), dz = mc.player.getZ() - sp.getZ();
+        return dx * dx + dz * dz <= SPAWN_HIDE_RADIUS * SPAWN_HIDE_RADIUS;
+    }
+
+    /** One on-screen pin queued for the batched NanoVG pass at the end of {@link #renderWaypoints}.
+     *  {@code scale} is 1.0 for friend/ping pins — only real Waypoints honour the module's own Size slider. */
+    private record PinJob(float nx, float ny, int color, String name, String sub, int subColor, float scale) {}
+
+    /** Draws saved waypoints as NanoVG "map pin" markers (rect tapering down to the exact spot, custom font)
+     *  + edge arrows when off-screen. Only the current server/anarchy's own set — see {@link Waypoints#visible()}. */
     private static void renderWaypoints(DrawContext ctx, MinecraftClient mc, TextRenderer tr, int S) {
-        if (mc.world == null || mc.player == null || Waypoints.list.isEmpty()) return;
+        if (mc.world == null || mc.player == null) return;
+        // Personal waypoints stay gated on their own module even though this function is now also
+        // reachable purely for Fast Waypoint pings — see the call site's comment.
+        List<Waypoints.WP> visible = on("Waypoints") ? Waypoints.visible() : java.util.Collections.emptyList();
+        List<Friends.Point> friendPts = Friends.pointsHere();
+        if ((visible.isEmpty() && friendPts.isEmpty()) || nearSpawn(mc)) return;
         Waypoints mod = (Waypoints) LumeClient.MODULES.getByName("Waypoints");
         boolean arrows = mod == null || mod.arrows.value;
         int arrowCol = (mod != null && !mod.color.accent) ? (0xFF000000 | mod.color.rgb()) : Theme.accent();
@@ -466,8 +713,11 @@ public final class HudRenderer {
         double aspect = (double) sw / sh;
         int cx = sw / 2, cy = sh / 2;
         Vec3d ppos = mc.player.getPos();
+        String curAnarchy = CurrentAnarchy.get();
 
-        for (Waypoints.WP w : Waypoints.list) {
+        List<PinJob> pins = new ArrayList<>();
+
+        for (Waypoints.WP w : visible) {
             double dx = w.x - cp.x, dy = w.y - cp.y, dz = w.z - cp.z;
             double depth = dx * fx + dy * fy + dz * fz;
             double rc = dx * rx + dz * rz;
@@ -484,18 +734,102 @@ public final class HudRenderer {
             }
 
             if (onScreen) {
-                String label = w.name + "  " + dist + "m";
-                int nx = (int) (scrX * S), ny = (int) (scrY * S);
-                int tw = RenderUtil.width(tr, label, 0.46f * S);
-                RenderUtil.roundedRect(ctx, nx - 2 * S, ny - 2 * S, 4 * S, 4 * S, 2 * S, w.color);
-                RenderUtil.roundedRect(ctx, nx - tw / 2 - 4 * S, ny - 17 * S, tw + 8 * S, 13 * S, 3 * S, Theme.winBg());
-                RenderUtil.textVCentered(ctx, tr, label, nx - tw / 2, ny - 17 * S, 13 * S, w.color, 0.46f * S);
+                TelegramEvents.Ev linked = null;
+                if (curAnarchy != null && TelegramEvents.available()) {
+                    for (TelegramEvents.Ev e : TelegramEvents.events()) {
+                        if (e.anarchy.equals(curAnarchy) && e.name.equalsIgnoreCase(w.name)) { linked = e; break; }
+                    }
+                }
+                String sub; int subColor;
+                if (linked == null) {
+                    sub = dist + "m"; subColor = Theme.txtDim();
+                } else if (linked.isActive()) {
+                    sub = dist + "m  ·  " + (linked.isVolcano() ? "Извергается" : "Уже открылся");
+                    subColor = 0xFF6FCF7F;
+                } else {
+                    int s = linked.liveSecondsLeft();
+                    String verb = linked.isOpening() ? (linked.isVolcano() ? "Извержение" : "Откроется") : "Появится";
+                    sub = s > 0 ? dist + "m  ·  " + verb + " через " + linked.liveTimeText() : dist + "m  ·  " + verb;
+                    subColor = s > 0 ? 0xFFE8C15A : Theme.txtDim();
+                }
+                float pinScale = mod != null ? (float) mod.size.value : 1f;
+                pins.add(new PinJob((float) (scrX * S), (float) (scrY * S), w.color, w.name, sub, subColor, pinScale));
             } else if (arrows) {
                 double dirX = front ? (scrX - cx) : rc;
                 double dirY = front ? (scrY - cy) : -uc;
                 drawEdgeArrow(ctx, cx, cy, sw, sh, dirX, dirY, arrowCol, S);
             }
         }
+
+        int friendCol = 0xFF6F9CE0, pingCol = 0xFFE8C15A;
+        long now = System.currentTimeMillis();
+        for (Friends.Point p : friendPts) {
+            boolean isPing = Friends.PING_NAME.equals(p.name);
+            if (isPing) {
+                Long expire = Friends.activePings.get(p.id);
+                if (expire == null || now >= expire) continue;   // ping pins are transient-only — hide once expired
+            }
+
+            double dx = p.x - cp.x, dy = p.y - cp.y, dz = p.z - cp.z;
+            double depth = dx * fx + dy * fy + dz * fz;
+            double rc = dx * rx + dz * rz;
+            double uc = dx * ux + dy * uy + dz * uz;
+            int dist = (int) Math.round(ppos.distanceTo(new Vec3d(p.x, p.y, p.z)));
+
+            boolean front = depth > 0.1;
+            double scrX = 0, scrY = 0;
+            boolean onScreen = false;
+            if (front) {
+                scrX = (0.5 + 0.5 * (rc / depth) / (aspect * tanV)) * sw;
+                scrY = (0.5 - 0.5 * (uc / depth) / tanV) * sh;
+                onScreen = scrX >= 0 && scrX <= sw && scrY >= 0 && scrY <= sh;
+            }
+
+            if (onScreen) {
+                if (isPing) {
+                    String coords = Math.round(p.x) + ", " + Math.round(p.y) + ", " + Math.round(p.z);
+                    pins.add(new PinJob((float) (scrX * S), (float) (scrY * S), pingCol,
+                            "⚡ " + p.from, dist + "m  ·  " + coords, pingCol, 1f));
+                } else {
+                    pins.add(new PinJob((float) (scrX * S), (float) (scrY * S), friendCol,
+                            p.name, dist + "m  ·  " + p.from, Theme.txtDim(), 1f));
+                }
+            } else if (arrows) {
+                double dirX = front ? (scrX - cx) : rc;
+                double dirY = front ? (scrY - cy) : -uc;
+                drawEdgeArrow(ctx, cx, cy, sw, sh, dirX, dirY, isPing ? pingCol : friendCol, S);
+            }
+        }
+
+        if (!pins.isEmpty()) {
+            NanoVgRenderer.ensureInit();
+            if (NanoVgRenderer.ready()) {
+                ctx.draw();   // flush DrawContext's own queued geometry before raw-GL NanoVG draws
+                NanoVgRenderer.frame(vg -> { for (PinJob p : pins) drawPin(vg, p, S); });
+            }
+        }
+    }
+
+    /** One waypoint pin: rounded-rect body + a downward triangular tail tapering to the exact world point. */
+    private static void drawPin(long vg, PinJob p, int S) {
+        float sc = p.scale() * S;
+        float fName = 9.5f * sc, fSub = 8.5f * sc, lineH = 12 * sc;
+        float padX = 8 * sc, padY = 5 * sc;
+        float nameW = NanoVgRenderer.textWidth(vg, fName, p.name());
+        float subW = NanoVgRenderer.textWidth(vg, fSub, p.sub());
+        float bodyW = Math.max(Math.max(nameW, subW) + padX * 2, 46 * sc);
+        float bodyH = padY * 2 + lineH * 2;
+        float tailW = 9 * sc, tailH = 6 * sc;
+        float bodyBottom = p.ny() - tailH;
+        float bodyTop = bodyBottom - bodyH;
+        float bodyX = p.nx() - bodyW / 2f;
+
+        NanoVgRenderer.shadow(vg, bodyX, bodyTop, bodyW, bodyH, 7 * sc, 8 * sc, 0x50000000);
+        NanoVgRenderer.triangle(vg, p.nx() - tailW / 2f, bodyBottom, p.nx() + tailW / 2f, bodyBottom, p.nx(), p.ny(), Theme.winBg());
+        NanoVgRenderer.roundedRect(vg, bodyX, bodyTop, bodyW, bodyH, 7 * sc, Theme.winBg());
+        NanoVgRenderer.strokeRoundedRect(vg, bodyX + 0.5f * S, bodyTop + 0.5f * S, bodyW - S, bodyH - S, 7 * sc, S, p.color());
+        NanoVgRenderer.text(vg, p.nx(), bodyTop + padY + lineH / 2f, fName, p.color(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, p.name());
+        NanoVgRenderer.text(vg, p.nx(), bodyTop + padY + lineH + lineH / 2f, fSub, p.subColor(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, p.sub());
     }
 
     /** A small triangle pinned to the screen edge, pointing toward an off-screen waypoint. */
@@ -522,27 +856,49 @@ public final class HudRenderer {
         m.pop();
     }
 
-    /** FT/HW helper HUD: detected server + active events with countdown (vanilla font → Cyrillic). */
-    private static void renderServerHelper(DrawContext ctx, MinecraftClient mc, TextRenderer tr, int S) {
-        ServerHelper mod = (ServerHelper) LumeClient.MODULES.getByName("Server Helper");
-        boolean showServer = mod == null || mod.showServer.value;
-        java.util.List<String> lines = new java.util.ArrayList<>();
-        if (showServer) lines.add("Сервер: " + ServerType.current().display());
-        for (EventManager.Active a : EventManager.active) lines.add(a.rule.name + " — " + a.secondsLeft() + "с");
-        if (lines.isEmpty()) return;
+    /**
+     * Small standalone HUD: the Telegram event(s) on the anarchy you're CURRENTLY
+     * on, and only that anarchy — shows NOTHING until {@link CurrentAnarchy} can
+     * read a number off the scoreboard (i.e. you're actually on a recognised
+     * anarchy, not just connected to the server's hub/lobby), and even then only
+     * if there's an event for that specific anarchy number. Gated by the
+     * "Server Helper" module + its eventsHud sub-toggle (see call site).
+     */
+    private static void renderAnarchyEventHud(DrawContext ctx, TextRenderer tr, int S, int nsw) {
+        String current = CurrentAnarchy.get();
+        if (current == null || !TelegramEvents.available()) return;
+        java.util.List<TelegramEvents.Ev> mine = new java.util.ArrayList<>();
+        for (TelegramEvents.Ev e : TelegramEvents.events()) if (e.anarchy.equals(current)) mine.add(e);
+        if (mine.isEmpty()) return;
 
-        int x = 6 * S, y = 150 * S, pad = 6 * S, lineH = 11 * S;
+        int pad = 6 * S, lineH = 11 * S;
+        int h = pad * 2 + mine.size() * lineH;
         int pw = 0;
-        for (String l : lines) pw = Math.max(pw, RenderUtil.vanillaWidth(tr, l, S));
+        for (TelegramEvents.Ev e : mine) {
+            String l = e.name + "  ·  " + e.statusText();
+            pw = Math.max(pw, RenderUtil.vanillaWidth(tr, l, S));
+        }
         pw += pad * 2 + 4 * S;
-        int h = lines.size() * lineH + pad * 2;
+        int x = nsw / 2 - pw / 2, y = 6 * S;   // centred, same anchor y passed to transform()
         RenderUtil.roundedRect(ctx, x, y, pw, h, 7 * S, Theme.winBg());
-        RenderUtil.roundedRect(ctx, x, y, 3 * S, h, 2 * S, Theme.accent());
         int ty = y + pad;
-        for (String l : lines) {
-            RenderUtil.vanillaText(ctx, tr, l, x + pad + 3 * S, ty, Theme.txt(), S);
+        for (TelegramEvents.Ev e : mine) {
+            int col = e.isActive() ? 0xFF6FCF7F : e.isVoting() ? Theme.accent() : (e.liveSecondsLeft() > 0 ? 0xFFE8C15A : Theme.txtDim());
+            RenderUtil.roundedRect(ctx, x, ty - 1, 3 * S, lineH - 2 * S, 2 * S, col);
+            RenderUtil.vanillaText(ctx, tr, e.name + "  ·  " + e.statusText(), x + pad + 3 * S, ty, col, S);
             ty += lineH;
         }
+    }
+
+    /** FT/HW helper HUD: just the detected-server line (events moved to {@link #renderAnarchyEventHud}, own toggle). */
+    private static void renderServerHelper(DrawContext ctx, MinecraftClient mc, TextRenderer tr, int S) {
+        String l = "Сервер: " + ServerType.current().display();
+        int x = 6 * S, y = 150 * S, pad = 6 * S, lineH = 11 * S;
+        int pw = RenderUtil.vanillaWidth(tr, l, S) + pad * 2 + 4 * S;
+        int h = lineH + pad * 2;
+        RenderUtil.roundedRect(ctx, x, y, pw, h, 7 * S, Theme.winBg());
+        RenderUtil.roundedRect(ctx, x, y, 3 * S, h, 2 * S, Theme.accent());
+        RenderUtil.vanillaText(ctx, tr, l, x + pad + 3 * S, y + pad, Theme.txt(), S);
     }
 
     /** FT/HW item helper: when holding a known custom item, show its name/radius/cooldown + a ground ring. */

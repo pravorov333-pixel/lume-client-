@@ -10,8 +10,10 @@ import com.lume.client.command.CommandManager;
 import com.lume.client.fthw.EventManager;
 import com.lume.client.module.modules.qol.AntiSpam;
 import com.lume.client.module.modules.qol.AutoReconnect;
+import com.lume.client.module.modules.qol.ChatFilters;
 import com.lume.client.module.modules.qol.ChatTimestamps;
 import com.lume.client.module.modules.qol.Waypoints;
+import com.lume.client.social.Friends;
 import com.lume.client.util.SpeedTracker;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
@@ -56,6 +58,7 @@ public class LumeClient implements ClientModInitializer {
         com.lume.client.audio.CustomAudioPlayer.ensureReadme("hitsound");
         MODULES.init();
         Config.load();
+        com.lume.client.gui.ThemeSync.load();   // launcher's Customize Colors, if any, before first render
         ClientLifecycleEvents.CLIENT_STOPPING.register(c -> Config.save());
 
         openGuiKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
@@ -74,11 +77,17 @@ public class LumeClient implements ClientModInitializer {
                 client.setScreen(new ClickGuiScreen());
             }
             while (addWaypointKey.wasPressed()) addWaypointHere(client);
+            com.lume.client.gui.ThemeSync.tick();
+            com.lume.client.module.modules.performance.Shaders.forceSync();
             handleDeathWaypoint(client);
             SpeedTracker.update(client);
             EventManager.tick();
+            com.lume.client.fthw.EventLocator.tick();
+            Waypoints.pruneExpiredEvents();
             com.lume.client.fthw.EnemyAlert.tick();
             com.lume.client.audio.CustomAudioPlayer.tick();
+            Friends.tick();
+            com.lume.client.social.License.tick();
             MODULES.onTick();
         });
 
@@ -86,7 +95,13 @@ public class LumeClient implements ClientModInitializer {
         WorldRenderEvents.AFTER_ENTITIES.register(com.lume.client.module.modules.visual.TargetEsp::renderWorld);
         WorldRenderEvents.AFTER_ENTITIES.register(com.lume.client.module.modules.visual.SelfName::renderWorld);
         WorldRenderEvents.AFTER_ENTITIES.register(com.lume.client.fx.ParticleEngine::render);
+        WorldRenderEvents.AFTER_ENTITIES.register(com.lume.client.fx.DeathFx::render);
         WorldRenderEvents.AFTER_ENTITIES.register(com.lume.client.module.modules.cosmetic.BlockOutline::renderFill);
+        WorldRenderEvents.AFTER_ENTITIES.register(com.lume.client.module.modules.cosmetic.BlockOutline::renderOutline);
+        WorldRenderEvents.AFTER_ENTITIES.register(com.lume.client.module.modules.render.CustomHitbox::renderWorld);
+        WorldRenderEvents.AFTER_ENTITIES.register(com.lume.client.module.modules.cosmetic.Capes::renderWorld);
+        WorldRenderEvents.AFTER_ENTITIES.register(com.lume.client.fx.JumpFx::render);
+        WorldRenderEvents.AFTER_ENTITIES.register(com.lume.client.module.modules.cosmetic.Trail::renderWorld);
 
         registerChatHooks();
         registerConnectionHooks();
@@ -100,7 +115,7 @@ public class LumeClient implements ClientModInitializer {
     private void addWaypointHere(MinecraftClient client) {
         Module m = MODULES.getByName("Waypoints");
         if (m instanceof Waypoints wp && wp.isEnabled() && client.player != null) {
-            Waypoints.add("WP" + (Waypoints.list.size() + 1),
+            Waypoints.add("WP" + (Waypoints.visible().size() + 1),
                     client.player.getX(), client.player.getY(), client.player.getZ(), Theme.accent());
             Config.save();
         }
@@ -112,7 +127,8 @@ public class LumeClient implements ClientModInitializer {
                 deathHandled = true;
                 Module m = MODULES.getByName("Waypoints");
                 if (m instanceof Waypoints wp && wp.isEnabled() && wp.deathPoint.value && client.player != null) {
-                    Waypoints.add("Death", client.player.getX(), client.player.getY(), client.player.getZ(), 0xFFE05656);
+                    // only the LAST death — replace() drops any previous "Death" marker in this scope first
+                    Waypoints.replace("Death", client.player.getX(), client.player.getY(), client.player.getZ(), 0xFFE05656);
                     Config.save();
                 }
             }
@@ -127,10 +143,15 @@ public class LumeClient implements ClientModInitializer {
         // Anti-Spam: drop duplicate incoming chat lines.
         ClientReceiveMessageEvents.ALLOW_GAME.register((message, overlay) -> {
             if (!overlay) EventManager.onChat(message.getString());   // observe for FT/HW events
+            com.lume.client.fthw.EventLocator.onChat(message.getString());   // catch "/event ..." coordinate replies (either channel)
             if (overlay) return true; // never touch action-bar messages
             Module m = MODULES.getByName("Anti-Spam");
-            if (m instanceof AntiSpam as && as.isEnabled()) {
-                return !as.shouldBlock(message);
+            if (m instanceof AntiSpam as && as.isEnabled() && as.shouldBlock(message)) {
+                return false;
+            }
+            Module cf = MODULES.getByName("Chat Filters");
+            if (cf instanceof ChatFilters filters && filters.isEnabled() && filters.shouldBlock(message)) {
+                return false;
             }
             return true;
         });
@@ -155,6 +176,11 @@ public class LumeClient implements ClientModInitializer {
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
             ServerInfo s = client.getCurrentServerEntry();
             if (s != null) AutoReconnect.lastServer = s;
+            // Fake Player is a per-session practice dummy, not a persistent setting — force it off
+            // on every world join (relog to the same server, a different one, or singleplayer) so
+            // it never auto-respawns on top of you somewhere you didn't put it.
+            Module fp = MODULES.getByName("Fake Player");
+            if (fp != null) fp.setEnabled(false);
         });
     }
 
@@ -195,9 +221,8 @@ public class LumeClient implements ClientModInitializer {
         RenderUtil.glow(ctx, x, y, size, size, 7, Theme.accentRgb(), 3);
         RenderUtil.drawLogo(ctx, x, y, size);
         int tx = x + size + 8;
-        RenderUtil.text(ctx, tr, "lume", tx, y + 2, Theme.accent(), false, 0.6f);
+        RenderUtil.text(ctx, tr, "lume", tx, y + 2, Theme.txt(), false, 0.6f);
         int lw = RenderUtil.width(tr, "lume", 0.6f);
-        RenderUtil.text(ctx, tr, "visuals", tx + lw + 5, y + 3, Theme.txtDim(), false, 0.6f);
-        RenderUtil.text(ctx, tr, "v" + VERSION, tx, y + 14, Theme.txtDim(), false, 0.4f);
+        RenderUtil.text(ctx, tr, "visuals", tx + lw + 5, y + 3, Theme.accent(), false, 0.6f);
     }
 }

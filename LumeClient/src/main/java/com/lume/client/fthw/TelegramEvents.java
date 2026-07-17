@@ -13,6 +13,8 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Pulls the all-anarchy FunTime event feed from the Lume events backend over HTTP.
@@ -22,12 +24,103 @@ import java.util.List;
  */
 public final class TelegramEvents {
 
-    /** Owner's events server. Point this at the hosted backend (default = local server). */
-    private static final String EVENTS_URL = "http://localhost:8077/events";
+    /** Owner's events server (see /tg-server), deployed on Railway. */
+    private static final String EVENTS_URL = "https://lume-tg-events-production.up.railway.app/events";
+
+    private static final Pattern TIME_PATTERN = Pattern.compile("(?:(\\d+)\\s*м)?\\s*(?:(\\d+)\\s*с)?");
 
     public static final class Ev {
         public final String anarchy, name, time, phase, rarity;
-        public Ev(String a, String n, String t, String p, String r) { anarchy = a; name = n; time = t; phase = p; rarity = r; }
+        /** Parsed from `time` ("24м 25с" -> 1465) at the moment the backend scraped it, or -1 if unparseable. */
+        private final int totalSeconds;
+
+        public Ev(String a, String n, String t, String p, String r) {
+            anarchy = a; name = n; time = t; phase = p; rarity = r;
+            totalSeconds = parseSeconds(t);
+        }
+
+        private static int parseSeconds(String t) {
+            if (t == null || t.isEmpty()) return -1;
+            Matcher m = TIME_PATTERN.matcher(t);
+            if (!m.find() || (m.group(1) == null && m.group(2) == null)) return -1;
+            int min = m.group(1) != null ? Integer.parseInt(m.group(1)) : 0;
+            int sec = m.group(2) != null ? Integer.parseInt(m.group(2)) : 0;
+            return min * 60 + sec;
+        }
+
+        /** True if this event is currently running (not waiting to spawn/open/activate). */
+        public boolean isActive() {
+            String p = phase.toLowerCase();
+            return !p.isEmpty() && !p.contains("ожидан") && !p.contains("голосован") && !p.contains("активир");
+        }
+
+        public boolean isVoting() {
+            return phase.toLowerCase().contains("голосован");
+        }
+
+        /** True while waiting to spawn/open/activate (the opposite of {@link #isActive()}). */
+        public boolean isWaiting() {
+            String p = phase.toLowerCase();
+            return p.contains("ожидан") || p.contains("активир");
+        }
+
+        /** True when the waiting phase text specifically talks about opening/activating (vs. spawning). */
+        public boolean isOpening() {
+            String p = phase.toLowerCase();
+            return p.contains("открыт") || p.contains("активир");   // "откроется"/"активируется через" = same "opens in" meaning
+        }
+
+        /** Volcano gets its own verb ("извержение", not "откроется") — see {@link #statusText()}. */
+        public boolean isVolcano() {
+            return name.toLowerCase().contains("вулкан");
+        }
+
+        /** True once our live "opens in" countdown has run out — a client-side heuristic for
+         *  "it should be open/erupting right now", ahead of the ~45s backend poll that would
+         *  otherwise be needed to confirm the phase actually flipped. See {@link #statusText()}. */
+        public boolean justOpened() {
+            return isOpening() && totalSeconds >= 0 && liveSecondsLeft() <= 0;
+        }
+
+        /** Ticks down continuously client-side instead of jumping once per ~45s backend refresh. */
+        public int liveSecondsLeft() {
+            if (totalSeconds < 0) return -1;
+            long elapsed = (System.currentTimeMillis() - updated) / 1000;
+            return (int) Math.max(0, totalSeconds - elapsed);
+        }
+
+        /** "24:05" style, or the original raw string if it couldn't be parsed as a duration. */
+        public String liveTimeText() {
+            int s = liveSecondsLeft();
+            if (s < 0) return time;
+            return (s / 60) + "м " + (s % 60) + "с";
+        }
+
+        /**
+         * Phase-aware Russian status line, replacing the old bare "Активно"/generic
+         * label that gave no sense of "will it appear soon, or open soon, or is it
+         * already running". {@link #liveSecondsLeft()} is a client-side countdown
+         * clamped at 0 between backend polls (every ~45s) — once it hits 0 it just
+         * means "our local estimate ran out", not necessarily that the server-side
+         * phase already flipped, so that edge is worded as "already about to
+         * happen" rather than a flat "0с" that reads as a hard fact.
+         */
+        public String statusText() {
+            int s = liveSecondsLeft();
+            if (isVoting()) return s > 0 ? "Голосование · " + liveTimeText() : "Голосование";
+            if (isActive()) {
+                String base = phase.isEmpty() ? "Активно" : phase;
+                return s > 0 ? base + " · осталось " + liveTimeText() : base;
+            }
+            // waiting: distinguish "will appear" (spawn) from "will open"/"activate" once spawned —
+            // always this fixed wording, never the bot's raw phase text (e.g. "активируется через").
+            // Volcano is thematic: it "erupts", it doesn't "open".
+            if (justOpened()) return isVolcano() ? "Извергается" : "Открыт";
+            String verb = isOpening() ? (isVolcano() ? "Извержение" : "Откроется") : "Появится";
+            if (s > 0) return verb + " через " + liveTimeText();
+            if (totalSeconds >= 0) return "Появляется…";
+            return verb;
+        }
     }
 
     private static volatile List<Ev> list = Collections.emptyList();

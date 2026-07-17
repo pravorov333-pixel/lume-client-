@@ -10,6 +10,10 @@
 !/LumeClient1165/
 !/LumeLauncher/
 !/tg-server/
+!/LumeKeyServer/
+!/LumeFriendsServer/
+!/LumeWebsite/
+!/LumeTelegramBot/
 
 # ── Build artifacts / dependencies (don't commit) ────────────
 # Gradle (mod projects)
@@ -33,6 +37,29 @@ LumeLauncher/build-log.txt
 # Telegram events backend (don't commit deps or the private session/config)
 tg-server/node_modules/
 tg-server/config.json
+
+# Key server (don't commit deps, real .env, the local SQLite DB, or published jars —
+# jars are re-uploaded fresh with every `railway up`, no need to version them in git)
+LumeKeyServer/node_modules/
+LumeKeyServer/.env
+LumeKeyServer/data/*.db
+LumeKeyServer/data/*.db-journal
+LumeKeyServer/data/*.db-wal
+LumeKeyServer/data/*.db-shm
+LumeKeyServer/public/downloads/*.jar
+
+# Telegram bot (don't commit deps or the real .env with the bot token)
+LumeTelegramBot/node_modules/
+LumeTelegramBot/.env
+
+# Friends/presence server (don't commit deps, the local SQLite DB, real .env, or published jars)
+LumeFriendsServer/node_modules/
+LumeFriendsServer/.env
+LumeFriendsServer/data/*.db
+LumeFriendsServer/data/*.db-journal
+LumeFriendsServer/data/*.db-wal
+LumeFriendsServer/data/*.db-shm
+LumeFriendsServer/public/downloads/*.jar
 
 # ── OS / editor junk ─────────────────────────────────────────
 *.log

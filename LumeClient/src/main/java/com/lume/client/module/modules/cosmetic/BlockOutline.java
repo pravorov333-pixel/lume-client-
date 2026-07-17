@@ -6,13 +6,10 @@ import com.lume.client.module.Module;
 import com.lume.client.module.setting.ColorSetting;
 import com.lume.client.module.setting.ModeSetting;
 import com.lume.client.module.setting.SliderSetting;
-import com.mojang.blaze3d.systems.RenderSystem;
+import com.lume.client.util.Render3D;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderContext;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.render.RenderLayer;
-import net.minecraft.client.render.VertexConsumer;
-import net.minecraft.client.render.VertexConsumerProvider;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
@@ -20,28 +17,58 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.shape.VoxelShape;
-import org.joml.Matrix4f;
 
 /**
- * Block Outline — recolours the block-selection outline (WorldRendererMixin) and
- * optionally fills the targeted block with a solid colour or an animated
- * "cosmos" gradient (rendered here via WorldRenderEvents).
+ * Block Outline — replaces vanilla's block-selection outline (which follows the
+ * block's actual voxel shape, is depth-tested, and is cancelled entirely in
+ * WorldRendererMixin whenever this module is on) with our own full 1x1x1
+ * bounding-box wireframe drawn with depth testing off, so the whole block reads
+ * as a complete box and stays visible through other blocks. Optional fill (solid
+ * colour or an animated "cosmos" gradient) still follows the real voxel shape.
  */
 public class BlockOutline extends Module {
 
     public final ColorSetting  color     = add(new ColorSetting("Color", false, 169, 155, 199));
-    public final ModeSetting   fill      = add(new ModeSetting("Fill", 0, "Off", "Color", "Cosmos"));
+    public final SliderSetting lineWidth = add(new SliderSetting("Line Width", 2.0, 1.0, 5.0, false));
+    // Defaults to "Color" (was "Off") — with Fill left on Off, the Fill Opacity slider below
+    // has zero visible effect no matter what it's dragged to (fill mode gates rendering
+    // entirely, independent of opacity), which read as "the opacity slider does nothing".
+    public final ModeSetting   fill      = add(new ModeSetting("Fill", 1, "Off", "Color", "Cosmos"));
     public final SliderSetting fillAlpha = add(new SliderSetting("Fill Opacity", 0.35, 0.0, 0.8, false));
 
     public BlockOutline() {
         super("Block Outline", "Обводка + заливка блока", Category.COSMETIC, -1);
     }
 
-    /** Outline colour as 0xAARRGGBB, or 0 when off (= keep vanilla). */
+    public static boolean active() {
+        Module m = LumeClient.MODULES.getByName("Block Outline");
+        return m instanceof BlockOutline b && b.isEnabled();
+    }
+
+    /** Outline colour as 0xAARRGGBB, or 0 when off. */
     public static int argbOrZero() {
         Module m = LumeClient.MODULES.getByName("Block Outline");
         if (!(m instanceof BlockOutline b) || !b.isEnabled()) return 0;
-        return 0xFF000000 | (b.color.rgb() & 0xFFFFFF);
+        int rgb = b.color.accent ? com.lume.client.gui.Theme.accentRgb() : b.color.rgb();
+        return 0xFF000000 | (rgb & 0xFFFFFF);
+    }
+
+    /** WorldRenderEvents.AFTER_ENTITIES callback (registered in LumeClient). Full-block
+     *  no-depth wireframe, replacing vanilla's own (cancelled in WorldRendererMixin). */
+    public static void renderOutline(WorldRenderContext ctx) {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        Module m = LumeClient.MODULES.getByName("Block Outline");
+        if (!(m instanceof BlockOutline b) || !b.isEnabled()) return;
+        if (mc.world == null || !(mc.crosshairTarget instanceof BlockHitResult bhr)
+                || bhr.getType() != HitResult.Type.BLOCK || ctx.camera() == null) return;
+        BlockPos pos = bhr.getBlockPos();
+        if (mc.world.getBlockState(pos).isAir()) return;
+        MatrixStack ms = ctx.matrixStack();
+        if (ms == null) return;
+        Vec3d cam = ctx.camera().getPos();
+        float x0 = (float) (pos.getX() - cam.x), y0 = (float) (pos.getY() - cam.y), z0 = (float) (pos.getZ() - cam.z);
+        int argb = argbOrZero();
+        Render3D.boxThroughWalls(ms.peek(), x0, y0, z0, x0 + 1f, y0 + 1f, z0 + 1f, argb, (float) b.lineWidth.value);
     }
 
     // corner index bits: x<<2 | y<<1 | z ; faces reference these 4-corner loops
@@ -65,12 +92,11 @@ public class BlockOutline extends Module {
         Box bb = shape.getBoundingBox().offset(pos).expand(0.002);
 
         MatrixStack ms = ctx.matrixStack();
-        VertexConsumerProvider vcp = ctx.consumers();
-        if (ms == null || vcp == null) return;
+        if (ms == null) return;
         Vec3d cam = ctx.camera().getPos();
         int alpha = (int) (b.fillAlpha.value * 255);
         boolean cosmos = b.fill.index == 2;
-        int solid = (alpha << 24) | (b.color.rgb() & 0xFFFFFF);
+        int solid = (alpha << 24) | ((b.color.accent ? com.lume.client.gui.Theme.accentRgb() : b.color.rgb()) & 0xFFFFFF);
 
         // colour + camera-relative position for the 8 corners
         double[] xs = { bb.minX, bb.maxX }, ys = { bb.minY, bb.maxY }, zs = { bb.minZ, bb.maxZ };
@@ -82,17 +108,10 @@ public class BlockOutline extends Module {
             cc[i] = cosmos ? cosmos(wx, wy, wz, alpha) : solid;
         }
 
-        Matrix4f mat = ms.peek().getPositionMatrix();
-        // getDebugFilledBox() draws TRIANGLE_STRIP — feeding it quad-perimeter-order vertices
-        // (and drawing all 6 faces in one un-restarted strip) produced the "half triangle" bug.
-        // getDebugQuads() is QUADS draw mode with culling DISABLED (verified from bytecode), so
-        // each 4-vertex group in FACES renders as an independent, fully visible quad — correct layer.
-        RenderLayer layer = RenderLayer.getDebugQuads();
-        VertexConsumer vc = vcp.getBuffer(layer);
-        for (int[] f : FACES)
-            for (int idx : f)
-                vc.vertex(mat, p[idx][0], p[idx][1], p[idx][2]).color(cc[idx]);
-        if (vcp instanceof VertexConsumerProvider.Immediate imm) imm.draw(layer);
+        // Raw immediate draw with depth testing off (same technique as Render3D.boxThroughWalls)
+        // instead of the batched getDebugQuads() layer — that layer IS depth-tested, so the fill
+        // was only visible on faces facing the camera with nothing in front, never "through walls".
+        Render3D.fillBoxThroughWalls(ms.peek(), p, cc, FACES);
     }
 
     /**

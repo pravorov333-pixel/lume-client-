@@ -25,6 +25,13 @@ dependencies {
 	// native are added and shipped via Jar-in-Jar so the production mod is self-contained.
 	include(implementation("org.lwjgl:lwjgl-nanovg:3.3.3"))
 	include(runtimeOnly("org.lwjgl:lwjgl-nanovg:3.3.3:natives-windows"))
+
+	// Iris (shader-pack support) — compile-time only. The launcher drops the SAME jar
+	// (LumeLauncher/resources/perf-mods/) into the game's mods folder as its own separate
+	// mod, so it's never bundled into Lume's own jar here — just Loom-remapped (intermediary
+	// -> yarn, same as any other mod dependency) so Lume's own code can call its public API
+	// directly instead of through reflection.
+	modCompileOnly files('libs/iris-fabric-1.8.8+mc1.21.4.jar')
 }
 
 processResources {

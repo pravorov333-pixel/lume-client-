@@ -16,6 +16,7 @@ public class GlowParticle {
     public float alpha;             // peak alpha 0..1
     public double life, maxLife;    // seconds
     public int shape = 0;           // ParticleEngine.SHAPE_* — silhouette to render as
+    public net.minecraft.util.Identifier texture;   // non-null → drawn as this textured billboard instead of a glow shape
 
     private static final java.util.Random RND = new java.util.Random();
 

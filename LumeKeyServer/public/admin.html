@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Lume — Key Admin</title>
+<style>
+  * { box-sizing:border-box; margin:0; padding:0; font-family:'Segoe UI',system-ui,sans-serif; }
+  :root { --mint:#A99BC7; --blue:#8E7FC0; --ink:#4A4133; --ink2:#8C8170; --cream:#F2EBDD; }
+  body { background:var(--cream); color:var(--ink); padding:28px; min-height:100vh; }
+  h1 { font-size:20px; margin-bottom:4px; }
+  .sub { color:var(--ink2); font-size:12.5px; margin-bottom:20px; }
+  .card { background:rgba(255,255,255,.7); backdrop-filter:blur(10px); border:1px solid rgba(255,255,255,.9);
+          border-radius:16px; padding:18px 20px; margin-bottom:18px; box-shadow:0 10px 30px -18px rgba(14,59,51,.3); }
+  label { display:block; font-size:11.5px; color:var(--ink2); margin-bottom:5px; }
+  input, select { width:100%; padding:9px 11px; border-radius:10px; border:1.5px solid rgba(0,0,0,.08);
+                  background:#fff; font-size:13px; color:var(--ink); margin-bottom:12px; }
+  .row { display:flex; gap:12px; }
+  .row > div { flex:1; }
+  button { border:none; cursor:pointer; color:#fff; background:linear-gradient(135deg,var(--mint),var(--blue));
+           font-size:13px; font-weight:700; border-radius:10px; padding:10px 16px; }
+  button:hover { filter:brightness(1.05); }
+  button.danger { background:linear-gradient(135deg,#e98a8a,#d65b5b); }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid rgba(0,0,0,.06); }
+  th { color:var(--ink2); font-weight:600; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:6px; font-size:11px; font-weight:700; }
+  .pill.active { background:rgba(111,207,127,.25); color:#3a7a45; }
+  .pill.inactive { background:rgba(224,86,86,.2); color:#a83a3a; }
+  .mono { font-family:Consolas,monospace; }
+  .actions button { padding:5px 9px; font-size:11px; margin-right:4px; }
+  #out { font-size:12px; color:var(--ink2); margin-top:8px; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+  <h1>Lume — Key Admin</h1>
+  <div class="sub">Manual key issuing / lookup — scaffold, no payment wired up yet.</div>
+
+  <div class="card">
+    <label>Admin token</label>
+    <input id="token" type="password" placeholder="ADMIN_TOKEN" />
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label>Plan</label>
+        <select id="plan"><option value="standard">standard</option><option value="tester">tester</option><option value="lifetime">lifetime</option></select>
+      </div>
+      <div>
+        <label>Expires in (days, blank = never)</label>
+        <input id="expires" type="number" placeholder="e.g. 30" />
+      </div>
+    </div>
+    <label>Note (buyer name/email/order id)</label>
+    <input id="note" type="text" placeholder="optional" />
+    <button onclick="genKey()">Generate key</button>
+    <div id="out"></div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <strong>All keys</strong>
+      <button onclick="loadKeys()">Refresh</button>
+    </div>
+    <table>
+      <thead><tr><th>Key</th><th>Plan</th><th>Status</th><th>HWID bound</th><th>Created</th><th>Note</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+<script>
+function authHeaders() { return { 'Authorization': 'Bearer ' + document.getElementById('token').value, 'Content-Type': 'application/json' }; }
+
+async function genKey() {
+  const plan = document.getElementById('plan').value;
+  const expiresRaw = document.getElementById('expires').value;
+  const note = document.getElementById('note').value;
+  const body = { plan, note: note || null, expiresInDays: expiresRaw ? Number(expiresRaw) : null };
+  const res = await fetch('/api/admin/keys', { method: 'POST', headers: authHeaders(), body: JSON.stringify(body) });
+  const data = await res.json();
+  document.getElementById('out').textContent = res.ok ? ('Generated: ' + data.key) : ('Error: ' + (data.error || res.status));
+  if (res.ok) loadKeys();
+}
+
+async function loadKeys() {
+  const res = await fetch('/api/admin/keys', { headers: authHeaders() });
+  if (!res.ok) { document.getElementById('rows').innerHTML = '<tr><td colspan="7">Unauthorized or error</td></tr>'; return; }
+  const rows = await res.json();
+  document.getElementById('rows').innerHTML = rows.map(r => `
+    <tr>
+      <td class="mono">${r.key}</td>
+      <td>${r.plan}</td>
+      <td><span class="pill ${r.active ? 'active' : 'inactive'}">${r.active ? 'active' : 'revoked'}</span></td>
+      <td class="mono">${r.hwid ? r.hwid.slice(0, 10) + '…' : '—'}</td>
+      <td>${new Date(r.created_at).toLocaleDateString()}</td>
+      <td>${r.note || ''}</td>
+      <td class="actions">
+        <button onclick="act('${r.key}','${r.active ? 'revoke' : 'reactivate'}')">${r.active ? 'Revoke' : 'Reactivate'}</button>
+        <button onclick="act('${r.key}','reset-hwid')">Reset HWID</button>
+      </td>
+    </tr>`).join('');
+}
+
+async function act(key, action) {
+  await fetch(`/api/admin/keys/${encodeURIComponent(key)}/${action}`, { method: 'POST', headers: authHeaders() });
+  loadKeys();
+}
+</script>
+</body>
+</html>
