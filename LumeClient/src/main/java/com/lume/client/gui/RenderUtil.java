@@ -325,6 +325,45 @@ public final class RenderUtil {
         roundedRectRaw(ctx, x, y, w, h, r, color);
     }
 
+    /**
+     * Premium interactive background: pixel-perfect SDF fill (see {@link
+     * com.lume.client.nanovg.SdfRenderer}) with a soft glow that hugs the button's actual rounded
+     * CONTOUR (not a rectangular halo) and a slight lift on hover — replaces the older baked-PNG
+     * glass look for main-menu buttons, per the reference's premium hover feel. Falls back to a
+     * flat {@link #roundedRect} (no lift/contour-glow, since {@link #glow} is rectangular) if the
+     * shader failed to init on this GPU — same defensive fallback every raw-GL helper here uses.
+     *
+     * @param x,y,w,h    DrawContext logical px (top-left), NOT framebuffer px — converted
+     *                   internally via the window scale factor, same convention every other
+     *                   caller in this file already uses.
+     * @param hoverAmt   0..1 eased hover amount — drives both the lift (px) and the glow alpha.
+     */
+    public static void premiumBg(DrawContext ctx, int x, int y, int w, int h, int radius,
+                                  float hoverAmt, int fillArgb, int outlineArgb, int glowRgb) {
+        if (com.lume.client.nanovg.SdfRenderer.ensureInit()) {
+            net.minecraft.client.MinecraftClient mc = net.minecraft.client.MinecraftClient.getInstance();
+            int S = (int) Math.max(1, mc.getWindow().getScaleFactor());
+            int lift = Math.round(hoverAmt * 2f);
+            int glowA = Math.round(hoverAmt * 140f);
+            int glow = (glowA << 24) | (glowRgb & 0xFFFFFF);
+            ctx.draw(); // flush queued DrawContext content before this raw-GL write — see ClickGuiScreen's own SdfRenderer calls
+            com.lume.client.nanovg.SdfRenderer.box(x * S, (y - lift) * S, w * S, h * S, radius * S,
+                    fillArgb, outlineArgb, 1f * S, glow, (3f + hoverAmt * 6f) * S);
+        } else {
+            roundedRect(ctx, x, y, w, h, radius, fillArgb);
+            if (outlineArgb != 0) strokeRoundedRect(ctx, x, y, w, h, radius, 1, outlineArgb);
+            if (hoverAmt > 0.02f) glow(ctx, x, y, w, h, radius, glowRgb, Math.max(1, Math.round(hoverAmt * 5)));
+        }
+    }
+
+    /** Same lift as {@link #premiumBg} (for positioning content drawn on TOP of the background,
+     *  e.g. an icon/label) — in whole px, so callers can offset their own text/icon draw calls to
+     *  move together with the background instead of the label staying still while the button
+     *  lifts out from under it. */
+    public static int premiumLift(float hoverAmt) {
+        return Math.round(hoverAmt * 2f);
+    }
+
     /** Anti-aliased rounded-rect OUTLINE of a given thickness — the NanoVG-removal equivalent of
      *  NanoVgRenderer#strokeRoundedRect (the bright glass rim). Drawn as an annulus: same per-row
      *  sub-pixel coverage math as {@link #roundedRectRaw}, but each row/column keeps only the band

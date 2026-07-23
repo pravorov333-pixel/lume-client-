@@ -145,11 +145,16 @@ def build_set(theme,style):
     ic_gear(img,24*SS,10*SS,3.0*SS,inkc,holecol); ic_globe(ImageDraw.Draw(img),73*SS,10*SS,3.1*SS,inkc); save(img,98,20,os.path.join(outdir,'box_options_language.png'))
     img=new(44,20); draw_surface(img,44,20,6,style,theme,pal); ic_x(ImageDraw.Draw(img),22*SS,10*SS,4.2*SS,inkc); save(img,44,20,os.path.join(outdir,'box_quit.png'))
 
+    # Glyph-ONLY sprites (transparent bg) — the SDF shader now draws the button background live
+    # (fill + contour glow + lift), so these just blit the icon on top of it. Was: background
+    # baked into the same PNG as the glyph.
     def icon_btn(nm,drawer):
-        img=new(24,24); draw_surface(img,24,24,7,style,theme,pal); drawer(img); save(img,24,24,os.path.join(outdir,nm+'.png'))
+        img=new(24,24); drawer(img); save(img,24,24,os.path.join(outdir,nm+'.png'))
     icon_btn('ic_theme', lambda im:(ic_sun(ImageDraw.Draw(im),12*SS,12*SS,5*SS,inkc) if theme=='light' else ic_moon(im,12*SS,12*SS,5*SS,inkc)))
     icon_btn('ic_colors',lambda im: ic_dots(ImageDraw.Draw(im),12*SS,12*SS,6*SS,inkc))
     icon_btn('ic_gear',  lambda im: ic_gear(im,12*SS,12*SS,4.2*SS,inkc,holecol))
+    icon_btn('ic_globe', lambda im: ic_globe(ImageDraw.Draw(im),12*SS,12*SS,7*SS,inkc))
+    icon_btn('ic_x',     lambda im: ic_x(ImageDraw.Draw(im),12*SS,12*SS,7*SS,inkc))
     icon_btn('ic_menu',  lambda im: draw_glass_star(im,4,4,16,pal))
 
     img=new(96,24); draw_surface(img,96,24,7,style,theme,pal); save(img,96,24,os.path.join(outdir,'pill.png'))

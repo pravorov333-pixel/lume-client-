@@ -44,6 +44,8 @@ public final class MenuAssets {
     public static final String IC_THEME = "ic_theme";
     public static final String IC_COLORS = "ic_colors";
     public static final String IC_GEAR = "ic_gear";
+    public static final String IC_GLOBE = "ic_globe";
+    public static final String IC_X = "ic_x";
     public static final String IC_MENU = "ic_menu";
     public static final String PILL = "pill";
     public static final String ACCOUNT = "account";

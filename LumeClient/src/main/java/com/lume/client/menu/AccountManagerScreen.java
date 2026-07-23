@@ -23,8 +23,10 @@ import java.util.UUID;
 
 /**
  * Full-page Accounts manager (fills the whole screen, no floating bordered window — matches the
- * reference layout) — a grid of saved-nickname cards (real player head, name, edit pencil,
- * delete ✕), a Create field/button, and a Home button back to the title screen. Picking a
+ * reference layout) — a grid of saved-nickname cards (real player head, name, edit action shown
+ * as a globe/planet glyph — matches the Language button's icon in the main menu, same rename +
+ * server-bind function underneath, delete ✕), a Create field/button, and a Home button back to
+ * the title screen. Picking a
  * different card switches the active identity INSTANTLY via {@link AltService} (in-place
  * {@code MinecraftClient} session swap, no restart) — takes effect for whatever connects next
  * (a new world/server); it can't rename the player entity in an already-loaded world, same as
@@ -126,13 +128,9 @@ public class AccountManagerScreen extends Screen {
                 boolean hov = mouseX >= c.x() && mouseX <= c.x() + CARD_W && mouseY >= c.y() && mouseY <= c.y() + CARD_H;
                 float[] st = animFor("card:" + c.name());
                 st[0] = approach(st[0], hov ? 1f : 0f, 14f, dt);
-                if (!MenuAssets.blit(ctx, MenuAssets.ACCOUNT, c.x(), c.y(), CARD_W, CARD_H)) {
-                    int bg = c.active() ? withAlpha(Theme.accentRgb(), 0x33) : Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), st[0]);
-                    RenderUtil.roundedRect(ctx, c.x(), c.y(), CARD_W, CARD_H, 0, fade(bg, p));
-                } else if (st[0] > 0.02f || c.active()) {
-                    int tint = c.active() ? withAlpha(Theme.accentRgb(), 0x33) : (Math.round(st[0] * 44) << 24) | 0xFFFFFF;
-                    RenderUtil.roundedRect(ctx, c.x(), c.y(), CARD_W, CARD_H, 0, fade(tint, p));
-                }
+                int fill = c.active() ? withAlpha(Theme.accentRgb(), 0x33) : Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), st[0] * 0.5f);
+                RenderUtil.premiumBg(ctx, c.x(), c.y(), CARD_W, CARD_H, 6, st[0], fade(fill, p), fade(Theme.rim(), p), Theme.accentRgb());
+                int ly = c.y() - RenderUtil.premiumLift(st[0]);
 
                 var session = MinecraftClient.getInstance().getSession();
                 boolean isActiveSession = session != null && c.name().equals(session.getUsername());
@@ -140,13 +138,17 @@ public class AccountManagerScreen extends Screen {
                         ? MinecraftClient.getInstance().player.getSkinTextures()
                         : DefaultSkinHelper.getSkinTextures(offlineUuid(c.name()));
                 int hs = CARD_H - 8;
-                net.minecraft.client.gui.PlayerSkinDrawer.draw(ctx, skin, c.x() + 4, c.y() + 4, hs);
+                net.minecraft.client.gui.PlayerSkinDrawer.draw(ctx, skin, c.x() + 4, ly + 4, hs);
 
-                drawPencilIcon(ctx, c.x() + CARD_W - 30, c.y() + CARD_H / 2, 4);
-                drawCardText(ctx, tr, c, p);
+                // Edit action (rename + server-bind) — rendered as a globe/planet glyph, same as
+                // the Language button in the main menu, per the user's explicit ask; still the
+                // same "edit" action underneath.
+                MenuAssets.blit(ctx, MenuAssets.IC_GLOBE, c.x() + CARD_W - 34, ly + CARD_H / 2 - 6, 12, 12);
+                drawCardText(ctx, tr, c, p, ly);
             }
 
-            drawPeopleIcon(ctx, width / 2f, 30, 8);
+            int markSize = 22;
+            RenderUtil.drawLogo(ctx, Math.round(width / 2f - markSize / 2f), 16, markSize);
             RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Accounts"), 0, 44, width, 12, fade(Theme.txt(), p), 0.67f);
             RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Create or select an existing account"), 0, 59, width, 8, fade(Theme.txtDim(), p), 0.44f);
 
@@ -194,41 +196,22 @@ public class AccountManagerScreen extends Screen {
         return 1f - (1f - pr) * (1f - pr);
     }
 
-    /** Name text + delete ✕ (the card background/head/pencil icon were already drawn just before
-     *  this call — see {@link #render}). A small server-link glyph shows under the name when
-     *  this account has a bound server. */
-    private void drawCardText(DrawContext ctx, net.minecraft.client.font.TextRenderer tr, Card c, float p) {
+    /** Name text + delete ✕ (the card background/head/globe icon were already drawn just before
+     *  this call — see {@link #render}). {@code ly} is the card's lifted-on-hover draw position;
+     *  hit zones below intentionally stay keyed to the true {@code c.y()} so clicking doesn't
+     *  shift with the cosmetic lift. A small server-link glyph shows under the name when this
+     *  account has a bound server. */
+    private void drawCardText(DrawContext ctx, net.minecraft.client.font.TextRenderer tr, Card c, float p, int ly) {
         int textX = c.x() + CARD_H;
         String bound = Config.accountServers.get(c.name());
-        int nameY = bound != null ? c.y() + CARD_H / 2 - 6 : c.y() + CARD_H / 2;
+        int nameY = bound != null ? ly + CARD_H / 2 - 6 : ly + CARD_H / 2;
         RenderUtil.text(ctx, tr, c.name(), textX, nameY - 3, fade(c.active() ? Theme.accent() : Theme.txt(), p), false, 0.47f);
-        if (bound != null) RenderUtil.text(ctx, tr, "→ " + bound, textX, c.y() + CARD_H / 2 + 3, fade(Theme.txtDim(), p), false, 0.36f);
+        if (bound != null) RenderUtil.text(ctx, tr, "→ " + bound, textX, ly + CARD_H / 2 + 3, fade(Theme.txtDim(), p), false, 0.36f);
         int delW = 16, delX = c.x() + CARD_W - delW - 4;
-        RenderUtil.textCentered(ctx, tr, "✕", delX, c.y(), delW, CARD_H, fade(Theme.txtDim(), p), 0.47f);
+        RenderUtil.textCentered(ctx, tr, "✕", delX, ly, delW, CARD_H, fade(Theme.txtDim(), p), 0.47f);
         hits.add(new Object[]{"select", c.x(), c.y(), CARD_W - 46, CARD_H, c.name()});
         hits.add(new Object[]{"edit", c.x() + CARD_W - 34, c.y(), 16, CARD_H, c.name()});
         hits.add(new Object[]{"delete", delX, c.y(), delW, CARD_H, c.name()});
-    }
-
-    /** Simple diagonal-bar pencil glyph — same rotate+roundedRect technique the old vector
-     *  gear/quit icons in this client already used, avoids depending on any specific font glyph. */
-    private void drawPencilIcon(DrawContext ctx, int cx, int cy, int r) {
-        var ms = ctx.getMatrices();
-        ms.push();
-        ms.translate(cx, cy, 0);
-        ms.multiply(net.minecraft.util.math.RotationAxis.POSITIVE_Z.rotationDegrees(45f));
-        com.lume.client.gui.RenderUtil.roundedRect(ctx, -r, -1, 2 * r, 2, 1, Theme.txtDim());
-        com.lume.client.gui.RenderUtil.roundedRect(ctx, r - 1, -1, 2, 2, 1, Theme.accent());
-        ms.pop();
-    }
-
-    /** Two overlapping head-ish circles — the "Accounts" header glyph from the reference. Drawn
-     *  as small rounded squares (DrawContext has no circle primitive) — indistinguishable from a
-     *  circle at this icon size. */
-    private void drawPeopleIcon(DrawContext ctx, float cx, float cy, float r) {
-        int d = Math.round(r * 1.1f);
-        RenderUtil.roundedRect(ctx, Math.round(cx - r * 0.35f - d / 2f), Math.round(cy - d / 2f), d, d, d / 2, Theme.txtDim());
-        RenderUtil.roundedRect(ctx, Math.round(cx + r * 0.35f - d / 2f), Math.round(cy - d / 2f), d, d, d / 2, Theme.txt());
     }
 
     private final Map<String, float[]> anim = new HashMap<>();

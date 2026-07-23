@@ -14,15 +14,14 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Small overlay on top of the otherwise fully vanilla title screen: 4 corner buttons — Account
- * Manager (top-left), Settings (top-right), Fast Connect (bottom-left), Friends (bottom-right).
- * Vanilla renders its own background, panorama, logo, splash text, and Singleplayer/Multiplayer/
- * Options/Language/Quit buttons completely untouched (see {@code TitleScreenMixin}, which no
- * longer strips vanilla's own widgets at all) — this class only draws on top of them.
- *
- * <p>The 4 corner buttons are baked-image DrawContext blits (same {@code MenuAssets} glass-icon
- * look — PILL/ACCOUNT/IC_GEAR). The Settings dropdown panel (rows, cycler, chrome) is plain
- * {@code RenderUtil}/DrawContext too — no NanoVG anywhere in this class.
+ * Overlay on top of the otherwise fully vanilla title screen: Account Manager / Theme / Colors /
+ * Settings (top), Fast Connect / Friends (bottom corners), Options+Language / Quit (bottom
+ * centre). Every button's BACKGROUND renders live through {@link RenderUtil#premiumBg} (raw-GL
+ * SDF fill + contour-hugging glow + a slight lift on hover, see {@code SdfRenderer}) instead of
+ * a baked PNG — crisp at any GUI scale, glow follows the button's actual rounded shape rather
+ * than a rectangular halo. Icon glyphs (gear/globe/sun-moon/dots/×) are still small baked PNGs
+ * ({@code MenuAssets}, now glyph-only/transparent-bg — see {@code tools/gen_menu.py}) blitted on
+ * top of the live SDF background. No NanoVG anywhere in this class.
  */
 public final class LumeTitleMenu {
     private LumeTitleMenu() {}
@@ -73,20 +72,13 @@ public final class LumeTitleMenu {
         int fcX = MARGIN, fcY = height - MARGIN - TH;
         int frX = width - MARGIN - PILL_W, frY = height - MARGIN - TH;
 
-        // Baked glass icon buttons — DrawContext, matching the original menu's look (see class
-        // doc).
+        // Live SDF backgrounds + baked glyphs on top (see class doc).
         if (showAcct) renderAccountButton(ctx, MARGIN, MARGIN, mouseX, mouseY, dt);
-        if (!bakedIcon(ctx, "theme", MenuAssets.IC_THEME, themeX, gearY, TH, mouseX, mouseY, dt, false)) {
-            RenderUtil.roundedRect(ctx, themeX, gearY, TH, TH, (int) (TH * 0.28f), Theme.glassRow());
-        }
+        iconButton(ctx, "theme", MenuAssets.IC_THEME, themeX, gearY, TH, mouseX, mouseY, dt, false);
         hits.add(new Object[]{"theme", themeX, gearY, TH, TH});
-        if (!bakedIcon(ctx, "colors", MenuAssets.IC_COLORS, colorsX, gearY, TH, mouseX, mouseY, dt, false)) {
-            RenderUtil.roundedRect(ctx, colorsX, gearY, TH, TH, (int) (TH * 0.28f), Theme.glassRow());
-        }
+        iconButton(ctx, "colors", MenuAssets.IC_COLORS, colorsX, gearY, TH, mouseX, mouseY, dt, false);
         hits.add(new Object[]{"colors", colorsX, gearY, TH, TH});
-        if (!bakedIcon(ctx, "settings", MenuAssets.IC_GEAR, gearX, gearY, TH, mouseX, mouseY, dt, "settings".equals(openPanel))) {
-            RenderUtil.roundedRect(ctx, gearX, gearY, TH, TH, (int) (TH * 0.28f), Theme.glassRow());
-        }
+        iconButton(ctx, "settings", MenuAssets.IC_GEAR, gearX, gearY, TH, mouseX, mouseY, dt, "settings".equals(openPanel));
         hits.add(new Object[]{"settings", gearX, gearY, TH, TH});
         if (CustomMenu.showFastConnect()) {
             pillButton(ctx, "fastconnect", "Fast Connect", fcX, fcY, mouseX, mouseY, dt);
@@ -108,16 +100,15 @@ public final class LumeTitleMenu {
         }
     }
 
-    /** Wide glass chip: baked {@code ACCOUNT} frame + real player head + nickname + license
-     *  sub-label — the original Custom Menu look, sharp corners now (see {@code tools/gen_menu.py}
-     *  — the baked PNG itself carries the rounding, a Java-side radius param never affected it).
+    /** Wide glass chip: live SDF background + real player head + nickname + license sub-label.
      *  Click opens {@link AccountManagerScreen} (a real window with every saved nickname + full
      *  details), not an inline dropdown. */
     private static void renderAccountButton(DrawContext ctx, int x, int y, int mouseX, int mouseY, float dt) {
         boolean hov = inside(mouseX, mouseY, x, y, ACCT_W, TH);
         float[] st = a("account");
         st[0] = approach(st[0], hov ? 1f : 0f, 12f, dt);
-        bakedFrame(ctx, MenuAssets.ACCOUNT, x, y, ACCT_W, TH, RADIUS, st[0]);
+        RenderUtil.premiumBg(ctx, x, y, ACCT_W, TH, RADIUS, st[0], Theme.winBg(), Theme.rim(), Theme.accentRgb());
+        int ly = y - RenderUtil.premiumLift(st[0]);
 
         MinecraftClient mc = MinecraftClient.getInstance();
         var session = mc.getSession();
@@ -125,7 +116,7 @@ public final class LumeTitleMenu {
                 ? mc.player.getSkinTextures()
                 : net.minecraft.client.util.DefaultSkinHelper.getSkinTextures(session != null ? session.getUuidOrNull() : null);
         int hs = TH - 8;
-        net.minecraft.client.gui.PlayerSkinDrawer.draw(ctx, skin, x + 4, y + 4, hs);
+        net.minecraft.client.gui.PlayerSkinDrawer.draw(ctx, skin, x + 4, ly + 4, hs);
 
         String nick = session != null ? session.getUsername() : "Player";
         String subLabel = switch (com.lume.client.social.License.status()) {
@@ -142,49 +133,36 @@ public final class LumeTitleMenu {
         };
         int textX = x + TH + 4;
         var tr = mc.textRenderer;
-        RenderUtil.textVCentered(ctx, tr, nick, textX, y + TH / 2 - 7, 7, Theme.txt(), 0.43f);
-        RenderUtil.textVCentered(ctx, tr, subLabel, textX, y + TH / 2, 7, Theme.txtDim(), 0.33f);
+        RenderUtil.textVCentered(ctx, tr, nick, textX, ly + TH / 2 - 7, 7, Theme.txt(), 0.43f);
+        RenderUtil.textVCentered(ctx, tr, subLabel, textX, ly + TH / 2, 7, Theme.txtDim(), 0.33f);
         hits.add(new Object[]{"account", x, y, ACCT_W, TH});
     }
 
-    /** Wide glass pill with a full text label (Fast Connect / Friends) — same {@code PILL} asset
-     *  the original toggle pill used, sharp corners now (see {@link #renderAccountButton}'s doc). */
+    /** Wide glass pill with a full text label (Fast Connect / Friends) — live SDF background,
+     *  same look/feel as {@link #renderAccountButton}. */
     private static void pillButton(DrawContext ctx, String id, String label, int x, int y, int mouseX, int mouseY, float dt) {
         boolean open = id.equals(openPanel);
         boolean hov = inside(mouseX, mouseY, x, y, PILL_W, TH) || open;
         float[] st = a(id);
         st[0] = approach(st[0], hov ? 1f : 0f, 12f, dt);
-        bakedFrame(ctx, MenuAssets.PILL, x, y, PILL_W, TH, RADIUS, st[0]);
-        RenderUtil.textCentered(ctx, MinecraftClient.getInstance().textRenderer, label, x, y, PILL_W, TH,
+        RenderUtil.premiumBg(ctx, x, y, PILL_W, TH, RADIUS, st[0], Theme.winBg(), Theme.rim(), Theme.accentRgb());
+        int ly = y - RenderUtil.premiumLift(st[0]);
+        RenderUtil.textCentered(ctx, MinecraftClient.getInstance().textRenderer, label, x, ly, PILL_W, TH,
                 open ? Theme.accent() : Theme.txt(), 0.5f);
     }
 
-    /** Baked frame + hover lighten for a rectangular glass surface (pill/account). Draws the
-     *  frame image if present, else a plain glass rect at the given radius (0 = sharp). Live
-     *  content is drawn by the caller on top either way. */
-    private static void bakedFrame(DrawContext ctx, String asset, int x, int y, int w, int h, int radius, float hov) {
-        boolean img = MenuAssets.blit(ctx, asset, x, y, w, h);
-        if (img) {
-            if (hov > 0.02f) RenderUtil.roundedRect(ctx, x, y, w, h, radius, (Math.round(hov * 44) << 24) | 0xFFFFFF);
-        } else {
-            RenderUtil.roundedRect(ctx, x, y, w, h, radius, Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), hov));
-        }
-    }
-
-    /** Blit a baked glass icon-button image (current theme×style set) + soft hover glow/lighten.
-     *  {@code forceOn} keeps it lit while its panel is open. @return false if the image is
-     *  missing (caller draws its own fallback). */
-    private static boolean bakedIcon(DrawContext ctx, String id, String asset, int x, int y, int size,
-                                     int mouseX, int mouseY, float dt, boolean forceOn) {
-        if (!MenuAssets.blit(ctx, asset, x, y, size, size)) return false;
-        float[] st = a(id);
+    /** Square icon button: live SDF background + a small baked glyph (gear/sun-moon/dots — glyph-
+     *  only PNGs now, see {@code gen_menu.py}) centred on top. {@code forceOn} keeps the hover
+     *  state lit while its panel is open. */
+    private static void iconButton(DrawContext ctx, String id, String glyph, int x, int y, int size,
+                                    int mouseX, int mouseY, float dt, boolean forceOn) {
         boolean hov = inside(mouseX, mouseY, x, y, size, size) || forceOn;
+        float[] st = a(id);
         st[0] = approach(st[0], hov ? 1f : 0f, 12f, dt);
-        if (st[0] > 0.02f) {
-            MenuAssets.blitGlow(ctx, x, y, size, size, 8, (Math.round(st[0] * 90) << 24) | Theme.accentRgb());
-            RenderUtil.roundedRect(ctx, x, y, size, size, Math.round(size * 0.3f), (Math.round(st[0] * 40) << 24) | 0xFFFFFF);
-        }
-        return true;
+        RenderUtil.premiumBg(ctx, x, y, size, size, Math.round(size * 0.28f), st[0], Theme.winBg(), Theme.rim(), Theme.accentRgb());
+        int ly = y - RenderUtil.premiumLift(st[0]);
+        int gs = Math.round(size * 0.5f);
+        MenuAssets.blit(ctx, glyph, x + (size - gs) / 2, ly + (size - gs) / 2, gs, gs);
     }
 
     // ---------------------------------------------------------------------
@@ -204,14 +182,21 @@ public final class LumeTitleMenu {
         boolean olHov = inside(mouseX, mouseY, olX, olY, OPTLANG_W, OPTLANG_H);
         float[] olSt = a("optlang");
         olSt[0] = approach(olSt[0], olHov ? 1f : 0f, 12f, dt);
-        bakedFrame(ctx, MenuAssets.OPTIONS_LANGUAGE, olX, olY, OPTLANG_W, OPTLANG_H, RADIUS, olSt[0]);
+        RenderUtil.premiumBg(ctx, olX, olY, OPTLANG_W, OPTLANG_H, RADIUS, olSt[0], Theme.winBg(), Theme.rim(), Theme.accentRgb());
+        int olLy = olY - RenderUtil.premiumLift(olSt[0]);
+        int gs = 12;
+        MenuAssets.blit(ctx, MenuAssets.IC_GEAR, olX + OPTLANG_W / 4 - gs / 2, olLy + (OPTLANG_H - gs) / 2, gs, gs);
+        MenuAssets.blit(ctx, MenuAssets.IC_GLOBE, olX + OPTLANG_W * 3 / 4 - gs / 2, olLy + (OPTLANG_H - gs) / 2, gs, gs);
+        RenderUtil.roundedRect(ctx, olX + OPTLANG_W / 2 - 1, olLy + 4, 1, OPTLANG_H - 8, 0, Theme.rim());
         hits.add(new Object[]{"options", olX, olY, OPTLANG_W / 2, OPTLANG_H});
         hits.add(new Object[]{"language", olX + OPTLANG_W / 2, olY, OPTLANG_W - OPTLANG_W / 2, OPTLANG_H});
 
         boolean qHov = inside(mouseX, mouseY, qX, qY, QUIT_W, QUIT_H);
         float[] qSt = a("quit");
         qSt[0] = approach(qSt[0], qHov ? 1f : 0f, 12f, dt);
-        bakedFrame(ctx, MenuAssets.QUIT, qX, qY, QUIT_W, QUIT_H, RADIUS, qSt[0]);
+        RenderUtil.premiumBg(ctx, qX, qY, QUIT_W, QUIT_H, RADIUS, qSt[0], Theme.winBg(), Theme.rim(), Theme.accentRgb());
+        int qLy = qY - RenderUtil.premiumLift(qSt[0]);
+        MenuAssets.blit(ctx, MenuAssets.IC_X, qX + (QUIT_W - gs) / 2, qLy + (QUIT_H - gs) / 2, gs, gs);
         hits.add(new Object[]{"quit", qX, qY, QUIT_W, QUIT_H});
     }
 

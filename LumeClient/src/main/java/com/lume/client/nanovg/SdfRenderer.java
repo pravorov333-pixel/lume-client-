@@ -45,6 +45,17 @@ public final class SdfRenderer {
      * @param x,y,w,h    framebuffer px, top-left origin
      * @param radiusPx   corner radius, framebuffer px
      */
+    /** Forces {@link #init()} to run now (if it hasn't already) and reports whether the shader
+     *  is usable — lets a caller decide up front whether to draw the SDF background or fall back
+     *  to a plain {@code RenderUtil} rect, instead of finding out only after {@link #box} silently
+     *  no-op'd. Safe to call every frame; init only actually runs once. */
+    public static boolean ensureInit() {
+        if (!initialized && !disabled) {
+            try { if (!init()) disabled = true; } catch (Throwable t) { disabled = true; }
+        }
+        return initialized && !disabled;
+    }
+
     public static void box(int x, int y, int w, int h, float radiusPx,
                             int fillArgb, int outlineArgb, float outlineWidthPx,
                             int glowArgb, float glowSpreadPx) {
