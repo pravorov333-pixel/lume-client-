@@ -311,6 +311,53 @@ public final class RenderUtil {
         roundedRectRaw(ctx, x, y, w, h, r, color);
     }
 
+    /** Anti-aliased rounded-rect OUTLINE of a given thickness — the NanoVG-removal equivalent of
+     *  NanoVgRenderer#strokeRoundedRect (the bright glass rim). Drawn as an annulus: same per-row
+     *  sub-pixel coverage math as {@link #roundedRectRaw}, but each row/column keeps only the band
+     *  between the outer and inner rounded-rect edges instead of a solid fill. */
+    public static void strokeRoundedRect(DrawContext ctx, int x, int y, int w, int h, int r, int thickness, int color) {
+        if (w <= 0 || h <= 0 || thickness <= 0) return;
+        int t = Math.min(thickness, Math.min(w, h) / 2);
+        r = Math.min(r, Math.min(w, h) / 2);
+        int innerR = Math.max(0, r - t);
+        int baseA = (color >>> 24) & 0xFF, rgb = color & 0xFFFFFF;
+
+        // straight edges (top/bottom/left/right bands, corners handled separately below)
+        ctx.fill(x + r, y, x + w - r, y + t, color);                         // top
+        ctx.fill(x + r, y + h - t, x + w - r, y + h, color);                 // bottom
+        ctx.fill(x, y + r, x + t, y + h - r, color);                         // left
+        ctx.fill(x + w - t, y + r, x + w, y + h - r, color);                 // right
+
+        for (int j = 0; j < r; j++) {
+            float dy = r - 0.5f - j;
+            float outF = r - (float) Math.sqrt(Math.max(0f, r * r - dy * dy));
+            float inF;
+            if (j < innerR) {
+                float idy = innerR - 0.5f - j;
+                inF = innerR - (float) Math.sqrt(Math.max(0f, innerR * innerR - idy * idy));
+            } else {
+                inF = innerR;  // below the inner circle's row span — band runs to the inner box edge
+            }
+            int outSolid = (int) Math.ceil(outF);
+            int inSolid = (int) Math.ceil(inF);
+            int yt = y + j, yb = y + h - 1 - j;
+            if (outSolid < inSolid) {
+                ctx.fill(x + outSolid, yt, x + inSolid, yt + 1, color);
+                ctx.fill(x + w - inSolid, yt, x + w - outSolid, yt + 1, color);
+                ctx.fill(x + outSolid, yb, x + inSolid, yb + 1, color);
+                ctx.fill(x + w - inSolid, yb, x + w - outSolid, yb + 1, color);
+            }
+            float cov = outSolid - outF;
+            if (cov > 0.02f && outSolid >= 1) {
+                int pc = (Math.round(baseA * cov) << 24) | rgb;
+                ctx.fill(x + outSolid - 1, yt, x + outSolid, yt + 1, pc);
+                ctx.fill(x + w - outSolid, yt, x + w - outSolid + 1, yt + 1, pc);
+                ctx.fill(x + outSolid - 1, yb, x + outSolid, yb + 1, pc);
+                ctx.fill(x + w - outSolid, yb, x + w - outSolid + 1, yb + 1, pc);
+            }
+        }
+    }
+
     /** Plain sharp-cornered outline, exactly on {@code x,y,w,h} — four thin edge fills, no rounding/fill. */
     public static void strokeRect(DrawContext ctx, int x, int y, int w, int h, int thickness, int color) {
         if (w <= 0 || h <= 0 || thickness <= 0) return;

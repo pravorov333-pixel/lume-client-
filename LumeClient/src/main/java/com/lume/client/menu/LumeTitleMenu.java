@@ -4,7 +4,6 @@ import com.lume.client.Config;
 import com.lume.client.gui.RenderUtil;
 import com.lume.client.gui.Theme;
 import com.lume.client.module.modules.cosmetic.CustomMenu;
-import com.lume.client.nanovg.NanoVgRenderer;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.TitleScreen;
@@ -14,8 +13,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static com.lume.client.nanovg.NanoVgRenderer.*;
-
 /**
  * Small overlay on top of the otherwise fully vanilla title screen: 4 corner buttons — Account
  * Manager (top-left), Settings (top-right), Fast Connect (bottom-left), Friends (bottom-right).
@@ -23,14 +20,9 @@ import static com.lume.client.nanovg.NanoVgRenderer.*;
  * Options/Language/Quit buttons completely untouched (see {@code TitleScreenMixin}, which no
  * longer strips vanilla's own widgets at all) — this class only draws on top of them.
  *
- * <p>The 4 corner buttons themselves are baked-image DrawContext blits (same {@code MenuAssets}
- * glass-icon look the very first version of this menu used — PILL/ACCOUNT/IC_GEAR — restored
- * after a NanoVG-pill redesign read as noticeably different/plainer). Panel CONTENT (the
- * dropdowns each button opens) stays NanoVG, same split the original file always used.
- *
- * <p>Text is always drawn via {@code ALIGN_CENTER_MIDDLE}/{@code ALIGN_MIDDLE} anchored at the
- * box's own centre/left-middle point — NanoVG's {@code ALIGN_LEFT} anchors to the TOP of the
- * glyph, not the middle, so mixing it with a hand-tuned offset drifts text off-centre.
+ * <p>The 4 corner buttons are baked-image DrawContext blits (same {@code MenuAssets} glass-icon
+ * look — PILL/ACCOUNT/IC_GEAR). The Settings dropdown panel (rows, cycler, chrome) is plain
+ * {@code RenderUtil}/DrawContext too — no NanoVG anywhere in this class.
  */
 public final class LumeTitleMenu {
     private LumeTitleMenu() {}
@@ -62,7 +54,6 @@ public final class LumeTitleMenu {
     private static final int MARGIN = 10;
 
     public static void render(DrawContext ctx, TitleScreen screen, int mouseX, int mouseY) {
-        NanoVgRenderer.ensureInit();
         if (!CustomMenu.active()) return;
         int width = screen.width, height = screen.height;
         long now = System.currentTimeMillis();
@@ -76,7 +67,7 @@ public final class LumeTitleMenu {
         int frX = width - MARGIN - PILL_W, frY = height - MARGIN - TH;
 
         // Baked glass icon buttons — DrawContext, matching the original menu's look (see class
-        // doc). Rendered BEFORE the NanoVG frame below, same order the original file always used.
+        // doc).
         if (showAcct) renderAccountButton(ctx, MARGIN, MARGIN, mouseX, mouseY, dt);
         if (!bakedIcon(ctx, "settings", MenuAssets.IC_GEAR, gearX, gearY, TH, mouseX, mouseY, dt, "settings".equals(openPanel))) {
             RenderUtil.roundedRect(ctx, gearX, gearY, TH, TH, (int) (TH * 0.28f), Theme.glassRow());
@@ -91,15 +82,12 @@ public final class LumeTitleMenu {
             hits.add(new Object[]{"friends", frX, frY, PILL_W, TH});
         }
 
-        if (!NanoVgRenderer.ready()) return;
-        try {
-            float S = NanoVgRenderer.pxScale();
-            ctx.draw();
-            NanoVgRenderer.frame(vg -> {
-                if ("settings".equals(openPanel)) renderSettingsPanel(vg, mouseX, mouseY, gearX - (190 - TH), gearY + TH + 6, dt, S);
-            });
-        } catch (Throwable t) {
-            System.out.println("[Lume] LumeTitleMenu render failed: " + t);
+        if ("settings".equals(openPanel)) {
+            try {
+                renderSettingsPanel(ctx, mouseX, mouseY, gearX - (190 - TH), gearY + TH + 6, dt);
+            } catch (Throwable t) {
+                System.out.println("[Lume] LumeTitleMenu render failed: " + t);
+            }
         }
     }
 
@@ -183,7 +171,7 @@ public final class LumeTitleMenu {
     // Geometry) which no longer exists — vanilla owns the background again unless a wallpaper is
     // explicitly turned on. Background Dim applies either way (vanilla panorama or wallpaper).
 
-    private static void renderSettingsPanel(long vg, int mouseX, int mouseY, int anchorX, int anchorY, float dt, float S) {
+    private static void renderSettingsPanel(DrawContext ctx, int mouseX, int mouseY, int anchorX, int anchorY, float dt) {
         record Row(String label, String kind, java.util.function.Supplier<String> value) {}
         List<Row> rows = new ArrayList<>();
         rows.add(new Row("Wallpaper", "wallpaperToggle", () -> isWallpaperOn() ? "On" : "Off"));
@@ -205,11 +193,12 @@ public final class LumeTitleMenu {
         int px = anchorX, py = anchorY;
         int rowW = 84, rowX = px + pw - 12 - rowW;
 
-        panelChrome(vg, px, py, pw, ph, S, "Menu settings");
+        panelChrome(ctx, px, py, pw, ph, "Menu settings");
+        var tr = MinecraftClient.getInstance().textRenderer;
         int ry = py + headerH;
         for (Row r : rows) {
-            text(vg, (px + 12) * S, (ry + srowH / 2f) * S, 9 * S, Theme.txt(), ALIGN_MIDDLE, r.label());
-            cyclerNvg(vg, rowX, ry, rowW, srowH, r.value().get(), S);
+            RenderUtil.textVCentered(ctx, tr, r.label(), px + 12, ry, srowH, Theme.txt(), 0.45f);
+            cyclerVanilla(ctx, rowX, ry, rowW, srowH, r.value().get());
             hits.add(new Object[]{r.kind(), rowX, ry, rowW, srowH});
             ry += rowStep;
         }
@@ -221,19 +210,21 @@ public final class LumeTitleMenu {
         return m instanceof CustomMenu c && c.wallpaperOn.value;
     }
 
-    private static void cyclerNvg(long vg, int x, int y, int w, int h, String value, float S) {
-        roundedRect(vg, x * S, y * S, w * S, h * S, 6 * S, Theme.glassRow());
-        text(vg, (x + 8) * S, (y + h / 2f) * S, 9 * S, Theme.txtDim(), ALIGN_MIDDLE, "‹");
-        text(vg, (x + w - 14) * S, (y + h / 2f) * S, 9 * S, Theme.txtDim(), ALIGN_MIDDLE, "›");
-        text(vg, (x + w / 2f) * S, (y + h / 2f) * S, 9 * S, Theme.txt(), ALIGN_CENTER_MIDDLE, value);
+    private static void cyclerVanilla(DrawContext ctx, int x, int y, int w, int h, String value) {
+        var tr = MinecraftClient.getInstance().textRenderer;
+        RenderUtil.roundedRect(ctx, x, y, w, h, 6, Theme.glassRow());
+        RenderUtil.textVCentered(ctx, tr, "‹", x + 6, y, h, Theme.txtDim(), 0.45f);
+        RenderUtil.textVCentered(ctx, tr, "›", x + w - 12, y, h, Theme.txtDim(), 0.45f);
+        RenderUtil.textCentered(ctx, tr, value, x, y, w, h, Theme.txt(), 0.45f);
     }
 
     /** Shared drop-shadow + glass window + title, used by every panel below. */
-    private static void panelChrome(long vg, int px, int py, int pw, int ph, float S, String title) {
-        shadow(vg, px * S, py * S, pw * S, ph * S, 10 * S, 14 * S, 0x55000000);
-        roundedRect(vg, px * S, py * S, pw * S, ph * S, 10 * S, Theme.winBg());
-        strokeRoundedRect(vg, (px + 0.5f) * S, (py + 0.5f) * S, pw * S - S, ph * S - S, 10 * S, S, Theme.rim());
-        if (title != null) text(vg, (px + 12) * S, (py + 14) * S, 9.5f * S, Theme.txtDim(), ALIGN_MIDDLE, title);
+    private static void panelChrome(DrawContext ctx, int px, int py, int pw, int ph, String title) {
+        var tr = MinecraftClient.getInstance().textRenderer;
+        RenderUtil.glow(ctx, px, py, pw, ph, 10, 0x000000, 4);
+        RenderUtil.roundedRect(ctx, px, py, pw, ph, 10, Theme.winBg());
+        RenderUtil.strokeRoundedRect(ctx, px, py, pw, ph, 10, 1, Theme.rim());
+        if (title != null) RenderUtil.textVCentered(ctx, tr, title, px + 12, py, 22, Theme.txtDim(), 0.48f);
     }
 
     // ---------------------------------------------------------------------
