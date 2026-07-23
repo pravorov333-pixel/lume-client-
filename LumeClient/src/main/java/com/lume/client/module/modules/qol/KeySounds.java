@@ -31,11 +31,6 @@ public class KeySounds extends Module {
         CustomAudioPlayer.ensureReadme(FOLDER);
     }
 
-    @Override
-    public void onEnable() {
-        CustomAudioPlayer.preload(FOLDER);   // decode once up front, not on the first keystroke
-    }
-
     private static boolean isSpaceGroup(int key) {
         return key == GLFW.GLFW_KEY_SPACE || key == GLFW.GLFW_KEY_ENTER || key == GLFW.GLFW_KEY_KP_ENTER
                 || key == GLFW.GLFW_KEY_BACKSPACE;

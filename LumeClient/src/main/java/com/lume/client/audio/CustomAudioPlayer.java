@@ -60,9 +60,15 @@ public final class CustomAudioPlayer {
     }
 
     /** Decodes (or reuses the cached decode of) every .ogg in a module's folder right away, so
-     *  the FIRST press doesn't pay the one-time decode cost either. */
+     *  the FIRST press doesn't pay the one-time decode cost either. Safe to call before OpenAL
+     *  is up (e.g. too-early module init) — swallows failures instead of crashing, same as
+     *  {@link #play}. */
     public static void preload(String moduleFolder) {
-        for (File f : list(moduleFolder)) bufferFor(f);
+        try {
+            for (File f : list(moduleFolder)) bufferFor(f);
+        } catch (Throwable t) {
+            System.out.println("[Lume] custom sound preload failed: " + t);
+        }
     }
 
     /** Root folder for all drop-in custom sounds, one subfolder per module. Created eagerly. */
