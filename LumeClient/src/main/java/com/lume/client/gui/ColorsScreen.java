@@ -1,12 +1,10 @@
 package com.lume.client.gui;
 
-import com.lume.client.nanovg.NanoVgRenderer;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.text.Text;
-
-import static com.lume.client.nanovg.NanoVgRenderer.ALIGN_CENTER_MIDDLE;
-import static com.lume.client.nanovg.NanoVgRenderer.ALIGN_MIDDLE;
 
 /**
  * In-game "Customize Colors" — the SAME theme.json the LumeLauncher's own Customize
@@ -94,34 +92,35 @@ public class ColorsScreen extends Screen {
             }
         }
 
-        NanoVgRenderer.ensureInit();
-        if (!NanoVgRenderer.ready()) return;
         long now = System.currentTimeMillis();
         float dt = Math.min(0.05f, (now - lastFrame) / 1000f);
         lastFrame = now;
         int S = sf();
-        int sw = width * S, sh = height * S;
-        int mx = mouseX * S, my = mouseY * S;
-        int W = WIN_W * S, H = WIN_H * S;
-        int x = (sw - W) / 2 + offX * S, y = (sh - H) / 2 + offY * S;
+        int W = WIN_W, H = WIN_H;
+        int x = (width - W) / 2 + offX, y = (height - H) / 2 + offY;
         winX = x; winY = y; winW = W; winH = H;
         float p = openAnim();
-        int r = 16 * S;
+        int r = 16;
 
         if (Theme.getGlassStyle() == 1) {
-            com.lume.client.nanovg.GlassRenderer.panel(x, y, W, H, r, Theme.getGlassBlur(), Theme.getGlassDistort());
+            com.lume.client.nanovg.GlassRenderer.panel(x * S, y * S, W * S, H * S, r * S, Theme.getGlassBlur(), Theme.getGlassDistort());
         }
 
-        ctx.draw();
-        NanoVgRenderer.frame(vg -> {
-            NanoVgRenderer.save(vg);
-            NanoVgRenderer.globalAlpha(vg, p);
-            drawWindow(vg, S, x, y, W, H, mx, my, dt);
-            NanoVgRenderer.restore(vg);
-        });
+        try {
+            drawWindow(ctx, x, y, W, H, mouseX, mouseY, dt, p);
+        } catch (Throwable t) {
+            System.out.println("[Lume] ColorsScreen render failed: " + t);
+        }
         // Blur-dissolve open — fade + defocus coming into focus, NO size change (the old
         // version scale-zoomed from 94%). Same pattern as the catalog-switch transition.
-        if (p < 1f) com.lume.client.nanovg.GlassRenderer.transitionOverlay(x, y, W, H, (1f - p) * 0.8f, 1f - p);
+        if (p < 1f) com.lume.client.nanovg.GlassRenderer.transitionOverlay(x * S, y * S, W * S, H * S, (1f - p) * 0.8f, 1f - p);
+    }
+
+    /** Multiplies an ARGB color's alpha by {@code p} — the DrawContext equivalent of NanoVG's
+     *  {@code globalAlpha}, which has no per-call analogue here so each draw bakes it in. */
+    private static int fade(int argb, float p) {
+        int a = Math.round(((argb >>> 24) & 0xFF) * p);
+        return (a << 24) | (argb & 0xFFFFFF);
     }
 
     /** Eased 0→1 open progress over 180ms (smoothstep-ish ease-out, same family as
@@ -133,111 +132,108 @@ public class ColorsScreen extends Screen {
         return 1f - (1f - p) * (1f - p);
     }
 
-    private void drawWindow(long vg, int S, int x, int y, int W, int H, int mx, int my, float dt) {
-        int r = 16 * S;
-        // Plain black drop-shadow alone reads as a hard black outline — every other Lume
-        // window (ClickGuiScreen, LumeSubScreen) layers a second accent-tinted glow on top
-        // to blend the edge into the theme colour instead.
-        NanoVgRenderer.shadow(vg, x, y, W, H, r, 22 * S, 0x70000000);
-        NanoVgRenderer.shadow(vg, x, y, W, H, r, 30 * S, withAlpha(Theme.accentRgb(), 0x33));
-        NanoVgRenderer.gradientRoundedRect(vg, x, y, W, H, r, Theme.winTop(), Theme.winBot());
-        NanoVgRenderer.strokeRoundedRect(vg, x + 0.5f * S, y + 0.5f * S, W - S, H - S, r, S, Theme.rim());
+    private void drawWindow(DrawContext ctx, int x, int y, int W, int H, int mx, int my, float dt, float p) {
+        TextRenderer tr = MinecraftClient.getInstance().textRenderer;
+        int r = 16;
+        RenderUtil.glow(ctx, x, y, W, H, r, 0x000000, 3);
+        RenderUtil.roundedRect(ctx, x, y, W, H, r, fade(Theme.winTop(), p));
+        RenderUtil.strokeRoundedRect(ctx, x, y, W, H, r, 1, fade(Theme.rim(), p));
 
-        int pad = 14 * S;
-        NanoVgRenderer.text(vg, x + W / 2f, y + 22 * S, 12.5f * S, Theme.txt(), ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Customize Colors"));
-        NanoVgRenderer.text(vg, x + W / 2f, y + 36 * S, 8.5f * S, Theme.txtDim(), ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("background + accent, per theme"));
+        int pad = 14;
+        RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Customize Colors"), x, y + 14, W, 16, fade(Theme.txt(), p), 0.7f);
+        RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("background + accent, per theme"), x, y + 30, W, 12, fade(Theme.txtDim(), p), 0.47f);
 
-        int cbs = 22 * S, cbx = x + W - pad - cbs, cby = y + 10 * S;
+        int cbs = 22, cbx = x + W - pad - cbs, cby = y + 10;
         boolean closeHov = inside(mx, my, cbx, cby, cbs, cbs);
-        NanoVgRenderer.roundedRect(vg, cbx, cby, cbs, cbs, 7 * S, closeHov ? Theme.glassHov() : Theme.glassRow());
-        NanoVgRenderer.text(vg, cbx + cbs / 2f, cby + cbs / 2f, 11 * S, Theme.txt(), ALIGN_CENTER_MIDDLE, "×");
+        RenderUtil.roundedRect(ctx, cbx, cby, cbs, cbs, 7, fade(closeHov ? Theme.glassHov() : Theme.glassRow(), p));
+        RenderUtil.textCentered(ctx, tr, "×", cbx, cby, cbs, cbs, fade(Theme.txt(), p), 0.6f);
         closeRect = new int[]{ cbx, cby, cbs, cbs };
 
-        int yy = y + 50 * S;
+        int yy = y + 50;
         int cw = W - pad * 2;
 
         // Light | Dark
-        yy = drawSegRow(vg, S, x + pad, yy, cw, modeRects,
+        yy = drawSegRow(ctx, tr, x + pad, yy, cw, modeRects,
                 new String[]{ com.lume.client.Lang.tUI("Light"), com.lume.client.Lang.tUI("Dark") },
-                i -> (i == 1) == editingDark, mx, my);
-        yy += 8 * S;
+                i -> (i == 1) == editingDark, mx, my, p);
+        yy += 8;
 
         // Launcher | In-Game Menu
-        yy = drawSegRow(vg, S, x + pad, yy, cw, previewTabRects,
+        yy = drawSegRow(ctx, tr, x + pad, yy, cw, previewTabRects,
                 new String[]{ com.lume.client.Lang.tUI("Launcher"), com.lume.client.Lang.tUI("In-Game Menu") },
-                i -> i == previewTab, mx, my);
-        yy += 8 * S;
+                i -> i == previewTab, mx, my, p);
+        yy += 8;
 
         // Preview box — real ClickGUI/launcher drawing primitives, not a hand-drawn mockup,
         // so it can't visually drift from the actual UI it's previewing. Cards/buttons inside
         // animate on hover the same way the real ones do, but nothing here is clickable.
-        int pbH = 114 * S;
-        NanoVgRenderer.roundedRect(vg, x + pad, yy, cw, pbH, 10 * S, Theme.sideBg());
-        NanoVgRenderer.strokeRoundedRect(vg, x + pad + 0.5f * S, yy + 0.5f * S, cw - S, pbH - S, 10 * S, S, Theme.rim());
-        if (previewTab == 0) drawLauncherMockup(vg, S, x + pad, yy, cw, pbH, mx, my, dt);
-        else drawInGameMockup(vg, S, x + pad, yy, cw, pbH, mx, my, dt);
-        yy += pbH + 12 * S;
+        int pbH = 114;
+        RenderUtil.roundedRect(ctx, x + pad, yy, cw, pbH, 10, fade(Theme.sideBg(), p));
+        RenderUtil.strokeRoundedRect(ctx, x + pad, yy, cw, pbH, 10, 1, fade(Theme.rim(), p));
+        if (previewTab == 0) drawLauncherMockup(ctx, tr, x + pad, yy, cw, pbH, mx, my, dt, p);
+        else drawInGameMockup(ctx, tr, x + pad, yy, cw, pbH, mx, my, dt, p);
+        yy += pbH + 12;
 
         int bg = Theme.getBg(editingDark), accent = Theme.getAccent(editingDark), activeTxt = Theme.getActiveText(editingDark);
-        yy = drawColorRow(vg, S, x + pad, yy, cw, com.lume.client.Lang.tUI("Background"), bg, 0, mx, my);
-        yy += 4 * S;
-        yy = drawColorRow(vg, S, x + pad, yy, cw, com.lume.client.Lang.tUI("Accent / Glow"), accent, 1, mx, my);
-        yy += 4 * S;
-        yy = drawColorRow(vg, S, x + pad, yy, cw, com.lume.client.Lang.tUI("Button Text"), activeTxt, 2, mx, my);
-        yy += 10 * S;
+        yy = drawColorRow(ctx, tr, x + pad, yy, cw, com.lume.client.Lang.tUI("Background"), bg, 0, mx, my, p);
+        yy += 4;
+        yy = drawColorRow(ctx, tr, x + pad, yy, cw, com.lume.client.Lang.tUI("Accent / Glow"), accent, 1, mx, my, p);
+        yy += 4;
+        yy = drawColorRow(ctx, tr, x + pad, yy, cw, com.lume.client.Lang.tUI("Button Text"), activeTxt, 2, mx, my, p);
+        yy += 10;
 
-        NanoVgRenderer.text(vg, x + pad, yy + 4 * S, 8 * S, Theme.txtDim(), ALIGN_MIDDLE, com.lume.client.Lang.tUI("Styles").toUpperCase());
-        yy += 16 * S;
+        RenderUtil.textVCentered(ctx, tr, com.lume.client.Lang.tUI("Styles").toUpperCase(), x + pad, yy, 12, fade(Theme.txtDim(), p), 0.4f);
+        yy += 16;
         String[] styleNames = { com.lume.client.Lang.tUI("Default"), com.lume.client.Lang.tUI("Full Glass"), com.lume.client.Lang.tUI("No Glass") };
-        int sGap = 4 * S, sW = (cw - sGap * 2) / 3;
+        int sGap = 4, sW = (cw - sGap * 2) / 3;
         for (int i = 0; i < 3; i++) {
             int sx2 = x + pad + i * (sW + sGap);
             boolean sel = Theme.getGlassStyle() == i;
-            NanoVgRenderer.roundedRect(vg, sx2, yy, sW, 22 * S, 7 * S, sel ? Theme.accent() : Theme.glassRow());
-            NanoVgRenderer.text(vg, sx2 + sW / 2f, yy + 11 * S, 7.8f * S, sel ? Theme.activeText() : Theme.txtDim(), ALIGN_CENTER_MIDDLE, styleNames[i]);
-            styleRects[i] = new int[]{ sx2, yy, sW, 22 * S };
+            RenderUtil.roundedRect(ctx, sx2, yy, sW, 22, 7, fade(sel ? Theme.accent() : Theme.glassRow(), p));
+            RenderUtil.textCentered(ctx, tr, styleNames[i], sx2, yy, sW, 22, fade(sel ? Theme.activeText() : Theme.txtDim(), p), 0.4f);
+            styleRects[i] = new int[]{ sx2, yy, sW, 22 };
         }
-        yy += 22 * S + 12 * S;
+        yy += 22 + 12;
 
         // Premium Glass tuning — only meaningful (and only shown) for Full Glass; controls
         // GlassRenderer's real backdrop blur/refraction strength.
         if (Theme.getGlassStyle() == 1) {
-            NanoVgRenderer.text(vg, x + pad, yy + 4 * S, 8 * S, Theme.txtDim(), ALIGN_MIDDLE, com.lume.client.Lang.tUI("Premium Glass").toUpperCase());
-            yy += 16 * S;
-            yy = drawGlassSlider(vg, S, x + pad, yy, cw, com.lume.client.Lang.tUI("Blur"), Theme.getGlassBlur(), 0, mx, my);
-            yy += 6 * S;
-            yy = drawGlassSlider(vg, S, x + pad, yy, cw, com.lume.client.Lang.tUI("Distortion"), Theme.getGlassDistort(), 1, mx, my);
-            yy += 10 * S;
+            RenderUtil.textVCentered(ctx, tr, com.lume.client.Lang.tUI("Premium Glass").toUpperCase(), x + pad, yy, 12, fade(Theme.txtDim(), p), 0.4f);
+            yy += 16;
+            yy = drawGlassSlider(ctx, tr, x + pad, yy, cw, com.lume.client.Lang.tUI("Blur"), Theme.getGlassBlur(), 0, p);
+            yy += 6;
+            yy = drawGlassSlider(ctx, tr, x + pad, yy, cw, com.lume.client.Lang.tUI("Distortion"), Theme.getGlassDistort(), 1, p);
+            yy += 10;
         }
 
-        NanoVgRenderer.text(vg, x + pad, yy + 4 * S, 8 * S, Theme.txtDim(), ALIGN_MIDDLE, com.lume.client.Lang.tUI("Interface").toUpperCase());
-        yy += 16 * S;
-        yy = drawMenuSizeSlider(vg, S, x + pad, yy, cw, ClickGuiScreen.getWinScale(), mx, my);
-        yy += 10 * S;
+        RenderUtil.textVCentered(ctx, tr, com.lume.client.Lang.tUI("Interface").toUpperCase(), x + pad, yy, 12, fade(Theme.txtDim(), p), 0.4f);
+        yy += 16;
+        yy = drawMenuSizeSlider(ctx, tr, x + pad, yy, cw, ClickGuiScreen.getWinScale(), p);
+        yy += 10;
 
         // Reset to Defaults — clears custom colours/style for BOTH modes back to the
         // built-in look, not just the one currently being edited.
-        boolean resetHov = inside(mx, my, x + pad, yy, cw, 24 * S);
-        NanoVgRenderer.roundedRect(vg, x + pad, yy, cw, 24 * S, 8 * S, resetHov ? Theme.glassHov() : Theme.glassRow());
-        NanoVgRenderer.strokeRoundedRect(vg, x + pad + 0.5f * S, yy + 0.5f * S, cw - S, 24 * S - S, 8 * S, S, Theme.rim());
-        NanoVgRenderer.text(vg, x + W / 2f, yy + 12 * S, 9 * S, Theme.txtDim(), ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Reset to Defaults"));
-        resetRect = new int[]{ x + pad, yy, cw, 24 * S };
+        boolean resetHov = inside(mx, my, x + pad, yy, cw, 24);
+        RenderUtil.roundedRect(ctx, x + pad, yy, cw, 24, 8, fade(resetHov ? Theme.glassHov() : Theme.glassRow(), p));
+        RenderUtil.strokeRoundedRect(ctx, x + pad, yy, cw, 24, 8, 1, fade(Theme.rim(), p));
+        RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Reset to Defaults"), x, yy, W, 24, fade(Theme.txtDim(), p), 0.47f);
+        resetRect = new int[]{ x + pad, yy, cw, 24 };
 
         // Colour picker popover — floats above everything else, anchored under whichever
         // swatch opened it.
-        if (openPicker >= 0) drawPicker(vg, S, openPicker);
+        if (openPicker >= 0) drawPicker(ctx, tr, openPicker, p);
     }
 
     /** Two-button segmented row (Light/Dark, Launcher/In-Game Menu) — same selected-pill look
      *  as the launcher's own modeRow/previewTabs. Returns the y position right after the row. */
-    private int drawSegRow(long vg, int S, int sx, int yy, int w, int[][] outRects, String[] labels,
-                            java.util.function.IntPredicate selected, int mx, int my) {
-        int tabH = 22 * S, tabGap = 4 * S, tabW = (w - tabGap) / 2;
+    private int drawSegRow(DrawContext ctx, TextRenderer tr, int sx, int yy, int w, int[][] outRects, String[] labels,
+                            java.util.function.IntPredicate selected, int mx, int my, float p) {
+        int tabH = 22, tabGap = 4, tabW = (w - tabGap) / 2;
         for (int i = 0; i < 2; i++) {
             int tx = sx + i * (tabW + tabGap);
             boolean sel = selected.test(i);
-            NanoVgRenderer.roundedRect(vg, tx, yy, tabW, tabH, 8 * S, sel ? Theme.accent() : Theme.glassRow());
-            NanoVgRenderer.text(vg, tx + tabW / 2f, yy + tabH / 2f, 9.5f * S, sel ? Theme.activeText() : Theme.txtDim(), ALIGN_CENTER_MIDDLE, labels[i]);
+            RenderUtil.roundedRect(ctx, tx, yy, tabW, tabH, 8, fade(sel ? Theme.accent() : Theme.glassRow(), p));
+            RenderUtil.textCentered(ctx, tr, labels[i], tx, yy, tabW, tabH, fade(sel ? Theme.activeText() : Theme.txtDim(), p), 0.47f);
             outRects[i] = new int[]{ tx, yy, tabW, tabH };
         }
         return yy + tabH;
@@ -245,25 +241,25 @@ public class ColorsScreen extends Screen {
 
     /** Label left, colour swatch right — click the swatch to open the native colour picker.
      *  Returns the y position right after this row. */
-    private int drawColorRow(long vg, int S, int sx, int yy, int w, String label, int rgb, int colorIdx, int mx, int my) {
-        int rowH = 26 * S;
-        NanoVgRenderer.text(vg, sx, yy + rowH / 2f, 9.5f * S, Theme.txt(), ALIGN_MIDDLE, label);
-        int swS = 22 * S, swX = sx + w - swS, swY = yy + (rowH - swS) / 2;
+    private int drawColorRow(DrawContext ctx, TextRenderer tr, int sx, int yy, int w, String label, int rgb, int colorIdx, int mx, int my, float p) {
+        int rowH = 26;
+        RenderUtil.textVCentered(ctx, tr, label, sx, yy, rowH, fade(Theme.txt(), p), 0.47f);
+        int swS = 22, swX = sx + w - swS, swY = yy + (rowH - swS) / 2;
         boolean hov = inside(mx, my, swX, swY, swS, swS);
-        NanoVgRenderer.roundedRect(vg, swX, swY, swS, swS, 6 * S, 0xFF000000 | rgb);
-        NanoVgRenderer.strokeRoundedRect(vg, swX + 0.5f * S, swY + 0.5f * S, swS - S, swS - S, 6 * S, S, hov ? Theme.accent() : Theme.rim());
+        RenderUtil.roundedRect(ctx, swX, swY, swS, swS, 6, fade(0xFF000000 | rgb, p));
+        RenderUtil.strokeRoundedRect(ctx, swX, swY, swS, swS, 6, 1, fade(hov ? Theme.accent() : Theme.rim(), p));
         swatchRects[colorIdx] = new int[]{ swX, swY, swS, swS };
         return yy + rowH;
     }
 
     /** Percent label + a filled accent track — drag to set 0..1. Returns the y position
      *  right after this row. */
-    private int drawGlassSlider(long vg, int S, int sx, int yy, int w, String label, float value01, int idx, int mx, int my) {
-        NanoVgRenderer.text(vg, sx, yy + 4 * S, 8.5f * S, Theme.txt(), ALIGN_MIDDLE, label + "  " + Math.round(value01 * 100) + "%");
-        yy += 14 * S;
-        int trackH = 14 * S;
-        NanoVgRenderer.roundedRect(vg, sx, yy, w, trackH, 6 * S, Theme.glassRow());
-        NanoVgRenderer.roundedRect(vg, sx, yy, Math.max(6 * S, Math.round(w * value01)), trackH, 6 * S, Theme.accent());
+    private int drawGlassSlider(DrawContext ctx, TextRenderer tr, int sx, int yy, int w, String label, float value01, int idx, float p) {
+        RenderUtil.text(ctx, tr, label + "  " + Math.round(value01 * 100) + "%", sx, yy, fade(Theme.txt(), p), false, 0.44f);
+        yy += 14;
+        int trackH = 14;
+        RenderUtil.roundedRect(ctx, sx, yy, w, trackH, 6, fade(Theme.glassRow(), p));
+        RenderUtil.roundedRect(ctx, sx, yy, Math.max(6, Math.round(w * value01)), trackH, 6, fade(Theme.accent(), p));
         glassSliderRects[idx] = new int[]{ sx, yy, w, trackH };
         return yy + trackH;
     }
@@ -280,14 +276,14 @@ public class ColorsScreen extends Screen {
     /** Scale readout ("1.2x") + a filled accent track — drag to resize the in-game ClickGUI
      *  window itself (same {@link ClickGuiScreen#setWindow} clamp range as its own corner-drag
      *  resize grip). Returns the y position right after this row. */
-    private int drawMenuSizeSlider(long vg, int S, int sx, int yy, int w, float scale, int mx, int my) {
-        NanoVgRenderer.text(vg, sx, yy + 4 * S, 8.5f * S, Theme.txt(), ALIGN_MIDDLE,
-                com.lume.client.Lang.tUI("Menu Size") + "  " + String.format("%.1fx", scale));
-        yy += 14 * S;
-        int trackH = 14 * S;
+    private int drawMenuSizeSlider(DrawContext ctx, TextRenderer tr, int sx, int yy, int w, float scale, float p) {
+        RenderUtil.text(ctx, tr, com.lume.client.Lang.tUI("Menu Size") + "  " + String.format("%.1fx", scale),
+                sx, yy, fade(Theme.txt(), p), false, 0.44f);
+        yy += 14;
+        int trackH = 14;
         float frac = clamp01((scale - MENU_SCALE_MIN) / (MENU_SCALE_MAX - MENU_SCALE_MIN));
-        NanoVgRenderer.roundedRect(vg, sx, yy, w, trackH, 6 * S, Theme.glassRow());
-        NanoVgRenderer.roundedRect(vg, sx, yy, Math.max(6 * S, Math.round(w * frac)), trackH, 6 * S, Theme.accent());
+        RenderUtil.roundedRect(ctx, sx, yy, w, trackH, 6, fade(Theme.glassRow(), p));
+        RenderUtil.roundedRect(ctx, sx, yy, Math.max(6, Math.round(w * frac)), trackH, 6, fade(Theme.accent(), p));
         menuSizeSliderRect = new int[]{ sx, yy, w, trackH };
         return yy + trackH;
     }
@@ -354,28 +350,29 @@ public class ColorsScreen extends Screen {
     /** HSV square (drag = saturation/value) + hue strip (drag = hue) + hex field, anchored
      *  under the swatch that opened it. The square is the classic 2-gradient-overlay trick
      *  (white→transparent horizontally for saturation, transparent→black vertically for
-     *  value, both layered on a solid pure-hue fill) since NanoVG's paints are 1D only. */
-    private void drawPicker(long vg, int S, int colorIdx) {
+     *  value, both layered on a solid pure-hue fill) — {@link RenderUtil#hGradientRect} for
+     *  the horizontal one, vanilla {@code DrawContext.fillGradient} (vertical-only) for the
+     *  other, same pair used for ClickGuiScreen's own colour picker. */
+    private void drawPicker(DrawContext ctx, TextRenderer tr, int colorIdx, float p) {
         int[] anchor = swatchRects[colorIdx];
-        int pad = 10 * S, svS = 140 * S, hueH = 14 * S, gap = 8 * S, hexH = 24 * S;
+        int pad = 10, svS = 140, hueH = 14, gap = 8, hexH = 24;
         int pw = svS + pad * 2;
         int ph = pad + svS + gap + hueH + gap + hexH + pad;
-        int px = anchor[0] + anchor[2] - pw, py = anchor[1] + anchor[2] + 6 * S;
+        int px = anchor[0] + anchor[2] - pw, py = anchor[1] + anchor[2] + 6;
 
-        NanoVgRenderer.shadow(vg, px, py, pw, ph, 12 * S, 16 * S, 0x60000000);
-        NanoVgRenderer.shadow(vg, px, py, pw, ph, 12 * S, 22 * S, withAlpha(Theme.accentRgb(), 0x2A));
-        NanoVgRenderer.gradientRoundedRect(vg, px, py, pw, ph, 12 * S, Theme.winTop(), Theme.winBot());
-        NanoVgRenderer.strokeRoundedRect(vg, px + 0.5f * S, py + 0.5f * S, pw - S, ph - S, 12 * S, S, Theme.rim());
+        RenderUtil.glow(ctx, px, py, pw, ph, 12, 0x000000, 2);
+        RenderUtil.roundedRect(ctx, px, py, pw, ph, 12, fade(Theme.winTop(), p));
+        RenderUtil.strokeRoundedRect(ctx, px, py, pw, ph, 12, 1, fade(Theme.rim(), p));
 
         int svX = px + pad, svY = py + pad;
         int hueRgb = 0xFF000000 | hsvToRgb(pickerHue, 1f, 1f);
-        NanoVgRenderer.roundedRect(vg, svX, svY, svS, svS, 8 * S, hueRgb);
-        NanoVgRenderer.fillLinearGradient(vg, svX, svY, svS, svS, 8 * S, svX, svY, svX + svS, svY, 0xFFFFFFFF, 0x00FFFFFF);
-        NanoVgRenderer.fillLinearGradient(vg, svX, svY, svS, svS, 8 * S, svX, svY, svX, svY + svS, 0x00000000, 0xFF000000);
-        NanoVgRenderer.strokeRoundedRect(vg, svX + 0.5f * S, svY + 0.5f * S, svS - S, svS - S, 8 * S, S, Theme.rim());
+        RenderUtil.roundedRect(ctx, svX, svY, svS, svS, 8, fade(hueRgb, p));
+        RenderUtil.hGradientRect(ctx, svX, svY, svS, svS, fade(0xFFFFFFFF, p), fade(0x00FFFFFF, p));
+        ctx.fillGradient(svX, svY, svX + svS, svY + svS, fade(0x00000000, p), fade(0xFF000000, p));
+        RenderUtil.strokeRoundedRect(ctx, svX, svY, svS, svS, 8, 1, fade(Theme.rim(), p));
         float curX = svX + pickerSat * svS, curY = svY + (1f - pickerVal) * svS;
-        NanoVgRenderer.strokeEllipse(vg, curX, curY, 5 * S, 5 * S, 2 * S, 0xFFFFFFFF);
-        NanoVgRenderer.strokeEllipse(vg, curX, curY, 5 * S, 5 * S, S, 0xFF000000);
+        RenderUtil.roundedRect(ctx, Math.round(curX - 5), Math.round(curY - 5), 10, 10, 5, fade(0xFF000000, p));
+        RenderUtil.roundedRect(ctx, Math.round(curX - 4), Math.round(curY - 4), 8, 8, 4, fade(0xFFFFFFFF, p));
         svRect = new int[]{ svX, svY, svS, svS };
 
         int hueY = svY + svS + gap;
@@ -384,17 +381,17 @@ public class ColorsScreen extends Screen {
         for (int i = 0; i < 6; i++) {
             int sx2 = svX + i * segW;
             int w2 = i == 5 ? svS - segW * 5 : segW;
-            NanoVgRenderer.fillLinearGradient(vg, sx2, hueY, w2, hueH, 0, sx2, hueY, sx2 + w2, hueY, hueStops[i], hueStops[i + 1]);
+            RenderUtil.hGradientRect(ctx, sx2, hueY, w2, hueH, fade(hueStops[i], p), fade(hueStops[i + 1], p));
         }
-        NanoVgRenderer.strokeRoundedRect(vg, svX + 0.5f * S, hueY + 0.5f * S, svS - S, hueH - S, 6 * S, S, Theme.rim());
+        RenderUtil.strokeRoundedRect(ctx, svX, hueY, svS, hueH, 6, 1, fade(Theme.rim(), p));
         float hueCurX = svX + (pickerHue / 360f) * svS;
-        NanoVgRenderer.roundedRect(vg, hueCurX - 1.5f * S, hueY - 2 * S, 3 * S, hueH + 4 * S, 1.5f * S, 0xFFFFFFFF);
+        RenderUtil.roundedRect(ctx, Math.round(hueCurX - 1.5f), hueY - 2, 3, hueH + 4, 1, fade(0xFFFFFFFF, p));
         hueRect = new int[]{ svX, hueY, svS, hueH };
 
         int hexY = hueY + hueH + gap;
-        NanoVgRenderer.roundedRect(vg, svX, hexY, svS, hexH, 6 * S, pickerHexFocused ? Theme.glassHov() : Theme.glassRow());
-        NanoVgRenderer.strokeRoundedRect(vg, svX + 0.5f * S, hexY + 0.5f * S, svS - S, hexH - S, 6 * S, S, pickerHexFocused ? Theme.accent() : Theme.rim());
-        NanoVgRenderer.text(vg, svX + 8 * S, hexY + hexH / 2f, 9.5f * S, Theme.txt(), ALIGN_MIDDLE, "#" + pickerHex + (pickerHexFocused ? "_" : ""));
+        RenderUtil.roundedRect(ctx, svX, hexY, svS, hexH, 6, fade(pickerHexFocused ? Theme.glassHov() : Theme.glassRow(), p));
+        RenderUtil.strokeRoundedRect(ctx, svX, hexY, svS, hexH, 6, 1, fade(pickerHexFocused ? Theme.accent() : Theme.rim(), p));
+        RenderUtil.textVCentered(ctx, tr, "#" + pickerHex + (pickerHexFocused ? "_" : ""), svX + 8, hexY, hexH, fade(Theme.txt(), p), 0.53f);
         hexRect = new int[]{ svX, hexY, svS, hexH };
 
         pickerRect = new int[]{ px, py, pw, ph };
@@ -439,34 +436,33 @@ public class ColorsScreen extends Screen {
     // what ClickGUI/the launcher actually look like. Hover glow is purely visual — nothing
     // in here is ever added to a hit-rect, so none of it is clickable.
 
-    private void drawInGameMockup(long vg, int S, int x, int y, int w, int h, int mx, int my, float dt) {
-        int pad = 8 * S;
-        float hfs = 9.5f * S;
-        Wordmark.drawCentered(vg, x + w / 2f, y + pad + hfs / 2f, hfs, 255);
+    private void drawInGameMockup(DrawContext ctx, TextRenderer tr, int x, int y, int w, int h, int mx, int my, float dt, float p) {
+        int pad = 8;
+        RenderUtil.textCentered(ctx, tr, "lume.visuals", x, y + pad, w, 10, fade(Theme.txt(), p), 0.42f);
 
-        // search bar — same glass-row look as ClickGuiScreen's real search box
-        int searchY = (int) (y + pad + hfs + 5 * S), searchH = 13 * S;
-        NanoVgRenderer.roundedRect(vg, x + pad, searchY, w - pad * 2, searchH, 6 * S, Theme.glassRow());
-        NanoVgRenderer.text(vg, x + pad + 6 * S, searchY + searchH / 2f, 7 * S, Theme.txtDim(), ALIGN_MIDDLE, com.lume.client.Lang.tUI("Search modules…"));
+        // search bar — same flat panel look as ClickGuiScreen's real search box
+        int searchY = y + pad + 10 + 5, searchH = 13;
+        RenderUtil.roundedRect(ctx, x + pad, searchY, w - pad * 2, searchH, 6, fade(Theme.glassRow(), p));
+        RenderUtil.textVCentered(ctx, tr, com.lume.client.Lang.tUI("Search modules…"), x + pad + 6, searchY, searchH, fade(Theme.txtDim(), p), 0.3f);
 
-        // category-tab pill row — same accent gradient pill as the real category selector
-        int tabsY = searchY + searchH + 5 * S, tabsH = 13 * S;
+        // category-tab pill row — flat accent pill, matching the real (now non-gradient) selector
+        int tabsY = searchY + searchH + 5, tabsH = 13;
         String[] tabs = { "Combat", "Movement", "Visual" };
-        int tabGap = 4 * S, tx = x + pad;
+        int tabGap = 4, tx = x + pad;
         for (int i = 0; i < tabs.length; i++) {
-            float tw = NanoVgRenderer.textWidth(vg, 7f * S, tabs[i]) + 12 * S;
+            int tw = RenderUtil.width(tr, tabs[i], 0.3f) + 12;
             if (i == 0) {
-                NanoVgRenderer.gradientRoundedRect(vg, tx, tabsY, tw, tabsH, 6 * S, Theme.accent(), Theme.accent2());
-                NanoVgRenderer.text(vg, tx + tw / 2f, tabsY + tabsH / 2f, 7f * S, Theme.activeText(), ALIGN_CENTER_MIDDLE, tabs[i]);
+                RenderUtil.roundedRect(ctx, tx, tabsY, tw, tabsH, 6, fade(Theme.accent(), p));
+                RenderUtil.textCentered(ctx, tr, tabs[i], tx, tabsY, tw, tabsH, fade(Theme.activeText(), p), 0.3f);
             } else {
-                NanoVgRenderer.roundedRect(vg, tx, tabsY, tw, tabsH, 6 * S, Theme.glassRow());
-                NanoVgRenderer.text(vg, tx + tw / 2f, tabsY + tabsH / 2f, 7f * S, Theme.txtDim(), ALIGN_CENTER_MIDDLE, tabs[i]);
+                RenderUtil.roundedRect(ctx, tx, tabsY, tw, tabsH, 6, fade(Theme.glassRow(), p));
+                RenderUtil.textCentered(ctx, tr, tabs[i], tx, tabsY, tw, tabsH, fade(Theme.txtDim(), p), 0.3f);
             }
             tx += tw + tabGap;
         }
 
-        int gridY = tabsY + tabsH + 6 * S;
-        int gap = 5 * S, cardW = (w - pad * 2 - gap) / 2, cardH = 22 * S;
+        int gridY = tabsY + tabsH + 6;
+        int gap = 5, cardW = (w - pad * 2 - gap) / 2, cardH = 22;
         String[] names = { "HUD", "Waypoints", "Custom Hand", "Zoom" };
         for (int i = 0; i < 4; i++) {
             int ccx = x + pad + (i % 2) * (cardW + gap);
@@ -474,30 +470,26 @@ public class ColorsScreen extends Screen {
             boolean hov = inside(mx, my, ccx, ccy, cardW, cardH);
             mockCardHover[i] = approach(mockCardHover[i], hov ? 1f : 0f, 12f, dt);
             if (i == 0) {
-                // real "on" cards intensify their glow on hover the same way ClickGuiScreen's do
-                NanoVgRenderer.bloom(vg, ccx, ccy, cardW, cardH, 8 * S, (8 + mockCardHover[i] * 4) * S, Theme.accentRgb(), 0x66 + (int) (mockCardHover[i] * 0x30));
-                NanoVgRenderer.gradientRoundedRect(vg, ccx, ccy, cardW, cardH, 7 * S, Theme.accent(), Theme.accent2());
-                NanoVgRenderer.text(vg, ccx + cardW / 2f, ccy + cardH / 2f, 7.5f * S, Theme.activeText(), ALIGN_CENTER_MIDDLE, names[i]);
+                RenderUtil.roundedRect(ctx, ccx, ccy, cardW, cardH, 7, fade(Theme.accent(), p));
+                RenderUtil.textCentered(ctx, tr, names[i], ccx, ccy, cardW, cardH, fade(Theme.activeText(), p), 0.32f);
             } else {
-                NanoVgRenderer.roundedRect(vg, ccx, ccy, cardW, cardH, 7 * S, Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), mockCardHover[i]));
-                NanoVgRenderer.text(vg, ccx + cardW / 2f, ccy + cardH / 2f, 7.5f * S, Theme.txtDim(), ALIGN_CENTER_MIDDLE, names[i]);
+                RenderUtil.roundedRect(ctx, ccx, ccy, cardW, cardH, 7, fade(Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), mockCardHover[i]), p));
+                RenderUtil.textCentered(ctx, tr, names[i], ccx, ccy, cardW, cardH, fade(Theme.txtDim(), p), 0.32f);
             }
         }
     }
 
-    private void drawLauncherMockup(long vg, int S, int x, int y, int w, int h, int mx, int my, float dt) {
-        int pad = 10 * S, avS = 28 * S;
-        NanoVgRenderer.gradientRoundedRect(vg, x + pad, y + pad, avS, avS, 8 * S, Theme.accent(), Theme.accent2());
-        NanoVgRenderer.text(vg, x + pad + avS + 8 * S, y + pad + avS / 2f - 6 * S, 7.5f * S, Theme.txtDim(), ALIGN_MIDDLE, "Nickname");
-        NanoVgRenderer.text(vg, x + pad + avS + 8 * S, y + pad + avS / 2f + 6 * S, 9.5f * S, Theme.txt(), ALIGN_MIDDLE, "Steve");
+    private void drawLauncherMockup(DrawContext ctx, TextRenderer tr, int x, int y, int w, int h, int mx, int my, float dt, float p) {
+        int pad = 10, avS = 28;
+        RenderUtil.roundedRect(ctx, x + pad, y + pad, avS, avS, 8, fade(Theme.accent(), p));
+        RenderUtil.text(ctx, tr, "Nickname", x + pad + avS + 8, y + pad + avS / 2f - 6, fade(Theme.txtDim(), p), false, 0.32f);
+        RenderUtil.text(ctx, tr, "Steve", x + pad + avS + 8, y + pad + avS / 2f + 3, fade(Theme.txt(), p), false, 0.42f);
 
-        int playY = y + pad + avS + 10 * S, playH = 24 * S, playW = w - pad * 2;
+        int playY = y + pad + avS + 10, playH = 24, playW = w - pad * 2;
         boolean hov = inside(mx, my, x + pad, playY, playW, playH);
         mockPlayHover = approach(mockPlayHover, hov ? 1f : 0f, 12f, dt);
-        // same brightness/glow bump the real .btn:hover CSS rule does in the launcher
-        NanoVgRenderer.bloom(vg, x + pad, playY, playW, playH, 10 * S, (12 + mockPlayHover * 6) * S, Theme.accentRgb(), 0x66 + (int) (mockPlayHover * 0x30));
-        NanoVgRenderer.gradientRoundedRect(vg, x + pad, playY, playW, playH, 9 * S, Theme.accent(), Theme.accent2());
-        NanoVgRenderer.text(vg, x + pad + playW / 2f, playY + playH / 2f, 9.5f * S, Theme.activeText(), ALIGN_CENTER_MIDDLE, "▶ Play");
+        RenderUtil.roundedRect(ctx, x + pad, playY, playW, playH, 9, fade(Theme.colorLerp(Theme.accent(), Theme.glassHov(), mockPlayHover * 0.2f), p));
+        RenderUtil.textCentered(ctx, tr, "▶ Play", x + pad, playY, playW, playH, fade(Theme.activeText(), p), 0.42f);
     }
 
     private static float approach(float cur, float target, float rate, float dt) {
@@ -511,8 +503,7 @@ public class ColorsScreen extends Screen {
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
         if (button != 0) return super.mouseClicked(mouseX, mouseY, button);
-        int S = sf();
-        int mx = (int) (mouseX * S), my = (int) (mouseY * S);
+        int mx = (int) mouseX, my = (int) mouseY;
 
         if (inside(mx, my, closeRect)) { close(); return true; }
         if (inside(mx, my, resetRect)) { Theme.resetToDefaults(); ThemeSync.save(); return true; }
@@ -551,7 +542,7 @@ public class ColorsScreen extends Screen {
         }
         // Header band (title/subtitle strip, above the Light/Dark row) — click-drag to move
         // the whole window. closeRect is checked above already, so this never steals that click.
-        if (inside(mx, my, winX, winY, winW, 50 * S)) {
+        if (inside(mx, my, winX, winY, winW, 50)) {
             dragging = true; grabMx = mouseX; grabMy = mouseY; grabOffX = offX; grabOffY = offY;
             return true;
         }
@@ -566,12 +557,11 @@ public class ColorsScreen extends Screen {
             return true;
         }
         if (button == 0 && draggingMenuSize) {
-            updateMenuSizeFromMouse((int) (mouseX * sf()));
+            updateMenuSizeFromMouse((int) mouseX);
             return true;
         }
         if (button == 0 && (draggingWhat != 0 || draggingGlassSlider >= 0)) {
-            int S = sf();
-            int mx = (int) (mouseX * S), my = (int) (mouseY * S);
+            int mx = (int) mouseX, my = (int) mouseY;
             if (draggingGlassSlider >= 0) updateGlassSliderFromMouse(draggingGlassSlider, mx);
             else if (draggingWhat == 1) updateSvFromMouse(mx, my);
             else updateHueFromMouse(mx);

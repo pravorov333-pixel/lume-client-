@@ -272,11 +272,18 @@ public final class SdfRenderer {
                 vec2 p = (vUv - 0.5) * uSize;
                 float d = sdRoundRect(p, halfSize, uRadius);
 
-                float fillA = (1.0 - smoothstep(-1.0, 1.0, d)) * uFill.a;
+                // Outline is CENTERED on the d=0 boundary (straddles [-halfOutline, +halfOutline]),
+                // the conventional stroke convention (matches SVG/Skia) — keeps the visible bounding
+                // box close to the nominal uSize instead of ballooning outward by the full outline
+                // width, which otherwise reads as the border not lining up with content drawn
+                // elsewhere against the same nominal rect.
+                float halfOutline = uOutlineWidth * 0.5;
+                float fillEdge = -halfOutline;
+                float fillA = (1.0 - smoothstep(fillEdge - 1.0, fillEdge + 1.0, d)) * uFill.a;
 
-                float outEdge = uOutlineWidth;
+                float outEdge = halfOutline;
                 float outA = (1.0 - smoothstep(outEdge - 1.0, outEdge + 1.0, d))
-                            * smoothstep(-1.0, 1.0, d) * uOutline.a;
+                            * smoothstep(fillEdge - 1.0, fillEdge + 1.0, d) * uOutline.a;
 
                 float glowA = 0.0;
                 if (uGlowSpread > 0.001) {
