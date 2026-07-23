@@ -53,6 +53,7 @@
     "ScreenAccessor",
     "SplashOverlayMixin",
     "TextRendererMixin",
+    "TitleButtonMixin",
     "TitleScreenMixin",
     "WorldRendererMixin"
   ],

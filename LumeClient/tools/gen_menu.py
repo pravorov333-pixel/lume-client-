@@ -143,7 +143,7 @@ def build_set(theme,style):
     img=new(98,20); draw_surface(img,98,20,6,style,theme,pal); d=ImageDraw.Draw(img)
     d.line([(49*SS,4*SS),(49*SS,16*SS)],fill=(ink[0],ink[1],ink[2],90),width=max(1,SS//2))
     ic_gear(img,24*SS,10*SS,3.0*SS,inkc,holecol); ic_globe(ImageDraw.Draw(img),73*SS,10*SS,3.1*SS,inkc); save(img,98,20,os.path.join(outdir,'box_options_language.png'))
-    img=new(98,20); draw_surface(img,98,20,6,style,theme,pal); ic_x(ImageDraw.Draw(img),49*SS,10*SS,4.2*SS,inkc); save(img,98,20,os.path.join(outdir,'box_quit.png'))
+    img=new(44,20); draw_surface(img,44,20,6,style,theme,pal); ic_x(ImageDraw.Draw(img),22*SS,10*SS,4.2*SS,inkc); save(img,44,20,os.path.join(outdir,'box_quit.png'))
 
     def icon_btn(nm,drawer):
         img=new(24,24); draw_surface(img,24,24,7,style,theme,pal); drawer(img); save(img,24,24,os.path.join(outdir,nm+'.png'))
@@ -152,8 +152,8 @@ def build_set(theme,style):
     icon_btn('ic_gear',  lambda im: ic_gear(im,12*SS,12*SS,4.2*SS,inkc,holecol))
     icon_btn('ic_menu',  lambda im: draw_glass_star(im,4,4,16,pal))
 
-    img=new(96,24); draw_surface(img,96,24,0,style,theme,pal); save(img,96,24,os.path.join(outdir,'pill.png'))
-    img=new(108,24); draw_surface(img,108,24,0,style,theme,pal); save(img,108,24,os.path.join(outdir,'account.png'))
+    img=new(96,24); draw_surface(img,96,24,7,style,theme,pal); save(img,96,24,os.path.join(outdir,'pill.png'))
+    img=new(108,24); draw_surface(img,108,24,7,style,theme,pal); save(img,108,24,os.path.join(outdir,'account.png'))
     img=new(150,20); draw_surface(img,150,20,6,style,theme,pal); save(img,150,20,os.path.join(outdir,'row.png'))
     return key
 

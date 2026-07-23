@@ -49,9 +49,11 @@ public final class LumeTitleMenu {
     // Render
 
     private static final int TH = 28;          // Settings stays this square
-    private static final int PILL_W = 108;      // Fast Connect/Friends pill width (sharp corners now, see MenuAssets)
+    private static final int PILL_W = 108;      // Fast Connect/Friends pill width
     private static final int ACCT_W = 132;       // Account chip width (head + 2 lines of text)
     private static final int MARGIN = 10;
+    private static final int GAP = 6;           // spacing between corner-cluster icons
+    private static final int RADIUS = 7;        // baked-in radius of PILL/ACCOUNT assets (see gen_menu.py)
 
     public static void render(DrawContext ctx, TitleScreen screen, int mouseX, int mouseY) {
         if (!CustomMenu.active()) return;
@@ -62,13 +64,26 @@ public final class LumeTitleMenu {
         hits.clear();
 
         boolean showAcct = CustomMenu.showAccount();
+        // Top-right cluster — Theme / Colors / Settings, per the reference "Menu widgets" row
+        // (was Settings alone). Laid out right-to-left from the margin so Settings keeps its
+        // exact old position (gearX unchanged) and the two new icons sit to its left.
         int gearX = width - MARGIN - TH, gearY = MARGIN;
+        int colorsX = gearX - GAP - TH;
+        int themeX = colorsX - GAP - TH;
         int fcX = MARGIN, fcY = height - MARGIN - TH;
         int frX = width - MARGIN - PILL_W, frY = height - MARGIN - TH;
 
         // Baked glass icon buttons — DrawContext, matching the original menu's look (see class
         // doc).
         if (showAcct) renderAccountButton(ctx, MARGIN, MARGIN, mouseX, mouseY, dt);
+        if (!bakedIcon(ctx, "theme", MenuAssets.IC_THEME, themeX, gearY, TH, mouseX, mouseY, dt, false)) {
+            RenderUtil.roundedRect(ctx, themeX, gearY, TH, TH, (int) (TH * 0.28f), Theme.glassRow());
+        }
+        hits.add(new Object[]{"theme", themeX, gearY, TH, TH});
+        if (!bakedIcon(ctx, "colors", MenuAssets.IC_COLORS, colorsX, gearY, TH, mouseX, mouseY, dt, false)) {
+            RenderUtil.roundedRect(ctx, colorsX, gearY, TH, TH, (int) (TH * 0.28f), Theme.glassRow());
+        }
+        hits.add(new Object[]{"colors", colorsX, gearY, TH, TH});
         if (!bakedIcon(ctx, "settings", MenuAssets.IC_GEAR, gearX, gearY, TH, mouseX, mouseY, dt, "settings".equals(openPanel))) {
             RenderUtil.roundedRect(ctx, gearX, gearY, TH, TH, (int) (TH * 0.28f), Theme.glassRow());
         }
@@ -81,6 +96,8 @@ public final class LumeTitleMenu {
             pillButton(ctx, "friends", "Friends", frX, frY, mouseX, mouseY, dt);
             hits.add(new Object[]{"friends", frX, frY, PILL_W, TH});
         }
+
+        renderBottomBar(ctx, width, height, mouseX, mouseY, dt);
 
         if ("settings".equals(openPanel)) {
             try {
@@ -100,7 +117,7 @@ public final class LumeTitleMenu {
         boolean hov = inside(mouseX, mouseY, x, y, ACCT_W, TH);
         float[] st = a("account");
         st[0] = approach(st[0], hov ? 1f : 0f, 12f, dt);
-        bakedFrame(ctx, MenuAssets.ACCOUNT, x, y, ACCT_W, TH, 0, st[0]);
+        bakedFrame(ctx, MenuAssets.ACCOUNT, x, y, ACCT_W, TH, RADIUS, st[0]);
 
         MinecraftClient mc = MinecraftClient.getInstance();
         var session = mc.getSession();
@@ -112,7 +129,12 @@ public final class LumeTitleMenu {
 
         String nick = session != null ? session.getUsername() : "Player";
         String subLabel = switch (com.lume.client.social.License.status()) {
-            case "valid" -> { long d = com.lume.client.social.License.daysRemaining(); yield d >= 0 ? (d + "d left") : "Active"; }
+            case "valid" -> {
+                String tier = com.lume.client.social.License.tierLabel();
+                long d = com.lume.client.social.License.daysRemaining();
+                String life = d >= 0 ? (d + "d left") : "Active";
+                yield tier != null ? (tier + " · " + life) : life;
+            }
             case "checking" -> "…";
             case "unreachable" -> "server offline";
             case "invalid" -> "invalid key";
@@ -132,7 +154,7 @@ public final class LumeTitleMenu {
         boolean hov = inside(mouseX, mouseY, x, y, PILL_W, TH) || open;
         float[] st = a(id);
         st[0] = approach(st[0], hov ? 1f : 0f, 12f, dt);
-        bakedFrame(ctx, MenuAssets.PILL, x, y, PILL_W, TH, 0, st[0]);
+        bakedFrame(ctx, MenuAssets.PILL, x, y, PILL_W, TH, RADIUS, st[0]);
         RenderUtil.textCentered(ctx, MinecraftClient.getInstance().textRenderer, label, x, y, PILL_W, TH,
                 open ? Theme.accent() : Theme.txt(), 0.5f);
     }
@@ -163,6 +185,34 @@ public final class LumeTitleMenu {
             RenderUtil.roundedRect(ctx, x, y, size, size, Math.round(size * 0.3f), (Math.round(st[0] * 40) << 24) | 0xFFFFFF);
         }
         return true;
+    }
+
+    // ---------------------------------------------------------------------
+    // Bottom-center bar — Options+Language combo pill / Quit — additive overlay buttons (vanilla
+    // has neither in this exact combined form), matching the reference's "Bottom actions" row.
+    // Sits on the same row as the Fast Connect/Friends corner pills, centred between them.
+
+    private static final int OPTLANG_W = 98, OPTLANG_H = 20, QUIT_W = 44, QUIT_H = 20;
+
+    private static void renderBottomBar(DrawContext ctx, int width, int height, int mouseX, int mouseY, float dt) {
+        int rowY = height - MARGIN - TH;
+        int totalW = OPTLANG_W + GAP + QUIT_W;
+        int barX = (width - totalW) / 2;
+        int olX = barX, olY = rowY + (TH - OPTLANG_H) / 2;
+        int qX = barX + OPTLANG_W + GAP, qY = rowY + (TH - QUIT_H) / 2;
+
+        boolean olHov = inside(mouseX, mouseY, olX, olY, OPTLANG_W, OPTLANG_H);
+        float[] olSt = a("optlang");
+        olSt[0] = approach(olSt[0], olHov ? 1f : 0f, 12f, dt);
+        bakedFrame(ctx, MenuAssets.OPTIONS_LANGUAGE, olX, olY, OPTLANG_W, OPTLANG_H, RADIUS, olSt[0]);
+        hits.add(new Object[]{"options", olX, olY, OPTLANG_W / 2, OPTLANG_H});
+        hits.add(new Object[]{"language", olX + OPTLANG_W / 2, olY, OPTLANG_W - OPTLANG_W / 2, OPTLANG_H});
+
+        boolean qHov = inside(mouseX, mouseY, qX, qY, QUIT_W, QUIT_H);
+        float[] qSt = a("quit");
+        qSt[0] = approach(qSt[0], qHov ? 1f : 0f, 12f, dt);
+        bakedFrame(ctx, MenuAssets.QUIT, qX, qY, QUIT_W, QUIT_H, RADIUS, qSt[0]);
+        hits.add(new Object[]{"quit", qX, qY, QUIT_W, QUIT_H});
     }
 
     // ---------------------------------------------------------------------
@@ -243,6 +293,11 @@ public final class LumeTitleMenu {
                 case "fastconnect" -> { if (mc != null) mc.setScreen(new FastConnectScreen(screen)); }
                 case "friends" -> { if (mc != null) mc.setScreen(new FriendsScreen(screen)); }
                 case "settings" -> togglePanel("settings");
+                case "theme" -> { Theme.toggle(); com.lume.client.gui.ThemeSync.save(); }
+                case "colors" -> { if (mc != null) mc.setScreen(new com.lume.client.gui.ColorsScreen(screen)); }
+                case "options" -> { if (mc != null) mc.setScreen(new net.minecraft.client.gui.screen.option.OptionsScreen(screen, mc.options)); }
+                case "language" -> { if (mc != null) mc.setScreen(new net.minecraft.client.gui.screen.option.LanguageOptionsScreen(screen, mc.options, mc.getLanguageManager())); }
+                case "quit" -> { if (mc != null) mc.scheduleStop(); }
                 case "panel" -> { /* absorb click, keep panel open */ }
                 case "wallpaperToggle" -> { CustomMenu.toggleWallpaperOn(); Config.save(); }
                 case "wallpaperCycle" -> { CustomMenu.cycleWallpaper(mouseX > x + w / 2.0 ? 1 : -1); Config.save(); }
