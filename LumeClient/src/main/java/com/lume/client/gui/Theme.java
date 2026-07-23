@@ -146,36 +146,41 @@ public final class Theme {
         if (glassStyle == 1) return 0;
         Integer c = d ? customBgDark : customBgLight;
         int alpha = glassStyle == 2 ? 0xFF : (d ? 0xE8 : 0xDE);
-        return c != null ? (alpha << 24) | (shade(c, 0.08f) & 0xFFFFFF) : (alpha << 24) | (d ? 0x2F2A23 : 0xF8F2E7);
+        return c != null ? (alpha << 24) | (shade(c, 0.08f) & 0xFFFFFF) : (alpha << 24) | (d ? 0x000000 : 0xFFFFFF);
     }
     private static int winBot(boolean d) {
         if (glassStyle == 1) return 0;
         Integer c = d ? customBgDark : customBgLight;
         int alpha = glassStyle == 2 ? 0xFF : (d ? 0xE8 : 0xD4);
-        return c != null ? (alpha << 24) | (c & 0xFFFFFF) : (alpha << 24) | (d ? 0x1E1B16 : 0xEADFCB);
+        return c != null ? (alpha << 24) | (c & 0xFFFFFF) : (alpha << 24) | (d ? 0x000000 : 0xFFFFFF);
     }
     private static int winBg(boolean d) {
         if (glassStyle == 1) return 0;
         Integer c = d ? customBgDark : customBgLight;
         int alpha = glassStyle == 2 ? 0xFF : (d ? 0xE0 : 0xDC);
-        return c != null ? (alpha << 24) | (c & 0xFFFFFF) : (alpha << 24) | (d ? 0x272320 : 0xF3ECDD);
+        return c != null ? (alpha << 24) | (c & 0xFFFFFF) : (alpha << 24) | (d ? 0x000000 : 0xFFFFFF);
     }
-    private static int sideBg(boolean d)    { return d ? 0x14FFFFFF : 0x26FFFFFF; }
+    private static int sideBg(boolean d)    { return d ? 0x14FFFFFF : 0x26000000; }
+    // Same white-tint-on-white-bg problem as border/rim above: a white overlay is invisible
+    // against the light theme's true-white background — black-tinted for light mode instead.
     private static int glassRow(boolean d) {
         if (glassStyle == 2) return 0xFF000000 | (winBot(d) & 0xFFFFFF);
         int alpha = glassStyle == 1 ? (d ? 0x06 : 0x18) : (d ? 0x18 : 0x5C);
-        return (alpha << 24) | 0xFFFFFF;
+        return (alpha << 24) | (d ? 0xFFFFFF : 0x000000);
     }
     private static int glassHov(boolean d) {
         if (glassStyle == 2) return 0xFF000000 | (shade(winBot(d) & 0xFFFFFF, 0.12f) & 0xFFFFFF);
         int alpha = glassStyle == 1 ? (d ? 0x14 : 0x38) : (d ? 0x33 : 0x9E);
-        return (alpha << 24) | 0xFFFFFF;
+        return (alpha << 24) | (d ? 0xFFFFFF : 0x000000);
     }
-    private static int border(boolean d)    { return d ? 0x42FFFFFF : 0xCCFFFFFF; }
-    private static int rim(boolean d)       { return d ? 0x66FFFFFF : 0xAAFFFFFF; }
+    // White-tinted overlays read fine on the dark theme's near-black background, but on the
+    // light theme's near-white background a white-alpha border/rim is nearly invisible — switch
+    // to black-tinted for light mode so both themes keep visible outlines.
+    private static int border(boolean d)    { return d ? 0x42FFFFFF : 0x33000000; }
+    private static int rim(boolean d)       { return d ? 0x66FFFFFF : 0x55000000; }
     private static int shadow(boolean d)    { return d ? 0x66000000 : 0x2E000000; }
-    private static int txt(boolean d)       { return d ? 0xFFEDE6D6 : 0xFF4A4133; }
-    private static int txtDim(boolean d)    { return d ? 0xFFA99F8C : 0xFF8C8170; }
+    private static int txt(boolean d)       { return d ? 0xFFFFFFFF : 0xFF000000; }
+    private static int txtDim(boolean d)    { return d ? 0xFFAAAAAA : 0xFF555555; }
     private static int accent(boolean d) {
         Integer c = d ? customAccentDark : customAccentLight;
         return c != null ? (0xFF000000 | (c & 0xFFFFFF)) : (d ? 0xFFB7AAD9 : 0xFFA99BC7);
@@ -184,7 +189,7 @@ public final class Theme {
         Integer c = d ? customAccentDark : customAccentLight;
         return c != null ? (0xFF000000 | (shade(c, -0.10f) & 0xFFFFFF)) : (d ? 0xFF9385C4 : 0xFF8E7FC0);
     }
-    private static int pillOff(boolean d)   { return d ? 0x3AFFFFFF : 0x33483F33; }
+    private static int pillOff(boolean d)   { return d ? 0x3AFFFFFF : 0x33000000; }
     private static int activeText(boolean d) {
         Integer c = d ? customActiveTextDark : customActiveTextLight;
         return 0xFF000000 | (c != null ? (c & 0xFFFFFF) : 0xFFFFFF);

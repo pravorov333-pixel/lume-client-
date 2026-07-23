@@ -8,6 +8,7 @@ import com.lume.client.fthw.ItemRule;
 import com.lume.client.fthw.ItemRules;
 import com.lume.client.nanovg.GlassRenderer;
 import com.lume.client.nanovg.NanoVgRenderer;
+import com.lume.client.nanovg.SdfRenderer;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.client.gui.screen.multiplayer.ConnectScreen;
@@ -299,9 +300,13 @@ public class ClickGuiScreen extends Screen {
         int x = (sw - W) / 2, y = (sh - H) / 2;
         int r = 18 * S;
 
-        // Panel — flat minimalist chrome: soft drop shadow only, no accent glow/bloom halo.
-        RenderUtil.roundedRect(ctx, x + 3 * S, y + 7 * S, W - 6 * S, H, r, Theme.shadow());
-        glass(ctx, x, y, W, H, r, Theme.winBg(), 2 * S);
+        // Panel — pixel-perfect SDF rounded rect (raw GL, see SdfRenderer) instead of RenderUtil's
+        // CPU-coverage approximation. Flat minimalist chrome: flat fill + thin rim, no glow/bloom.
+        // ctx.draw() flushes everything queued so far (backdrop fill, HUD frames) before this raw
+        // GL write, same ordering discipline GlassRenderer's own calls already need.
+        ctx.draw();
+        SdfRenderer.boxWindowLocal(winOffX * S, winOffY * S, cx, cy, total, x, y, W, H, r,
+                Theme.winBg(), Theme.rim(), 1.5f * S, 0, 0f);
         RenderUtil.roundedRect(ctx, x + 16 * S, y + 2 * S, W - 32 * S, Math.max(1, S), 1 * S, Theme.border());
 
         // Header: logo + wordmark
@@ -354,7 +359,11 @@ public class ClickGuiScreen extends Screen {
             segX[i] = cx2; segW[i] = ww[i];
             boolean sel = i == selectedCat && search.isEmpty();
             if (sel) {
-                RenderUtil.roundedRect(ctx, cx2, segY, ww[i], segH, 12 * S, Theme.accent());
+                // Active tab: SDF outline + glow, fill matches the background (no separate
+                // "lighter panel" look — the glow is what makes it read as selected).
+                ctx.draw();
+                SdfRenderer.boxWindowLocal(winOffX * S, winOffY * S, cx, cy, total, cx2, segY, ww[i], segH, 12 * S,
+                        Theme.winBg(), Theme.accent(), 1.5f * S, Theme.accent(), 6f * S);
             }
             int tw = width(tabTitle(i), 0.5f);
             text(ctx, tabTitle(i), cx2 + (ww[i] - tw) / 2, segY + 8 * S, sel ? Theme.activeText() : Theme.txtDim(), 0.5f);
