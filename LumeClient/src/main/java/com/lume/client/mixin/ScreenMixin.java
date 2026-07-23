@@ -120,19 +120,34 @@ public class ScreenMixin {
     @Inject(method = "renderBackground", at = @At("HEAD"), cancellable = true, require = 0)
     private void lume$customMenuBackgroundEverywhere(DrawContext ctx, int mouseX, int mouseY, float delta, CallbackInfo ci) {
         Screen self = (Screen) (Object) this;
-        if (!CustomMenu.customBackgroundActive() || self.getClass().getName().startsWith("com.lume.client")) return;
+        if (self.getClass().getName().startsWith("com.lume.client")) return;
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.world != null) return;
+        if (!CustomMenu.wallpaperActive()) return;
         CustomMenu.drawBackground(ctx, mc.getWindow().getScaledWidth(), mc.getWindow().getScaledHeight());
+        CustomMenu.drawDimOverlay(ctx, mc.getWindow().getScaledWidth(), mc.getWindow().getScaledHeight());   // ci.cancel() below skips the TAIL injector, so draw it here too
         ci.cancel();
     }
 
     @Inject(method = "renderPanoramaBackground", at = @At("HEAD"), cancellable = true, require = 0)
     private void lume$noPanoramaEverywhere(DrawContext ctx, float delta, CallbackInfo ci) {
         Screen self = (Screen) (Object) this;
-        if (!CustomMenu.customBackgroundActive() || self.getClass().getName().startsWith("com.lume.client")) return;
+        if (!CustomMenu.wallpaperActive() || self.getClass().getName().startsWith("com.lume.client")) return;
         if (MinecraftClient.getInstance().world != null) return;
         ci.cancel();
+    }
+
+    /** Background Dim (Menu settings) on every OTHER pre-game screen too (Singleplayer,
+     *  Multiplayer, Options-from-title, etc.) — not just the title screen itself (that's
+     *  TitleScreenMixin's own TAIL injection). Only reached when the HEAD injection above
+     *  didn't already cancel the method (i.e. no custom wallpaper is active here). */
+    @Inject(method = "renderBackground", at = @At("TAIL"), require = 0)
+    private void lume$dimOverlayEverywhere(DrawContext ctx, int mouseX, int mouseY, float delta, CallbackInfo ci) {
+        Screen self = (Screen) (Object) this;
+        if (self.getClass().getName().startsWith("com.lume.client")) return;
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.world != null) return;
+        CustomMenu.drawDimOverlay(ctx, mc.getWindow().getScaledWidth(), mc.getWindow().getScaledHeight());
     }
 
     /**

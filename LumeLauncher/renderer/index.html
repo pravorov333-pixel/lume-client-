@@ -69,7 +69,7 @@
 
   .titlebar { height:40px; display:flex; align-items:center; justify-content:space-between; padding:0 8px 0 14px; -webkit-app-region:drag; }
   .brand { display:flex; align-items:center; gap:9px; font-size:15px; font-weight:700; letter-spacing:-.3px; }
-  .brand .mark { width:24px; height:24px; }
+  .brand .mark { width:24px; height:24px; filter:drop-shadow(0 0 5px var(--mintLight)); }
   .brand .lume { color:var(--ink); }
   .gradText { background:linear-gradient(135deg,var(--mint),var(--blue)); -webkit-background-clip:text; background-clip:text; color:transparent; }
   .winbtns { -webkit-app-region:no-drag; display:flex; gap:4px; }
@@ -163,7 +163,7 @@
   .card.shake { animation:shake .4s; }
   @keyframes shake { 0%,100%{transform:translate(-50%,-50%)} 20%,60%{transform:translate(calc(-50% - 8px),-50%)} 40%,80%{transform:translate(calc(-50% + 8px),-50%)} }
 
-  .bigmark { width:54px; height:54px; margin:0 auto 14px; display:block; }
+  .bigmark { width:54px; height:54px; margin:0 auto 14px; display:block; filter:drop-shadow(0 0 10px var(--mintLight)); }
   h1 { font-size:20px; font-weight:700; letter-spacing:-.3px; }
   .sub { font-size:12px; color:var(--ink2); margin:5px 0 20px; }
 
@@ -206,7 +206,7 @@
   #loader { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:300px; text-align:center;
             opacity:0; pointer-events:none; transition:opacity .35s ease; }
   #loader.show { opacity:1; }
-  #loader .lmark { width:60px; height:60px; margin:0 auto 18px; display:block; animation:pulse 1.1s ease-in-out infinite; }
+  #loader .lmark { width:60px; height:60px; margin:0 auto 18px; display:block; animation:pulse 1.1s ease-in-out infinite; filter:drop-shadow(0 0 10px var(--mintLight)); }
   @keyframes pulse { 0%,100%{transform:scale(1);filter:drop-shadow(0 0 0 transparent)} 50%{transform:scale(1.08);filter:drop-shadow(0 6px 18px var(--glow))} }
   #loader .ltitle { font-size:15px; font-weight:700; color:var(--ink); letter-spacing:-.2px; }
   #loader .lsub { font-size:11.5px; color:var(--ink2); margin-top:4px; }
@@ -232,7 +232,6 @@
       <div class="brand">
         <svg class="mark" viewBox="0 0 100 100">
           <path d="M42,16 Q48.4,39.6 72,46 Q48.4,52.4 42,76 Q35.6,52.4 12,46 Q35.6,39.6 42,16 Z" fill="url(#g)"/>
-          <path d="M72,11 Q74.8,21.2 85,24 Q74.8,26.8 72,37 Q69.2,26.8 59,24 Q69.2,21.2 72,11 Z" style="fill:var(--mintLight)"/>
         </svg>
         <span class="lume">lume</span>
       </div>
@@ -263,7 +262,6 @@
       <div id="login" class="card">
         <svg class="bigmark" viewBox="0 0 100 100">
           <path d="M42,16 Q48.4,39.6 72,46 Q48.4,52.4 42,76 Q35.6,52.4 12,46 Q35.6,39.6 42,16 Z" fill="url(#g)"/>
-          <path d="M72,11 Q74.8,21.2 85,24 Q74.8,26.8 72,37 Q69.2,26.8 59,24 Q69.2,21.2 72,11 Z" style="fill:var(--mintLight)"/>
         </svg>
         <h1>Sign in to Lume</h1>
         <div class="sub">enter your license key</div>
@@ -283,10 +281,9 @@
       <!-- Home / play screen -->
       <div id="home" class="card home hidden">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:18px">
-          <svg class="mark" style="width:22px;height:22px" viewBox="0 0 100 100">
+          <svg class="mark" style="width:22px;height:22px;filter:drop-shadow(0 0 5px var(--mintLight))" viewBox="0 0 100 100">
             <path d="M42,16 Q48.4,39.6 72,46 Q48.4,52.4 42,76 Q35.6,52.4 12,46 Q35.6,39.6 42,16 Z" fill="url(#g)"/>
-            <path d="M72,11 Q74.8,21.2 85,24 Q74.8,26.8 72,37 Q69.2,26.8 59,24 Q69.2,21.2 72,11 Z" style="fill:var(--mintLight)"/>
-          </svg>
+            </svg>
           <span style="font-weight:700;letter-spacing:-.3px;color:var(--ink)">lume</span>
           <span class="gradText" style="font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;margin-top:2px">visuals</span>
           <span id="plan" class="badge" style="margin-left:auto">tester</span>
@@ -394,6 +391,11 @@
         </div>
 
         <div class="sectionLabel">Performance</div>
+        <div class="styleRow" id="perfModeRow">
+          <button data-perf="default">Default</button>
+          <button data-perf="ultra">Ultra Performance</button>
+        </div>
+        <div id="perfModeHint" style="font-size:10px;color:var(--ink3);margin:-2px 0 6px">Default — full glass ClickGUI/HUD. Ultra Performance — flat, no blur/glow/animations; every module still works the same, only the visual chrome is stripped for max FPS.</div>
         <div class="sliderRow"><span id="memoryLabel">Memory</span><input type="range" id="memorySlider" min="1" max="8" step="0.5" /></div>
         <div id="memoryHint" style="font-size:10px;color:var(--ink3);margin:-2px 0 6px"></div>
 
@@ -418,7 +420,6 @@
       <div id="loader">
         <svg class="lmark" viewBox="0 0 100 100">
           <path d="M42,16 Q48.4,39.6 72,46 Q48.4,52.4 42,76 Q35.6,52.4 12,46 Q35.6,39.6 42,16 Z" fill="url(#g)"/>
-          <path d="M72,11 Q74.8,21.2 85,24 Q74.8,26.8 72,37 Q69.2,26.8 59,24 Q69.2,21.2 72,11 Z" style="fill:var(--mintLight)"/>
         </svg>
         <div class="ltitle">Key accepted</div>
         <div class="lsub">preparing your visuals…</div>

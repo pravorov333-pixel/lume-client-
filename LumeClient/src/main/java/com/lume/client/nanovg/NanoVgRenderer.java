@@ -420,26 +420,38 @@ public final class NanoVgRenderer {
         }
     }
 
-    /** Lume "Sparkle" mark — big 4-point sparkle (bright→mid lavender gradient) + a smaller
-     *  sparkle (light lavender), the small one's bottom tip sitting directly above the big
-     *  one's right tip (x=72 for both). Same 0..100 coordinate space and exact path numbers
-     *  as the website/launcher's own SVG version (see their inline &lt;svg class="mark"&gt;
-     *  markup) — keep both in sync if this ever changes.
+    /** Lume "Glass Star" mark — rebranded (per the new Figma reference) to a single 4-point
+     *  sparkle (bright→mid lavender/accent gradient) with a soft glow halo behind it, replacing
+     *  the old two-sparkle composition (a small secondary sparkle used to sit pinned to the big
+     *  one's right tip — removed, the new reference shows one star only). Same 0..100 coordinate
+     *  space and exact path numbers as {@link com.lume.client.gui.RenderUtil#drawLogo} and the
+     *  launcher's own SVG mark (see their inline &lt;svg class="mark"&gt; markup) — keep all
+     *  three in sync if this ever changes.
      *
      *  <p>Drawn as a triangle FAN from the shape's centre rather than one single concave
      *  {@code nvgFill()} of the whole moveTo/quadTo outline — a sparkle's deep inward "waist"
      *  between points is exactly the kind of sharp concave path NanoVG's stencil-based concave
      *  fill can render as a solid bounding box instead of the actual silhouette on some
-     *  drivers/framebuffer setups (this is what showed up in-game as two plain squares).
+     *  drivers/framebuffer setups (this is what showed up in-game as a plain square).
      *  Every wedge here is a plain triangle (always convex), so it can't hit that path at all. */
     public static void logoMark(long vg, float x, float y, float s) {
         float u = s / 100f;
         // Follows the current accent (customisable via Customize Colors) instead of a fixed
         // lavender — accent()/accent2() are the SAME two-stop gradient every other accent-filled
-        // pill/button in the UI uses; the small sparkle gets a lighter tint of accent(), same
-        // relationship the original fixed palette had (C9BEE0 is a lightened B7AAD9).
+        // pill/button in the UI uses.
         int bigC1 = Theme.accent(), bigC2 = Theme.accent2();
-        int smallC = 0xFF000000 | (Theme.colorLerp(Theme.accentRgb(), 0xFFFFFF, 0.25f) & 0xFFFFFF);
+        // Soft glass glow halo: the SAME sparkle fan, scaled up ~18% around its own centre
+        // (42,46) and filled at low flat alpha, drawn first (behind the crisp star) — a real
+        // blur isn't cheaply available here, so a larger translucent copy stands in for one,
+        // same trick RenderUtil.glow/containedGlow already use for rounded rects.
+        float gu = u * 1.18f;
+        float gx = x + 42 * u - 42 * gu, gy = y + 46 * u - 46 * gu;
+        try (MemoryStack ms = MemoryStack.stackPush()) {
+            NVGColor col = NVGColor.malloc(ms);
+            color(0x40000000 | (Theme.accentRgb() & 0xFFFFFF), col);
+            nvgFillColor(vg, col);
+            fillSparkleFan(vg, gx, gy, gu, 42, 46, 42, 16, 48.4f, 39.6f, 72, 46, 48.4f, 52.4f, 42, 76, 35.6f, 52.4f, 12, 46, 35.6f, 39.6f);
+        }
         try (MemoryStack ms = MemoryStack.stackPush()) {
             NVGColor c1 = NVGColor.malloc(ms), c2 = NVGColor.malloc(ms);
             color(bigC1, c1); color(bigC2, c2);
@@ -447,12 +459,6 @@ public final class NanoVgRenderer {
             nvgLinearGradient(vg, x + 12 * u, y + 16 * u, x + 72 * u, y + 76 * u, c1, c2, p);
             nvgFillPaint(vg, p);
             fillSparkleFan(vg, x, y, u, 42, 46, 42, 16, 48.4f, 39.6f, 72, 46, 48.4f, 52.4f, 42, 76, 35.6f, 52.4f, 12, 46, 35.6f, 39.6f);
-        }
-        try (MemoryStack ms = MemoryStack.stackPush()) {
-            NVGColor col = NVGColor.malloc(ms);
-            color(smallC, col);
-            nvgFillColor(vg, col);
-            fillSparkleFan(vg, x, y, u, 72, 24, 72, 11, 74.8f, 21.2f, 85, 24, 74.8f, 26.8f, 72, 37, 69.2f, 26.8f, 59, 24, 69.2f, 21.2f);
         }
     }
 

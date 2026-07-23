@@ -42,7 +42,7 @@ public final class LoadingScreen {
             float logoS = 56 * S;
             NanoVgRenderer.logoMark(vg, cx - logoS / 2f, cy - logoS / 2f - 34 * S, logoS);
 
-            Wordmark.drawCentered(vg, cx, cy + 24 * S, 15 * S, 255);
+            Wordmark.drawVividCentered(vg, cx, cy + 24 * S, 15 * S, 255);
 
             float barW = Math.min(240 * S, sw * 0.6f), barH = 5 * S;
             float bx = cx - barW / 2f, by = cy + 48 * S;

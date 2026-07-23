@@ -47,6 +47,12 @@ db.exec(`
     created_at  INTEGER NOT NULL
   );
 
+  -- listPoints() queries by to_user (direct) and by from_user (the 'all'-broadcast branch),
+  -- ordered by created_at, on every client's point-poll (every 3s per client — the most
+  -- frequent of all the Friends polls) — without these, both queries full-scan+sort.
+  CREATE INDEX IF NOT EXISTS idx_points_to_user ON points(to_user, created_at);
+  CREATE INDEX IF NOT EXISTS idx_points_from_user ON points(from_user);
+
   -- Mod auto-update pointer, one row per Minecraft version the launcher supports.
   -- "file" is the jar's name under public/downloads/ (see server.js static serving).
   CREATE TABLE IF NOT EXISTS versions (

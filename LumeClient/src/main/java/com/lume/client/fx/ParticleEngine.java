@@ -159,12 +159,14 @@ public final class ParticleEngine {
      * Target ESP "Halo" — a ring of small billboards orbiting the entity at
      * mid-height, slowly rotating. Recomputed every frame (no persistent state).
      */
-    public static void halo(WorldRenderContext ctx, double cx, double y0, double y1, double cz, float radius, int rgb) {
-        halo(ctx, cx, y0, y1, cz, radius, rgb, SHAPE_CIRCLE);
+    public static void halo(WorldRenderContext ctx, double cx, double y0, double y1, double cz, float radius, int rgb, int shape) {
+        halo(ctx, cx, y0, y1, cz, radius, rgb, shape, 1f);
     }
 
-    public static void halo(WorldRenderContext ctx, double cx, double y0, double y1, double cz, float radius, int rgb, int shape) {
-        if (ctx.camera() == null) return;
+    /** {@code alpha} (0..1) scales every layer uniformly — used to fade Target ESP in/out on
+     *  acquire/lose (see TargetEsp's grace-hold tracking). */
+    public static void halo(WorldRenderContext ctx, double cx, double y0, double y1, double cz, float radius, int rgb, int shape, float alpha) {
+        if (ctx.camera() == null || alpha <= 0.01f) return;
         MatrixStack ms = ctx.matrixStack();
         VertexConsumerProvider vcp = ctx.consumers();
         if (ms == null || vcp == null) return;
@@ -183,21 +185,18 @@ public final class ParticleEngine {
             double wx = cx + Math.cos(a) * radius, wz = cz + Math.sin(a) * radius;
             float fx = (float) (wx - cam.x), fy = (float) (midY - cam.y), fz = (float) (wz - cam.z);
             if (shape >= SHAPE_STAR) {
-                fanShape(vc, mat, fx, fy, fz, right, up, shape, 0.14f, rgbm, 235);
+                fanShape(vc, mat, fx, fy, fz, right, up, shape, 0.14f, rgbm, (int) (235 * alpha));
             } else {
-                quad(vc, mat, fx, fy, fz, right, up, 0.10f, rgbm, 220);
-                quad(vc, mat, fx, fy, fz, right, up, 0.18f, rgbm, 90);
+                quad(vc, mat, fx, fy, fz, right, up, 0.10f, rgbm, (int) (220 * alpha));
+                quad(vc, mat, fx, fy, fz, right, up, 0.18f, rgbm, (int) (90 * alpha));
             }
         }
         if (vcp instanceof VertexConsumerProvider.Immediate imm) imm.draw(RenderLayer.getDebugQuads());
     }
 
-    /** Target ESP "Sparks" — occasional rising sparks spawned from within the entity's silhouette. */
-    public static void sparksAround(double cx, double y0, double y1, double cz, float radius, int rgb) {
-        sparksAround(cx, y0, y1, cz, radius, rgb, SHAPE_CIRCLE);
-    }
-
-    public static void sparksAround(double cx, double y0, double y1, double cz, float radius, int rgb, int shape) {
+    /** Target ESP "Sparks" — occasional rising sparks spawned from within the entity's silhouette.
+     *  {@code alpha} (0..1) scales each newly-spawned spark's peak alpha — used to fade in/out. */
+    public static void sparksAround(double cx, double y0, double y1, double cz, float radius, int rgb, int shape, float alpha) {
         if (RND.nextFloat() > 0.5f) return;   // throttle spawn rate to a light trickle
         double a = RND.nextDouble() * Math.PI * 2;
         double wx = cx + Math.cos(a) * radius * RND.nextDouble();
@@ -208,7 +207,7 @@ public final class ParticleEngine {
         p.gravity = 0.4f;
         p.drag = 0.9f;
         p.size = 0.06f; p.sizeEnd = 0f;
-        p.alpha = 1f;
+        p.alpha = alpha;
         p.maxLife = p.life = 0.8;
         p.shape = shape;
         add(p);
@@ -216,10 +215,13 @@ public final class ParticleEngine {
 
     /**
      * Target ESP "Limbs" — a solid, always-visible (X-ray) glow at one exact world point,
-     * redrawn fresh every frame (no fade). Used for the constant "limb highlight" look.
+     * redrawn fresh every frame (no fade). Three concentric circular fans (not flat quads) give
+     * it a real round soft-edged falloff — a plain quad reads as a square since its alpha is
+     * uniform corner-to-corner; a circular fan's silhouette is round to begin with. {@code alpha}
+     * (0..1) scales all three layers — used to fade Target ESP in/out on acquire/lose.
      */
-    public static void limbGlow(WorldRenderContext ctx, double x, double y, double z, float radius, int rgb) {
-        if (ctx.camera() == null) return;
+    public static void limbGlow(WorldRenderContext ctx, double x, double y, double z, float radius, int rgb, float alpha) {
+        if (ctx.camera() == null || alpha <= 0.01f) return;
         MatrixStack ms = ctx.matrixStack();
         VertexConsumerProvider vcp = ctx.consumers();
         if (ms == null || vcp == null) return;
@@ -230,19 +232,41 @@ public final class ParticleEngine {
         Matrix4f mat = ms.peek().getPositionMatrix();
         VertexConsumer vc = vcp.getBuffer(RenderLayer.getDebugQuads());
         float fx = (float) (x - cam.x), fy = (float) (y - cam.y), fz = (float) (z - cam.z);
-        quad(vc, mat, fx, fy, fz, right, up, radius * 1.6f, rgb & 0xFFFFFF, 130);
-        quad(vc, mat, fx, fy, fz, right, up, radius, rgb & 0xFFFFFF, 255);
+        int rgbm = rgb & 0xFFFFFF;
+        circleFan(vc, mat, fx, fy, fz, right, up, radius * 1.8f, rgbm, (int) (55 * alpha), 14);
+        circleFan(vc, mat, fx, fy, fz, right, up, radius * 1.2f, rgbm, (int) (130 * alpha), 14);
+        circleFan(vc, mat, fx, fy, fz, right, up, radius * 0.65f, rgbm, (int) (255 * alpha), 14);
         if (vcp instanceof VertexConsumerProvider.Immediate imm) imm.draw(RenderLayer.getDebugQuads());
     }
 
-    /** A single short-lived particle dropped at a limb's exact position — builds a comet trail while moving. */
-    public static void trailSpark(double x, double y, double z, int rgb) {
-        GlowParticle p = new GlowParticle(x, y, z, rgb);
-        p.gravity = 0f; p.drag = 0.4f;
-        p.size = 0.09f; p.sizeEnd = 0.02f;
-        p.alpha = 0.9f;
-        p.maxLife = p.life = 0.25;
-        add(p);
+    /** One historical sample of a "Limbs" orbiter's trail — NOT a physics particle at all, no
+     *  velocity/drag/engine involved. Position is recomputed fresh every single frame as
+     *  {@code anchor's CURRENT position + a fixed relative offset captured at spawn time}. That
+     *  offset is the only state kept, so there is nothing here that could ever drift or "fly off"
+     *  — as the entity moves, every sample simply keeps riding along at the same fixed spot
+     *  relative to it, exactly as if it were still glued to the entity's side. The trail's shape
+     *  is entirely a byproduct of the orbiter's own circling motion (different offsets captured
+     *  at different moments), never of the entity's translation through the world. */
+    public static void limbTrailGlow(WorldRenderContext ctx, net.minecraft.entity.Entity anchor,
+                                     double offX, double offY, double offZ, float radius, int rgb, float alphaMul) {
+        if (ctx.camera() == null || !anchor.isAlive()) return;
+        MatrixStack ms = ctx.matrixStack();
+        VertexConsumerProvider vcp = ctx.consumers();
+        if (ms == null || vcp == null) return;
+        double x = anchor.getX() + offX, y = anchor.getY() + offY, z = anchor.getZ() + offZ;
+        Vec3d cam = ctx.camera().getPos();
+        Quaternionf q = ctx.camera().getRotation();
+        Vector3f right = new Vector3f(1, 0, 0).rotate(q);
+        Vector3f up = new Vector3f(0, 1, 0).rotate(q);
+        Matrix4f mat = ms.peek().getPositionMatrix();
+        VertexConsumer vc = vcp.getBuffer(RenderLayer.getDebugQuads());
+        float fx = (float) (x - cam.x), fy = (float) (y - cam.y), fz = (float) (z - cam.z);
+        int rgbm = rgb & 0xFFFFFF;
+        int a1 = (int) (55 * alphaMul), a2 = (int) (130 * alphaMul), a3 = (int) (220 * alphaMul);
+        circleFan(vc, mat, fx, fy, fz, right, up, radius * 1.8f, rgbm, a1, 10);
+        circleFan(vc, mat, fx, fy, fz, right, up, radius * 1.2f, rgbm, a2, 10);
+        circleFan(vc, mat, fx, fy, fz, right, up, radius * 0.65f, rgbm, a3, 10);
+        if (vcp instanceof VertexConsumerProvider.Immediate imm) imm.draw(RenderLayer.getDebugQuads());
     }
 
     /** WorldRenderEvents.AFTER_ENTITIES callback (registered in LumeClient). */
@@ -345,6 +369,27 @@ public final class ParticleEngine {
         vc.vertex(m, cx - rx + ux, cy - ry + uy, cz - rz + uz).color(argb);
         vc.vertex(m, cx + rx + ux, cy + ry + uy, cz + rz + uz).color(argb);
         vc.vertex(m, cx + rx - ux, cy + ry - uy, cz + rz - uz).color(argb);
+    }
+
+    /** A plain camera-facing circular fan (not one of the pointy {@link #shapeOutline} shapes) —
+     *  a real round silhouette, used to build soft radial-gradient glows out of a few concentric
+     *  layers instead of flat (visually square) quads. Same degenerate-quad-as-triangle trick as
+     *  {@link #fanShape}. */
+    private static void circleFan(VertexConsumer vc, Matrix4f m, float cx, float cy, float cz,
+                                  Vector3f right, Vector3f up, float r, int rgb, int alpha, int seg) {
+        int argb = (Math.max(0, Math.min(255, alpha)) << 24) | (rgb & 0xFFFFFF);
+        float prevX = r, prevY = 0;
+        for (int i = 1; i <= seg; i++) {
+            double a = 2 * Math.PI * i / seg;
+            float nx = (float) Math.cos(a) * r, ny = (float) Math.sin(a) * r;
+            float p1x = cx + right.x * prevX + up.x * prevY, p1y = cy + right.y * prevX + up.y * prevY, p1z = cz + right.z * prevX + up.z * prevY;
+            float p2x = cx + right.x * nx + up.x * ny, p2y = cy + right.y * nx + up.y * ny, p2z = cz + right.z * nx + up.z * ny;
+            vc.vertex(m, cx, cy, cz).color(argb);
+            vc.vertex(m, p1x, p1y, p1z).color(argb);
+            vc.vertex(m, p2x, p2y, p2z).color(argb);
+            vc.vertex(m, p2x, p2y, p2z).color(argb);
+            prevX = nx; prevY = ny;
+        }
     }
 
     // ---- shaped (non-Minecraft-looking) particle silhouettes --------------

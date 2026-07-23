@@ -89,6 +89,24 @@ public abstract class HeldItemRendererMixin {
         applySwingOffset(matrices, arm, swingProgress);
     }
 
+    /**
+     * The FIRST thing {@code swingArm} does is a raw {@code translate(arm * -0.4·sin, …, …)}
+     * (confirmed via bytecode) BEFORE it ever calls applySwingOffset/applyEquipOffset — that
+     * {@code arm}-signed X term is the sideways lunge you see on every hit, and it is NOT part
+     * of either offset method, so cancelling those two never touched it. This is exactly the
+     * "меч сдвигается влево при ударе" for No Animation / Use. Skip this translate whenever the
+     * module is on (all animations, Default included): it keeps every custom animation purely
+     * in place, and stops Default's own swing from flinging a repositioned item off-screen.
+     */
+    @Redirect(method = "swingArm", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/client/util/math/MatrixStack;translate(FFF)V"),
+            require = 0)
+    private void lume$skipSwingLunge(MatrixStack matrices, float x, float y, float z) {
+        Module chM = LumeClient.MODULES.getByName("Custom Hand");
+        if (chM instanceof CustomHand ch && ch.isEnabled()) return;   // drop the lunge entirely
+        matrices.translate(x, y, z);
+    }
+
     /** Equip (raise/lower on item switch) bob — {@code swingArm} calls it once too. */
     @Redirect(method = "swingArm", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/client/render/item/HeldItemRenderer;applyEquipOffset(Lnet/minecraft/client/util/math/MatrixStack;Lnet/minecraft/util/Arm;F)V"),
@@ -137,10 +155,6 @@ public abstract class HeldItemRendererMixin {
         applyAnimation(matrices, ch, swingProgress, item);
     }
 
-    // Items share the block atlas since 1.19 (no separate items.png any more) — same texture
-    // regardless of which specific item is being recoloured, so one fixed identifier works for all.
-    private static final Identifier ITEM_ATLAS = Identifier.ofVanilla("textures/atlas/blocks.png");
-
     /** Screen-space directions the Outline silhouettes are offset in (8-way ring, unit-ish). */
     private static final float[][] OUTLINE_DIRS = {
             { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 },
@@ -162,9 +176,13 @@ public abstract class HeldItemRendererMixin {
      * the flat copy and then let vanilla paint the fully-textured item straight over the top, so
      * the fill was always completely hidden. That's why Fill "did nothing" on its own.
      *
-     * <p>Flat colour comes from {@link ForcedColorVertexConsumer} on an alpha-blended entity layer,
-     * NOT a {@code setShaderColor} multiply — a multiply can't make white (texture * 0xFFFFFF is
-     * the identity), which is why white used to look like "no effect / transparent".
+     * <p>Flat colour is drawn via {@link com.lume.client.util.ItemFlatFill} — the item's REAL
+     * textured render (real geometry, real texture, real alpha cutout, real {@code RenderLayer}),
+     * with only each vertex's colour intercepted via {@link ForcedColorVertexConsumer}. Two
+     * earlier approaches both failed for different reasons — see {@code ItemFlatFill}'s class doc
+     * for the full story (a manually-picked {@code RenderLayer} skipped the model's own transform
+     * entirely, and a later raw colour-only draw discarded the texture/alpha and always rendered
+     * as a plain rectangle regardless of position).
      */
     @Redirect(method = "renderFirstPersonItem", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/client/render/item/HeldItemRenderer;renderItem(Lnet/minecraft/entity/LivingEntity;Lnet/minecraft/item/ItemStack;Lnet/minecraft/item/ModelTransformationMode;ZLnet/minecraft/client/util/math/MatrixStack;Lnet/minecraft/client/render/VertexConsumerProvider;I)V"),
@@ -178,36 +196,36 @@ public abstract class HeldItemRendererMixin {
         }
 
         if (ch.outline.value) {
-            int col = ch.outlineRgb();
+            int argb = 0xFF000000 | ch.outlineRgb();   // always fully opaque — Fill Opacity only applies to Fill
             for (float[] d : OUTLINE_DIRS) {
                 matrices.push();
                 matrices.translate(d[0] * OUTLINE_WIDTH, d[1] * OUTLINE_WIDTH, 0.0);
-                lume$renderFlat(self, entity, stack, mode, leftHanded, matrices, vcp, light, col);
+                com.lume.client.util.ItemFlatFill.draw(matrices, entity, stack, mode, vcp, light, (x, y, z) -> argb);
                 matrices.pop();
             }
         }
 
         if (ch.fill.index != 0) {
-            lume$renderFlat(self, entity, stack, mode, leftHanded, matrices, vcp, light, ch.fillRgb());
+            int a = Math.max(0, Math.min(255, (int) Math.round(ch.fillOpacity.value * 255)));
+            if (ch.fill.index >= 2) {
+                // Cosmos / Swirl / Starfield / Worms — per-vertex procedural colour instead of one
+                // flat argb. Position is already fully hand-transformed (see ItemFlatFill) —
+                // plenty of spatial variation for any of these to play out across.
+                double t = System.currentTimeMillis() / 1000.0;
+                int fillIdx = ch.fill.index;
+                com.lume.client.util.ItemFlatFill.draw(matrices, entity, stack, mode, vcp, light, (x, y, z) -> switch (fillIdx) {
+                    case 3 -> com.lume.client.fx.ProceduralFill.swirl(x * 4, y * 4, z * 4, t, a);
+                    case 4 -> com.lume.client.fx.ProceduralFill.starfield(x * 4, y * 4, z * 4, t, a);
+                    case 5 -> com.lume.client.fx.ProceduralFill.worms(x * 4, y * 4, z * 4, t, a);
+                    default -> com.lume.client.fx.ProceduralFill.cosmos(x * 4, y * 4, z * 4, t, a);
+                });
+            } else {
+                int argb = (a << 24) | ch.fillRgb();
+                com.lume.client.util.ItemFlatFill.draw(matrices, entity, stack, mode, vcp, light, (x, y, z) -> argb);
+            }
         } else {
             self.renderItem(entity, stack, mode, leftHanded, matrices, vcp, light);   // real item over the outline
         }
-    }
-
-    private static void lume$renderFlat(HeldItemRenderer self, LivingEntity entity, ItemStack item,
-                                         ModelTransformationMode mode, boolean leftHanded, MatrixStack matrices,
-                                         VertexConsumerProvider realVcp, int light, int rgb) {
-        RenderLayer layer = RenderLayer.getEntityTranslucentEmissiveNoOutline(ITEM_ATLAS);
-        VertexConsumer base = realVcp.getBuffer(layer);
-        int argb = 0xFF000000 | rgb;
-        // A NEW wrapper per getBuffer call, deliberately: an enchanted item asks for two layers and
-        // unions them, and VertexConsumers.Dual throws "Duplicate delegates" if handed the same
-        // consumer object twice (verified in its bytecode) — which is exactly what crashed the game
-        // when Outline/Fill was on while holding a glinting item. Distinct wrappers over the same
-        // target buffer keep that union legal; both just write the same flat silhouette.
-        VertexConsumerProvider wrapper = l -> new ForcedColorVertexConsumer(base, argb);
-        self.renderItem(entity, item, mode, leftHanded, matrices, wrapper, light);
-        if (realVcp instanceof VertexConsumerProvider.Immediate imm) imm.draw(layer);
     }
 
     /**
@@ -221,26 +239,43 @@ public abstract class HeldItemRendererMixin {
      * HandGeometryPivot}) — so the sword pivots where it stands instead of travelling through
      * space. Use is the single exception that translates, and only straight down/back on Y.
      *
-     * <p>Rotation sign is POSITIVE on X so the BLADE (the tip, pointing away up-forward) is what
-     * swings forward — vanilla's own swing uses the opposite sign, which visibly leads with the
-     * handle instead.
+     * <p>Rotation sign is NEGATIVE on X — the same sign vanilla's own {@code applySwingOffset}
+     * uses for its dominant term (confirmed via bytecode: {@code POSITIVE_X.rotationDegrees(g *
+     * -80f)}), which is the actual, known-correct "swings/dips down and forward" direction
+     * everyone recognises from vanilla combat. An earlier version of this flipped the sign to
+     * make "the blade lead instead of the handle", but that reasoning was never actually
+     * confirmed visually and produced the opposite of a downward dip — reverted.
      */
     private static void applyAnimation(MatrixStack matrices, CustomHand ch, float swingProgress, ItemStack item) {
         // Same 0→1→0 hump vanilla's own applySwingOffset uses (confirmed via bytecode:
         // g = sin(sqrt(swingProgress) * pi)), so the timing/feel of the swing matches vanilla's
-        // even though the axis/sign and pivot here are ours.
+        // even though the pivot here is ours (vanilla rotates from wherever the matrix stack
+        // already is, which is why its own swing drags the whole item through space; pivoting on
+        // the item's own mesh point is what keeps ours in place instead).
         float g = MathHelper.sin(MathHelper.sqrt(swingProgress) * 3.1415927F);
+        float angle = (float) ch.swingAngle.value;
         switch (ch.animation.index) {
-            case CustomHand.ANIM_SIMPLE -> {   // blade tips forward and back, in place
+            case CustomHand.ANIM_SIMPLE -> {   // direct hand-space pivot (see CustomHand#swingPivotY) — NOT a
+                                                // fraction of the item's own mesh bounds any more. That mesh is
+                                                // tiny/degenerate for generated-model items (confirmed via debug
+                                                // log), so even a full 0..1 drag barely moved anything once
+                                                // downstream transforms scaled it down — a direct offset in the
+                                                // same units Pos already uses has real, visible range instead.
+                float py = (float) ch.swingPivotY.value;
+                matrices.translate(0.0, py, 0.0);
+                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(g * -angle));
+                matrices.translate(0.0, -py, 0.0);
+            }
+            case CustomHand.ANIM_TILT -> {   // whole sword rotates as one rigid piece around its OWN centre — blade end dips, grip end lifts, neither end fixed
                 Vector3f c = HandGeometryPivot.center(item);
                 matrices.translate(c.x, c.y, c.z);
-                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(g * 80f));
+                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(g * -angle));
                 matrices.translate(-c.x, -c.y, -c.z);
             }
-            case CustomHand.ANIM_SPIN -> {   // full blade-first cartwheel, in place
+            case CustomHand.ANIM_SPIN -> {   // full cartwheel, in place
                 Vector3f c = HandGeometryPivot.center(item);
                 matrices.translate(c.x, c.y, c.z);
-                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(swingProgress * 360f));
+                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(swingProgress * -360f));
                 matrices.translate(-c.x, -c.y, -c.z);
             }
             case CustomHand.ANIM_USE ->      // straight down and back on Y, nothing else — no tilt, no X/Z drift

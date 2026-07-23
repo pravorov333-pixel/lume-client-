@@ -20,36 +20,58 @@ public class CustomHand extends Module {
      *  by Style). Pos/Scale sliders below still apply on top regardless of which is picked.
      *  "Custom" (last index) uses the free rRot sliders below instead of a fixed lookup. */
     public final ModeSetting style = hide(add(new ModeSetting("Style", 0,
-            "Side", "Lay", "Far",
+            "Side", "Lay", "Far", "Stand",
             "Custom")));
-    public static final int STYLE_CUSTOM = 3;
+    public static final int STYLE_CUSTOM = 4;
 
     // Rotation in degrees (X, then Y, then Z — Euler, applied in that order) for the named
-    // presets only (Custom, last index, uses rRotX/Y/Z instead). These three are the user's own
+    // presets only (Custom, last index, uses rRotX/Y/Z instead). These are the user's own
     // in-game "Copy" dumps pasted back verbatim, so unlike earlier guessed presets they're
     // already known-good poses.
     private static final float[][] STYLE_ROT = {
-            { -37.0f, -147.0f, -41.0f },  // Side
+            { 99.0f, -138.0f, -85.0f },   // Side
             { -24.0f, -89.0f, 30.0f },    // Lay
             { 0.0f, 0.0f, 0.0f },         // Far
+            { 1.0f, 56.0f, 0.0f },        // Stand
     };
     // Starting position for each named style, applied ONCE when you pick it (not a continuous
     // override) — after that, Pos/Scale sliders are the single source of truth. Custom (last
     // index) doesn't get a preset.
     private static final float[][] STYLE_POS = {
-            { -0.67f, -0.63f, -1.62f },   // Side
+            { -0.53f, -0.51f, -2.00f },   // Side
             { -0.25f, -0.41f, -2.00f },   // Lay
             { 0.64f, -0.41f, -1.42f },    // Far
+            { 0.64f, -0.41f, -1.42f },    // Stand
     };
     private static final float[] STYLE_SCALE = {
             0.50f,   // Side
             1.00f,   // Lay
             1.00f,   // Far
+            0.50f,   // Stand
     };
 
     public final SliderSetting rRotX = hide(add(new SliderSetting("Custom Rot X", 0, -180, 180, false)));
     public final SliderSetting rRotY = hide(add(new SliderSetting("Custom Rot Y", 0, -180, 180, false)));
     public final SliderSetting rRotZ = hide(add(new SliderSetting("Custom Rot Z", 0, -180, 180, false)));
+
+    /** Name field for "Save current as…" — player-saved poses under Custom (see {@link HandPresets}). */
+    public final com.lume.client.module.setting.StringSetting presetName = hide(add(new com.lume.client.module.setting.StringSetting("Preset Name", "")));
+
+    /** Loads a saved preset's full pose (Pos+Scale+Rot) into the right-hand sliders. */
+    public void loadPreset(HandPresets.Preset p) {
+        rPosX.value = p.posX; rPosY.value = p.posY; rPosZ.value = p.posZ;
+        rScale.value = p.scale;
+        rRotX.value = p.rotX; rRotY.value = p.rotY; rRotZ.value = p.rotZ;
+    }
+
+    /** Saves the current right-hand pose under {@link #presetName}'s current text; no-op if blank. */
+    public void saveCurrentAsPreset() {
+        String name = presetName.value.trim();
+        if (name.isEmpty()) return;
+        HandPresets.save(name, rPosX.value, rPosY.value, rPosZ.value, rScale.value, rRotX.value, rRotY.value, rRotZ.value);
+        presetName.value = "";
+        com.lume.client.Config.save();
+    }
 
     public float[] styleRot() {
         if (style.index == STYLE_CUSTOM) return new float[]{ (float) rRotX.value, (float) rRotY.value, (float) rRotZ.value };
@@ -89,9 +111,28 @@ public class CustomHand extends Module {
      *  what was missing before and made every style except No Animation look broken (vanilla's
      *  own dip/bounce was still playing underneath, fighting whatever we added on top). */
     public final ModeSetting animation = hide(add(new ModeSetting("Animation", 0,
-            "Default", "No Animation", "Simple", "Spin", "Use")));
+            "Default", "No Animation", "Simple", "Tilt", "Spin", "Use")));
 
-    public static final int ANIM_DEFAULT = 0, ANIM_NO_ANIMATION = 1, ANIM_SIMPLE = 2, ANIM_SPIN = 3, ANIM_USE = 4;
+    public static final int ANIM_DEFAULT = 0, ANIM_NO_ANIMATION = 1, ANIM_SIMPLE = 2, ANIM_TILT = 3, ANIM_SPIN = 4, ANIM_USE = 5;
+
+    /** Max forward tilt (degrees) for the Simple (grip pivot) and Tilt (centre pivot) animations,
+     *  before it eases back. Signed on purpose: this is the ONLY thing controlling which way the
+     *  rotation actually goes, so instead of me guessing a rotation sign that turned out wrong
+     *  more than once, dragging into negative territory flips the whole swing direction — find
+     *  it by eye rather than trusting a hardcoded sign. */
+    public final SliderSetting swingAngle = hide(add(new SliderSetting("Swing Angle", 90, -180, 180, true)));
+
+    /** Simple's rotation pivot, as a DIRECT offset in the same hand-space units {@link #rPosX} etc.
+     *  use (NOT a fraction of the item's own mesh bounding box any more — that was tried twice:
+     *  first as a hardcoded "grip corner" guess, then as user-adjustable fractions of the mesh's
+     *  own bounds. Both failed for the same underlying reason: the item's raw mesh-local bounds
+     *  turned out to be tiny/degenerate for generated-model items (any sword/tool is a flat icon,
+     *  its own local units span barely anything — confirmed via debug log), so even dragging a
+     *  fraction slider end-to-end barely moved the effective pivot once everything downstream
+     *  scales it down. A direct hand-space offset has the same real, dramatic range Pos already
+     *  demonstrably has — drag until the blade dips and the handle lifts the way you want; there's
+     *  no "correct" auto-computed value being approximated any more, this IS the value.) */
+    public final SliderSetting swingPivotY = hide(add(new SliderSetting("Swing Pivot", 0.0, -2.0, 2.0, false)));
 
     /** Continuous idle bob + sprint bob + camera-turn sway, independent of Animation (which is
      *  swing-only) — see HeldItemRendererMixin#applySway for the actual motion. */
@@ -109,13 +150,15 @@ public class CustomHand extends Module {
      *  composites during world rendering, which finishes well before the first-person hand
      *  renders — verified via bytecode, so it can't be reused for held items). */
     public final BoolSetting outline = hide(add(new BoolSetting("Outline", false)));
-    /** Fill: re-renders the item under {@link com.mojang.blaze3d.systems.RenderSystem#setShaderColor}
-     *  instead of its own texture/shading — the same global colour-multiply vanilla's own dyed
-     *  leather armour uses, so it reads as a proper recolour rather than a translucent tint. */
-    public final ModeSetting fill = hide(add(new ModeSetting("Fill", 0, "Off", "Color", "Cosmos")));
-    public final ColorSetting handColor = hide(add(new ColorSetting("Outline/Fill Color", true, 183, 170, 199)));
+    public final ColorSetting outlineColor = hide(add(new ColorSetting("Outline Color", true, 183, 170, 199)));
+    /** Fill: re-renders the item through a flat-coloured pass instead of its own texture/shading.
+     *  Separate colour + opacity from Outline (used to share one setting — split apart since they're
+     *  independent toggles that can be on at the same time with different intended looks). */
+    public final ModeSetting fill = hide(add(new ModeSetting("Fill", 0, "Off", "Color", "Cosmos", "Swirl", "Starfield", "Worms")));
+    public final ColorSetting fillColor = hide(add(new ColorSetting("Fill Color", true, 183, 170, 199)));
+    public final SliderSetting fillOpacity = hide(add(new SliderSetting("Fill Opacity", 1.0, 0.0, 1.0, false)));
 
-    public int outlineRgb() { return handColor.accent ? com.lume.client.gui.Theme.accentRgb() : handColor.rgb(); }
+    public int outlineRgb() { return outlineColor.accent ? com.lume.client.gui.Theme.accentRgb() : outlineColor.rgb(); }
 
     public int fillRgb() {
         if (fill.index == 2) {
@@ -123,7 +166,7 @@ public class CustomHand extends Module {
             double drift = Math.sin(t / 47.0) * 60.0 + Math.sin(t / 71.0 + 1.7) * 40.0;
             return hsv((float) (260 + drift), 0.75f, 0.95f);
         }
-        return handColor.accent ? com.lume.client.gui.Theme.accentRgb() : handColor.rgb();
+        return fillColor.accent ? com.lume.client.gui.Theme.accentRgb() : fillColor.rgb();
     }
 
     private static int hsv(float h, float s, float v) {
@@ -227,7 +270,9 @@ public class CustomHand extends Module {
         lPosX.value = 0; lPosY.value = 0; lPosZ.value = 0; lScale.value = 1;
         rRotX.value = 0; rRotY.value = 0; rRotZ.value = 0;
         hand.index = 0; animation.index = ANIM_DEFAULT; sway.value = true;
-        outline.value = false; fill.index = 0;
+        swingAngle.value = 90;
+        swingPivotY.value = 0.0;
+        outline.value = false; fill.index = 0; fillOpacity.value = 1.0;
         applyStylePosPreset();   // style 0 (Showcase) has a pos/scale preset — land on it, not on all-zeros
     }
 }

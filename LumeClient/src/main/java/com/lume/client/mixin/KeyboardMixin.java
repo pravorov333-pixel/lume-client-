@@ -18,6 +18,10 @@ public class KeyboardMixin {
     private void lume$onKey(long window, int key, int scancode, int action, int modifiers, CallbackInfo ci) {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (action == GLFW.GLFW_PRESS) {
+            // Key Sounds fires on EVERY press regardless of screen state (typing in chat/menus
+            // should click too, not just in-world binds) — deliberately ahead of the early return
+            // below.
+            com.lume.client.module.modules.qol.KeySounds.onKeyPressed(key);
             if (mc.currentScreen != null || mc.player == null) return;
             LumeClient.MODULES.onKey(key, true);
             com.lume.client.fthw.HelperBinds.onKey(key);     // FT/HW helper sub-function binds

@@ -22,4 +22,6 @@ contextBridge.exposeInMainWorld('lume', {
   onLog: (cb) => ipcRenderer.on('log', (_e, d) => cb(d)),
   onProgress: (cb) => ipcRenderer.on('progress', (_e, d) => cb(d)),
   onGameClosed: (cb) => ipcRenderer.on('game-closed', (_e, d) => cb(d)),
+  onLaunching: (cb) => ipcRenderer.on('launching', (_e, d) => cb(d)),
+  onLaunchFailed: (cb) => ipcRenderer.on('launch-failed', (_e, d) => cb(d)),
 });

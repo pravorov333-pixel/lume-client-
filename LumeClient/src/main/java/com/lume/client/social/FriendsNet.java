@@ -14,6 +14,8 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 /**
@@ -31,11 +33,15 @@ public final class FriendsNet {
     private static final HttpClient CLIENT = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(4)).build();
     private static final Gson GSON = new Gson();
 
-    private static void async(Runnable r) {
-        Thread t = new Thread(r, "Lume-Friends");
-        t.setDaemon(true);
-        t.start();
-    }
+    // Was `new Thread(...).start()` per call — Friends.tick() drives this at up to ~20
+    // calls/minute (points polling alone, every 3s), each spinning up a full OS thread
+    // (stack reservation + kernel object) just to run one short blocking HTTP request. A
+    // shared virtual-thread executor (Java 21, already the target here) keeps the exact same
+    // fire-and-forget/off-thread semantics — virtual threads don't block JVM shutdown, same
+    // as the old setDaemon(true) — without paying a platform-thread's overhead per call.
+    private static final ExecutorService EXEC = Executors.newVirtualThreadPerTaskExecutor();
+
+    private static void async(Runnable r) { EXEC.execute(r); }
 
     private static JsonObject postJson(String path, JsonObject body) throws Exception {
         HttpRequest req = HttpRequest.newBuilder(URI.create(BASE_URL + path))

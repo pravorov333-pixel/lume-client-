@@ -6,15 +6,16 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Key → chat-command/message macros. Bound keys are checked by KeyboardMixin;
- * a macro whose text starts with "/" is sent as a command, otherwise as chat.
- * Persisted in the config.
+ * Key → chat-command macros. COMMAND-ONLY — there is no "send as a plain chat message" option
+ * (that used to be the no-leading-"/" branch; {@link #add} now normalises every macro to start
+ * with "/" at creation time, so a raw message can never actually be bound, from any caller).
+ * Bound keys are checked by KeyboardMixin. Persisted in the config.
  */
 public final class MacroManager {
 
     public static final class Macro {
         public final int key;       // GLFW key code
-        public final String text;
+        public final String text;   // always starts with "/" — see add()
         public Macro(int key, String text) { this.key = key; this.text = text; }
     }
 
@@ -23,8 +24,9 @@ public final class MacroManager {
     private MacroManager() {}
 
     public static void add(int key, String text) {
+        String cmd = text.startsWith("/") ? text : "/" + text;
         macros.removeIf(m -> m.key == key);   // one macro per key
-        macros.add(new Macro(key, text));
+        macros.add(new Macro(key, cmd));
     }
 
     public static boolean remove(int key) {
@@ -37,8 +39,7 @@ public final class MacroManager {
         if (mc.player == null || mc.getNetworkHandler() == null) return;
         for (Macro m : macros) {
             if (m.key != key) continue;
-            if (m.text.startsWith("/")) mc.getNetworkHandler().sendChatCommand(m.text.substring(1));
-            else mc.getNetworkHandler().sendChatMessage(m.text);
+            mc.getNetworkHandler().sendChatCommand(m.text.substring(1));
         }
     }
 }

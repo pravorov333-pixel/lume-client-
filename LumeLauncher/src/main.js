@@ -6,7 +6,7 @@ const os = require('os');
 const fs = require('fs');
 const crypto = require('crypto');
 const { checkKey } = require('./keys');
-const { launchGame, cancelLaunch, writeLicense, rootDir } = require('./launcher');
+const { launchGame, cancelLaunch, writeLicense, writePerfMode, rootDir } = require('./launcher');
 
 // --- Launcher-wide theme (persisted independently of any MC profile, since it
 // covers the launcher's OWN screens too) — also read directly by the LumeClient
@@ -52,6 +52,8 @@ const DEFAULT_SETTINGS = {
   memory: 4,        // GB allocated to the JVM heap (-Xmx/-Xms) — see launcher.js launchGame()
   wallpaper: null,  // filename inside the wallpapers/ folder, or null for the default animated glow
   wallpaperDim: 35, // 0–100 % dark overlay over a custom wallpaper, keeps the glass UI readable
+  perfMode: 'default', // 'default' | 'ultra' — read by the mod at startup (see writePerfMode) to
+                        // strip glass/animations from ClickGUI/HUD/CustomMenu for max FPS
 };
 
 // --- Custom launcher wallpapers ---------------------------------------------------
@@ -226,6 +228,7 @@ ipcMain.handle('launch', async (_e, payload) => {
   try {
     if (lastValidKey) writeLicense(payload && payload.version, lastValidKey, getHwid());
     const settings = readSettings();
+    writePerfMode(payload && payload.version, settings.perfMode === 'ultra');
     const res = await launchGame(win, { ...payload, memory: (payload && payload.memory) || settings.memory });
     return res || { ok: true };
   } catch (err) {

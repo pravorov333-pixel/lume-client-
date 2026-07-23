@@ -12,6 +12,8 @@ import net.minecraft.client.render.VertexConsumerProvider;
 import net.minecraft.client.render.VertexFormat;
 import net.minecraft.client.render.VertexFormats;
 import net.minecraft.client.util.math.MatrixStack;
+import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Vec3d;
 import org.joml.Matrix4f;
 
 /** Small camera-relative 3D line primitives for world-space overlays. */
@@ -56,6 +58,14 @@ public final class Render3D {
         // instead of owning it here is exactly the kind of assumption that produced the
         // GlassRenderer FBO bugs earlier; disable culling explicitly and restore afterward.
         boolean prevCull = GL11.glIsEnabled(GL11.GL_CULL_FACE);
+        // Blending was NOT owned here before — whatever the previous draw call left it as (almost
+        // always disabled, e.g. right after Sodium's opaque terrain pass) is what this rendered
+        // with, so the alpha channel baked into cornerColors was silently ignored by the GPU and
+        // the fill always came out fully opaque no matter what Fill Opacity was set to. Enable +
+        // a standard alpha blend func explicitly, like depth/cull above, and restore after.
+        boolean prevBlend = GL11.glIsEnabled(GL11.GL_BLEND);
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
         RenderSystem.disableCull();
         RenderSystem.disableDepthTest();
         RenderSystem.depthMask(false);
@@ -69,6 +79,7 @@ public final class Render3D {
         RenderSystem.depthMask(true);
         RenderSystem.enableDepthTest();
         if (prevCull) RenderSystem.enableCull();
+        if (!prevBlend) RenderSystem.disableBlend();
         RenderSystem.setShader(prevShader);   // never leave a debug shader bound — terrain/entities drawn after this assume their own
     }
 
@@ -163,6 +174,107 @@ public final class Render3D {
         buf.vertex(mat, bx - px, by - py, bz - pz).color(argb);
     }
 
+    /**
+     * Filled box, camera-relative, through-walls, blended, TEXTURED — the REAL block box (6
+     * actual faces, per the block's own AABB), not a camera-facing billboard. Verified against
+     * how actual shipped open-source ESP clients do this (Wurst Client's ChestESP —
+     * {@code RenderUtils.drawSolidBoxes}/{@code WurstRenderLayers.getQuads(depthTest)}): a
+     * camera-facing billboard is the WRONG shape for "filling a block" — it only stays flat
+     * relative to the camera, so looking at a block from any angle other than straight-on makes
+     * it visibly tilt/float off the block's actual footprint instead of sitting on it (exactly
+     * the "floating card above the grass" bug a billboard produced here). Every real block-ESP
+     * fill uses the block's own box geometry, always has. Detail/richness here comes from the
+     * TEXTURE's real pixel resolution (see {@link com.lume.client.fx.BlockFillTexture}), not from
+     * a colour-per-vertex grid (blocky/blurry regardless of grid density) — same UV (0,0)..(1,1)
+     * on all 6 faces, so every face shows the identical pattern, not 6 different-looking walls.
+     * {@code tintArgb}'s alpha drives Fill Opacity; its RGB is left at full (0xFFFFFF) by
+     * convention — colour lives in the texture itself. {@code additive}: false = normal alpha
+     * blend (legible colour — what the CORE pass should use, additive would wash it toward
+     * white); true = additive ({@code SRC_ALPHA, ONE}, overlapping glow brightens instead of just
+     * compositing) for a second, larger/fainter GLOW-shell pass — see BlockOutline.renderFill's
+     * two-pass call. Culling stays disabled throughout (matches the no-cull "through walls"
+     * family here), so face winding doesn't matter for visibility.
+     */
+    public static void fillBoxTexturedThroughWalls(MatrixStack.Entry e, Box bb, Vec3d cam,
+                                                    net.minecraft.util.Identifier texture, int tintArgb, boolean additive) {
+        net.minecraft.client.gl.ShaderProgram prevShader = RenderSystem.getShader();
+        boolean prevCull = GL11.glIsEnabled(GL11.GL_CULL_FACE);
+        boolean prevBlend = GL11.glIsEnabled(GL11.GL_BLEND);
+        RenderSystem.enableBlend();
+        if (additive) RenderSystem.blendFunc(com.mojang.blaze3d.platform.GlStateManager.SrcFactor.SRC_ALPHA, com.mojang.blaze3d.platform.GlStateManager.DstFactor.ONE);
+        else RenderSystem.defaultBlendFunc();
+        RenderSystem.disableCull();
+        RenderSystem.disableDepthTest();
+        RenderSystem.depthMask(false);
+        RenderSystem.setShader(ShaderProgramKeys.POSITION_TEX_COLOR);
+        RenderSystem.setShaderTexture(0, texture);
+        Matrix4f mat = e.getPositionMatrix();
+        BufferBuilder buf = Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_TEXTURE_COLOR);
+
+        float x0 = (float) (bb.minX - cam.x), x1 = (float) (bb.maxX - cam.x);
+        float y0 = (float) (bb.minY - cam.y), y1 = (float) (bb.maxY - cam.y);
+        float z0 = (float) (bb.minZ - cam.z), z1 = (float) (bb.maxZ - cam.z);
+        // 6 faces × 4 corners, camera-relative, paired with UV (0,0)..(1,1) in the same order.
+        float[][][] faces = {
+                { { x0, y1, z0 }, { x1, y1, z0 }, { x1, y1, z1 }, { x0, y1, z1 } },   // top   (+Y)
+                { { x0, y0, z0 }, { x1, y0, z0 }, { x1, y0, z1 }, { x0, y0, z1 } },   // bottom(-Y)
+                { { x1, y0, z0 }, { x1, y1, z0 }, { x1, y1, z1 }, { x1, y0, z1 } },   // +X
+                { { x0, y0, z0 }, { x0, y1, z0 }, { x0, y1, z1 }, { x0, y0, z1 } },   // -X
+                { { x0, y0, z1 }, { x1, y0, z1 }, { x1, y1, z1 }, { x0, y1, z1 } },   // +Z
+                { { x0, y0, z0 }, { x1, y0, z0 }, { x1, y1, z0 }, { x0, y1, z0 } },   // -Z
+        };
+        float[][] uvs = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
+        for (float[][] face : faces) {
+            for (int i = 0; i < 4; i++) {
+                float[] p = face[i], uv = uvs[i];
+                buf.vertex(mat, p[0], p[1], p[2]).texture(uv[0], uv[1]).color(tintArgb);
+            }
+        }
+
+        BufferRenderer.drawWithGlobalProgram(buf.end());
+        RenderSystem.depthMask(true);
+        RenderSystem.enableDepthTest();
+        if (prevCull) RenderSystem.enableCull();
+        if (additive) RenderSystem.defaultBlendFunc();   // restore the blend FUNC, not just on/off — never leave additive bound
+        if (!prevBlend) RenderSystem.disableBlend();
+        RenderSystem.setShader(prevShader);
+    }
+
+    /**
+     * Draws pre-built textured quads (each vertex packed as 5 floats: camera-relative x,y,z, then
+     * u,v — 4 vertices per quad, QUADS winding), same through-walls/blend state as
+     * {@link #fillBoxTexturedThroughWalls}. The caller does its own per-vertex UV computation
+     * (BlockOutline re-projects every grid vertex's real 3D position through the camera each
+     * frame — see its fill method's doc for why per-corner-only UV still showed a visible
+     * "crease" at each face boundary, and why re-projecting a fine grid instead of interpolating
+     * 4 corner values fixes it) — this method is just the raw draw call.
+     */
+    public static void fillTexturedQuadsThroughWalls(MatrixStack.Entry e, float[] quadVerts,
+                                                       net.minecraft.util.Identifier texture, int tintArgb, boolean additive) {
+        net.minecraft.client.gl.ShaderProgram prevShader = RenderSystem.getShader();
+        boolean prevCull = GL11.glIsEnabled(GL11.GL_CULL_FACE);
+        boolean prevBlend = GL11.glIsEnabled(GL11.GL_BLEND);
+        RenderSystem.enableBlend();
+        if (additive) RenderSystem.blendFunc(com.mojang.blaze3d.platform.GlStateManager.SrcFactor.SRC_ALPHA, com.mojang.blaze3d.platform.GlStateManager.DstFactor.ONE);
+        else RenderSystem.defaultBlendFunc();
+        RenderSystem.disableCull();
+        RenderSystem.disableDepthTest();
+        RenderSystem.depthMask(false);
+        RenderSystem.setShader(ShaderProgramKeys.POSITION_TEX_COLOR);
+        RenderSystem.setShaderTexture(0, texture);
+        Matrix4f mat = e.getPositionMatrix();
+        BufferBuilder buf = Tessellator.getInstance().begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_TEXTURE_COLOR);
+        for (int i = 0; i < quadVerts.length; i += 5)
+            buf.vertex(mat, quadVerts[i], quadVerts[i + 1], quadVerts[i + 2]).texture(quadVerts[i + 3], quadVerts[i + 4]).color(tintArgb);
+        BufferRenderer.drawWithGlobalProgram(buf.end());
+        RenderSystem.depthMask(true);
+        RenderSystem.enableDepthTest();
+        if (prevCull) RenderSystem.enableCull();
+        if (additive) RenderSystem.defaultBlendFunc();
+        if (!prevBlend) RenderSystem.disableBlend();
+        RenderSystem.setShader(prevShader);
+    }
+
     /** Ring in the XZ plane at height y. */
     public static void ring(VertexConsumer vc, MatrixStack.Entry e,
                             float cx, float y, float cz, float radX, float radZ, int c, int seg) {
@@ -173,6 +285,28 @@ public final class Render3D {
             float nz = cz + radZ * (float) Math.sin(a);
             line(vc, e, prevX, y, prevZ, nx, y, nz, c);
             prevX = nx; prevZ = nz;
+        }
+    }
+
+    /** Flat, filled ring (annulus) in the XZ plane at height y — a strip of quads between an
+     *  inner and outer radius, so thickness is real geometry, not GL line width (unreliable
+     *  across GPUs/drivers — see the old {@link #ring} caller). Draw into a QUADS-mode buffer
+     *  (e.g. {@code RenderLayer.getDebugQuads()}), not {@code getLines()}. */
+    public static void thickRingXZ(VertexConsumer vc, MatrixStack.Entry e,
+                                   float cx, float y, float cz, float radius, float halfThickness, int argb, int seg) {
+        Matrix4f m = e.getPositionMatrix();
+        float rOuter = radius + halfThickness, rInner = Math.max(0f, radius - halfThickness);
+        float prevOX = cx + rOuter, prevOZ = cz, prevIX = cx + rInner, prevIZ = cz;
+        for (int i = 1; i <= seg; i++) {
+            double a = 2 * Math.PI * i / seg;
+            float cosA = (float) Math.cos(a), sinA = (float) Math.sin(a);
+            float ox = cx + rOuter * cosA, oz = cz + rOuter * sinA;
+            float ix = cx + rInner * cosA, iz = cz + rInner * sinA;
+            vc.vertex(m, prevOX, y, prevOZ).color(argb);
+            vc.vertex(m, prevIX, y, prevIZ).color(argb);
+            vc.vertex(m, ix, y, iz).color(argb);
+            vc.vertex(m, ox, y, oz).color(argb);
+            prevOX = ox; prevOZ = oz; prevIX = ix; prevIZ = iz;
         }
     }
 

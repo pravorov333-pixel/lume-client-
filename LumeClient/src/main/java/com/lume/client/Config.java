@@ -41,11 +41,24 @@ public final class Config {
     private static JsonObject licenseRaw = null;
     public static JsonObject getLicenseRaw() { return licenseRaw; }
 
+    /** Same deal as {@code licenseRaw} above: the LAUNCHER writes this on every Play (see
+     *  LumeLauncher/src/launcher.js writePerfMode) from its own "Default / Ultra Performance"
+     *  selector — the mod only reads it, never invents/overwrites it, but must round-trip it
+     *  through save()/load() so the mod's own saves (module toggles, theme, etc.) don't wipe out
+     *  what the launcher wrote. When true, ClickGUI/HUD/CustomMenu render flat — no blur/glow/
+     *  gradient/animation — while every module stays fully functional. See Config#ultra(). */
+    public static boolean perfMode = false;
+    public static boolean ultra() { return perfMode; }
+
     /** Saved offline nicknames (mod-side account list) + which one is "preferred" — the
-     *  launcher can read this to pre-select a nickname on next login. Switching this does
-     *  NOT change the identity of the already-running game session (not possible client-side). */
+     *  launcher can read this to pre-select a nickname on next login. Picking a different one
+     *  in-game also swaps the CURRENT session instantly via {@code util.AltService}. */
     public static final java.util.List<String> savedAccounts = new java.util.ArrayList<>();
     public static String preferredAccount = null;
+    /** Saved-account name -> bound server address ("ip:port"); see {@code menu.AccountManagerScreen}
+     *  (set via a card's edit action) and {@code mixin.ConnectScreenMixin} (switches to the bound
+     *  nickname automatically right before connecting to that server). */
+    public static final java.util.Map<String, String> accountServers = new java.util.HashMap<>();
 
     private Config() {}
 
@@ -58,6 +71,7 @@ public final class Config {
             JsonObject root = new JsonObject();
             root.addProperty("theme", Theme.isDark() ? "dark" : "light");
             root.addProperty("friendsDeviceId", com.lume.client.social.Friends.ensureDeviceId());
+            root.addProperty("perfMode", perfMode);
 
             JsonObject win = new JsonObject();
             win.addProperty("x", ClickGuiScreen.getWinOffX());
@@ -129,6 +143,17 @@ public final class Config {
             }
             root.add("macros", macros);
 
+            JsonArray handPresets = new JsonArray();
+            for (com.lume.client.module.modules.render.HandPresets.Preset p : com.lume.client.module.modules.render.HandPresets.list) {
+                JsonObject o = new JsonObject();
+                o.addProperty("name", p.name);
+                o.addProperty("posX", p.posX); o.addProperty("posY", p.posY); o.addProperty("posZ", p.posZ);
+                o.addProperty("scale", p.scale);
+                o.addProperty("rotX", p.rotX); o.addProperty("rotY", p.rotY); o.addProperty("rotZ", p.rotZ);
+                handPresets.add(o);
+            }
+            root.add("handPresets", handPresets);
+
             JsonArray filters = new JsonArray();
             for (String w : com.lume.client.module.modules.qol.ChatFilters.keywords) filters.add(w);
             root.add("chatFilters", filters);
@@ -177,6 +202,10 @@ public final class Config {
             JsonArray accounts = new JsonArray();
             for (String a : savedAccounts) accounts.add(a);
             root.add("savedAccounts", accounts);
+
+            JsonObject acctServers = new JsonObject();
+            for (Map.Entry<String, String> en : accountServers.entrySet()) acctServers.addProperty(en.getKey(), en.getValue());
+            root.add("accountServers", acctServers);
             if (preferredAccount != null) root.addProperty("preferredAccount", preferredAccount);
 
             Files.createDirectories(file().getParent());
@@ -255,9 +284,15 @@ public final class Config {
             if (root.has("theme")) Theme.setDark("dark".equals(root.get("theme").getAsString()));
             if (root.has("friendsDeviceId")) com.lume.client.social.Friends.deviceId = root.get("friendsDeviceId").getAsString();
             if (root.has("license")) licenseRaw = root.getAsJsonObject("license");
+            if (root.has("perfMode")) perfMode = root.get("perfMode").getAsBoolean();
             if (root.has("savedAccounts")) {
                 savedAccounts.clear();
                 for (JsonElement el : root.getAsJsonArray("savedAccounts")) savedAccounts.add(el.getAsString());
+            }
+            if (root.has("accountServers")) {
+                accountServers.clear();
+                JsonObject as = root.getAsJsonObject("accountServers");
+                for (Map.Entry<String, JsonElement> en : as.entrySet()) accountServers.put(en.getKey(), en.getValue().getAsString());
             }
             if (root.has("preferredAccount")) preferredAccount = root.get("preferredAccount").getAsString();
 
@@ -325,6 +360,17 @@ public final class Config {
                 for (JsonElement el : root.getAsJsonArray("macros")) {
                     JsonObject o = el.getAsJsonObject();
                     MacroManager.add(o.get("key").getAsInt(), o.get("text").getAsString());
+                }
+            }
+
+            if (root.has("handPresets")) {
+                com.lume.client.module.modules.render.HandPresets.list.clear();
+                for (JsonElement el : root.getAsJsonArray("handPresets")) {
+                    JsonObject o = el.getAsJsonObject();
+                    com.lume.client.module.modules.render.HandPresets.save(o.get("name").getAsString(),
+                            o.get("posX").getAsDouble(), o.get("posY").getAsDouble(), o.get("posZ").getAsDouble(),
+                            o.get("scale").getAsDouble(),
+                            o.get("rotX").getAsDouble(), o.get("rotY").getAsDouble(), o.get("rotZ").getAsDouble());
                 }
             }
 

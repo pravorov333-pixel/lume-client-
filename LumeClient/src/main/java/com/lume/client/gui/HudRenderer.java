@@ -253,6 +253,19 @@ public final class HudRenderer {
 
     // Show HP pin — smooth HP follow, independent of the Target HUD panel's own animation state
     // (so it still animates even when the panel itself is off).
+    // Reused every frame in renderInfo() instead of allocating a fresh List<String> +
+    // String.format calls per line — this runs on every rendered frame the HUD module is on
+    // (not just while a menu is open), so per-frame GC churn here is the highest-frequency
+    // allocation hotspot in the whole client. String.format() re-parses its format string via
+    // java.util.Formatter every call; manual digit-building avoids that entirely.
+    private static final StringBuilder metricsSb = new StringBuilder(64);
+
+    /** Appends the "  ·  " divider before a field, but only if something was already written —
+     *  same visual result as the old String.join("  ·  ", parts) without building a List first. */
+    private static void hudSep(StringBuilder sb) {
+        if (sb.length() > 0) sb.append("  ·  ");
+    }
+
     private static int hpPinId = -1;
     private static float hpPinDisp = 0f, hpPinGhost = 0f;
     private static long hpPinNanos = System.nanoTime();
@@ -299,6 +312,14 @@ public final class HudRenderer {
         float ratioMain = hpPinDisp / max, ratioGhost = hpPinGhost / max;
         String hpStr = (int) Math.ceil(real) + " / " + (int) max;
 
+        // Ultra Performance: skip the NanoVG frame entirely (its own begin/end + shader-state
+        // switch is real per-frame cost, on top of what it draws) — same info, flat DrawContext
+        // fill instead of curved hearts/bar. See Config#ultra().
+        if (com.lume.client.Config.ultra()) {
+            drawHpFlat(ctx, mc.textRenderer, nx, ny, S, hearts, ratioMain, ratioGhost, showText, hpStr);
+            return;
+        }
+
         NanoVgRenderer.ensureInit();
         if (!NanoVgRenderer.ready()) return;
         ctx.draw();   // flush DrawContext's own queued geometry (e.g. the Target HUD panel's text) before raw-GL NanoVG draws
@@ -310,6 +331,39 @@ public final class HudRenderer {
                 NanoVgRenderer.text(vg, nx, ty, 9 * S, 0xFFFFFFFF, NanoVgRenderer.ALIGN_CENTER_MIDDLE, hpStr);
             }
         });
+    }
+
+    /** Flat DrawContext fallback for {@link #renderTargetHpPin} (Ultra Performance) — same
+     *  info (hearts row or bar+ghost, optional text), plain rectangles instead of NanoVG curves. */
+    private static void drawHpFlat(DrawContext ctx, TextRenderer tr, float nx, float ny, int S,
+                                   boolean hearts, float ratioMain, float ratioGhost, boolean showText, String hpStr) {
+        if (hearts) {
+            int totalHearts = 10;
+            float heartSize = 8 * S, gap = 1.5f * S;
+            float rowW = totalHearts * heartSize + (totalHearts - 1) * gap;
+            float startX = nx - rowW / 2f;
+            float y = ny - 6 * S - heartSize / 2f;
+            float filledUnits = Math.max(0f, ratioMain) * totalHearts * 2;
+            float textScale = S * 0.5f;   // matches the NanoVG path's explicit "9 * S" pixel font size
+            for (int i = 0; i < totalHearts; i++) {
+                float x = startX + i * (heartSize + gap);
+                float fill = Math.max(0f, Math.min(1f, filledUnits - i * 2)) / 2f;   // 0, 0.5, or 1
+                ctx.fill((int) x, (int) y, (int) (x + heartSize), (int) (y + heartSize), 0x55FFFFFF);
+                if (fill > 0f) ctx.fill((int) x, (int) y, (int) (x + heartSize * fill), (int) (y + heartSize), 0xFFE05656);
+            }
+            if (showText) RenderUtil.textCentered(ctx, tr, hpStr, nx - rowW / 2.0, ny - 17 * S - 8, rowW, 8, 0xFFFFFFFF, textScale);
+        } else {
+            float barW = 56 * S, barH = 5 * S;
+            float x = nx - barW / 2f, y = ny - 10 * S - barH;
+            float textScale = S * 0.5f;
+            ctx.fill((int) x, (int) y, (int) (x + barW), (int) (y + barH), 0x99000000);
+            float gw = barW * Math.max(0f, Math.min(1f, ratioGhost));
+            if (gw > 0) ctx.fill((int) x, (int) y, (int) (x + gw), (int) (y + barH), 0xFFD98C8C);
+            int mainCol = ratioMain > 0.5f ? 0xFF6FCF7F : ratioMain > 0.25f ? 0xFFE8C15A : 0xFFE05656;
+            float mw = barW * Math.max(0f, Math.min(1f, ratioMain));
+            if (mw > 0) ctx.fill((int) x, (int) y, (int) (x + mw), (int) (y + barH), mainCol);
+            if (showText) RenderUtil.textCentered(ctx, tr, hpStr, x, y - 13 * S, barW, 8, 0xFFFFFFFF, textScale);
+        }
     }
 
     /** Row of up to 10 hearts (vanilla-style, health scaled to a 20-unit display), half-heart precision via a clipped overlay. */
@@ -631,28 +685,44 @@ public final class HudRenderer {
         boolean speed = hudMod != null && hudMod.speed.value && mc.player != null;
         boolean clock = hudMod != null && hudMod.clock.value && mc.world != null;
 
-        List<String> parts = new ArrayList<>();
-        if (fps) parts.add("FPS " + mc.getCurrentFps());
-        if (coords) parts.add(String.format("%.0f %.0f %.0f", mc.player.getX(), mc.player.getY(), mc.player.getZ()));
+        // Built into a reused StringBuilder (see the field's doc) — no List<String> allocation,
+        // no String.format, no String.join. sep() inserts the "  ·  " divider only between
+        // fields that actually rendered, same visual result as the old join.
+        metricsSb.setLength(0);
+        if (fps) { metricsSb.append("FPS ").append(mc.getCurrentFps()); }
+        if (coords) {
+            hudSep(metricsSb);
+            metricsSb.append(Math.round(mc.player.getX())).append(' ')
+                     .append(Math.round(mc.player.getY())).append(' ')
+                     .append(Math.round(mc.player.getZ()));
+        }
         if (ping) {
             PlayerListEntry e = mc.getNetworkHandler().getPlayerListEntry(mc.player.getUuid());
             // Always English here, never Lang.t() — the in-game HUD renders through our own
             // Lume/Poppins font (no Cyrillic glyphs at all), so a Russian label would silently
             // fall back to vanilla's blocky font for the whole line. Language only translates
             // menu/settings text, never the HUD overlay itself.
-            if (e != null) parts.add(e.getLatency() + "ms");
+            if (e != null) { hudSep(metricsSb); metricsSb.append(e.getLatency()).append("ms"); }
         }
-        if (day) parts.add("Day " + (mc.world.getTimeOfDay() / 24000L));
-        if (cps) parts.add(ClickTracker.left() + "|" + ClickTracker.right());
-        if (speed) parts.add(String.format("%.1f ", SpeedTracker.get()) + "b/s");
+        if (day) { hudSep(metricsSb); metricsSb.append("Day ").append(mc.world.getTimeOfDay() / 24000L); }
+        if (cps) { hudSep(metricsSb); metricsSb.append(ClickTracker.left()).append('|').append(ClickTracker.right()); }
+        if (speed) {
+            hudSep(metricsSb);
+            int tenths = Math.round(SpeedTracker.get() * 10f);
+            metricsSb.append(tenths / 10).append('.').append(Math.abs(tenths % 10)).append(" b/s");
+        }
         if (clock) {
+            hudSep(metricsSb);
             long tod = mc.world.getTimeOfDay() % 24000L;
             if (tod < 0) tod += 24000L;
             int hh = (int) ((tod / 1000L + 6L) % 24L);     // tick 0 = 06:00
             int mm = (int) ((tod % 1000L) * 60L / 1000L);
-            parts.add(String.format("%02d:%02d", hh, mm));
+            if (hh < 10) metricsSb.append('0');
+            metricsSb.append(hh).append(':');
+            if (mm < 10) metricsSb.append('0');
+            metricsSb.append(mm);
         }
-        String metricsStr = String.join("  ·  ", parts);
+        String metricsStr = metricsSb.toString();
 
         int[] sizeOverride = HudLayout.getSize("HUD");   // user-resized (window-style) — else auto-fit to content
         int autoW = Math.max(134, RenderUtil.width(tr, metricsStr, 0.46f * S) + pad * 2 + 4 * S);
@@ -665,10 +735,12 @@ public final class HudRenderer {
         ctx.enableScissor(x, y, x + pw, y + h);   // clip long metrics rows / small resizes, don't spill
 
         int ty = y + pad;
-        // "(lume.visuals)" tag — bold (faux, see RenderUtil.textBold), tinted with the accent
-        // like the rest of this panel. Distinct from the shared Wordmark (LUME VISUALS) used on
-        // menu screens — this is HUD-only branding, doesn't affect anything else.
-        RenderUtil.textBoldCentered(ctx, tr, "(lume.visuals)", x, ty, pw, lineH, accentCol, 0.5f * S);
+        // "(lume.visuals)" tag — bold (faux, see RenderUtil.textBold); "visuals" shimmers between
+        // two guaranteed-contrasting colours (Wordmark.contrastPair2 — plain Theme.accent2() can
+        // collapse to nearly the same shade as accent() for a white/black/desaturated accent).
+        // Distinct from the shared Wordmark (LUME VISUALS) used on menu screens — HUD-only, doesn't
+        // affect anything else.
+        drawHudTag(ctx, tr, x, ty, pw, lineH, accentCol, 0.5f * S);
         ty += lineH;
         centerLine(ctx, tr, metricsStr, x, pw, ty, lineH, Theme.txt(), 0.46f * S);
         ctx.disableScissor();
@@ -806,12 +878,40 @@ public final class HudRenderer {
         }
 
         if (!pins.isEmpty()) {
-            NanoVgRenderer.ensureInit();
-            if (NanoVgRenderer.ready()) {
-                ctx.draw();   // flush DrawContext's own queued geometry before raw-GL NanoVG draws
-                NanoVgRenderer.frame(vg -> { for (PinJob p : pins) drawPin(vg, p, S); });
+            // Ultra Performance: flat DrawContext pins instead of NanoVG (shadow/rounded/stroke) —
+            // one begin/end NanoVG frame per pin batch skipped entirely, and this scales with
+            // however many waypoints/friends are on screen at once. See Config#ultra().
+            if (com.lume.client.Config.ultra()) {
+                for (PinJob p : pins) drawPinFlat(ctx, tr, p, S);
+            } else {
+                NanoVgRenderer.ensureInit();
+                if (NanoVgRenderer.ready()) {
+                    ctx.draw();   // flush DrawContext's own queued geometry before raw-GL NanoVG draws
+                    NanoVgRenderer.frame(vg -> { for (PinJob p : pins) drawPin(vg, p, S); });
+                }
             }
         }
+    }
+
+    /** Flat DrawContext fallback for {@link #drawPin} (Ultra Performance) — same body/tail shape
+     *  and text, plain fills instead of NanoVG shadow/rounded-rect/stroke. */
+    private static void drawPinFlat(DrawContext ctx, TextRenderer tr, PinJob p, int S) {
+        float sc = p.scale() * S;
+        float fName = 9.5f * sc, fSub = 8.5f * sc, lineH = 12 * sc;
+        float padX = 8 * sc, padY = 5 * sc;
+        int nameW = RenderUtil.width(tr, p.name(), fName / 18f);
+        int subW = RenderUtil.width(tr, p.sub(), fSub / 18f);
+        float bodyW = Math.max(Math.max(nameW, subW) + padX * 2, 46 * sc);
+        float bodyH = padY * 2 + lineH * 2;
+        float tailH = 6 * sc;
+        float bodyBottom = p.ny() - tailH;
+        float bodyTop = bodyBottom - bodyH;
+        float bodyX = p.nx() - bodyW / 2f;
+
+        ctx.fill((int) bodyX, (int) bodyTop, (int) (bodyX + bodyW), (int) (bodyTop + bodyH), Theme.winBg());
+        RenderUtil.strokeRect(ctx, (int) bodyX, (int) bodyTop, (int) bodyW, (int) bodyH, S, p.color());
+        RenderUtil.textCentered(ctx, tr, p.name(), bodyX, bodyTop + padY, bodyW, lineH, p.color(), fName / 18f);
+        RenderUtil.textCentered(ctx, tr, p.sub(), bodyX, bodyTop + padY + lineH, bodyW, lineH, p.subColor(), fSub / 18f);
     }
 
     /** One waypoint pin: rounded-rect body + a downward triangular tail tapering to the exact world point. */
@@ -1137,6 +1237,38 @@ public final class HudRenderer {
     /** One info-panel line: horizontally centred in the panel, vertically centred in its row. */
     private static void centerLine(DrawContext ctx, TextRenderer tr, String s, int panelX, int panelW, int rowY, int rowH, int color, float scale) {
         RenderUtil.textCentered(ctx, tr, s, panelX, rowY, panelW, rowH, color, scale);
+    }
+
+    private static final String HUD_TAG_PREFIX = "(lume.", HUD_TAG_SHIMMER = "visuals", HUD_TAG_SUFFIX = ")";
+
+    /** "(lume.visuals)" — bold, centred in the row; only "visuals" shimmers, character by
+     *  character, between {@code color} and a guaranteed-contrasting second shade
+     *  ({@link Wordmark#contrastPair2}) so it stays visible even for a white/black accent. */
+    private static void drawHudTag(DrawContext ctx, TextRenderer tr, int panelX, int rowY, int panelW, int rowH, int color, float scale) {
+        String full = HUD_TAG_PREFIX + HUD_TAG_SHIMMER + HUD_TAG_SUFFIX;
+        int w = RenderUtil.width(tr, full, scale);
+        double x = panelX + (panelW - w) / 2.0;
+        LumeFont.ensure();
+        double y = LumeFont.ready
+                ? rowY + rowH / 2.0 - LumeFont.opticalCenterPx() * scale * (18f / LumeFont.FONT_PX)
+                : rowY + rowH / 2.0 - 3.5 * scale;
+
+        RenderUtil.textBold(ctx, tr, HUD_TAG_PREFIX, x, y, color, scale);
+        x += RenderUtil.width(tr, HUD_TAG_PREFIX, scale);
+
+        int c1 = color & 0xFFFFFF, c2 = Wordmark.contrastPair2(c1);
+        long shimmerMs = 3200L;
+        float t = (System.currentTimeMillis() % shimmerMs) / (float) shimmerMs;
+        float ping = t < 0.5f ? t * 2f : (1f - t) * 2f;
+        int n = HUD_TAG_SHIMMER.length();
+        for (int i = 0; i < n; i++) {
+            String ch = String.valueOf(HUD_TAG_SHIMMER.charAt(i));
+            float f = n > 1 ? (float) i / (n - 1) : 0f;
+            float g = Math.abs(((f + ping) % 2f) - 1f);
+            RenderUtil.textBold(ctx, tr, ch, x, y, 0xFF000000 | Theme.colorLerp(0xFF000000 | c1, 0xFF000000 | c2, g), scale);
+            x += RenderUtil.width(tr, ch, scale);
+        }
+        RenderUtil.textBold(ctx, tr, HUD_TAG_SUFFIX, x, y, color, scale);
     }
 
     private static void renderPotions(DrawContext ctx, MinecraftClient mc, TextRenderer tr, int S) {

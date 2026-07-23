@@ -74,7 +74,7 @@ public class LumeClient implements ClientModInitializer {
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (openGuiKey.wasPressed()) {
-                client.setScreen(new ClickGuiScreen());
+                client.setScreen(Config.ultra() ? new com.lume.client.gui.FlatClickGuiScreen() : new ClickGuiScreen());
             }
             while (addWaypointKey.wasPressed()) addWaypointHere(client);
             com.lume.client.gui.ThemeSync.tick();

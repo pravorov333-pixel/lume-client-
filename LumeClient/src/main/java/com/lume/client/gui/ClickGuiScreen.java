@@ -50,6 +50,12 @@ public class ClickGuiScreen extends Screen {
     private static final int CARD_H = 38;
     private static final int CARD_GAP = 8;
 
+    // Category.values() clones its backing array on every call — this screen calls it ~30+
+    // times per rendered frame (tab bar layout/draw, isBindsTab/isServerTab, module filtering),
+    // so caching the one immutable array once avoids that many small allocations every frame
+    // the menu is open. Never mutate this array.
+    private static final Category[] CATS = Category.values();
+
     private final long openTime = System.currentTimeMillis();
     private static int selectedCat = 0;   // persists across menu open/close
     private String search = "";
@@ -108,6 +114,10 @@ public class ClickGuiScreen extends Screen {
     private Module bindingModule = null;             // module currently capturing a key
     private final List<Object[]> bindHits = new ArrayList<>();   // {Module, x, y, w, h}
 
+    // KeybindManager "Bind command" button — true while waiting for the next keypress, which
+    // opens KeybindManagerScreen with that key pre-selected for a new command bind.
+    private boolean bindingMacroKey = false;
+
     // GUI text fields (Waypoints manager + search). focusedField: "search"/"name"/"coords"/"customstring"/null
     private String focusedField = null;
     private StringSetting focusedString = null;   // which StringSetting "customstring" refers to
@@ -130,14 +140,14 @@ public class ClickGuiScreen extends Screen {
     private final List<Object[]> serverHits = new ArrayList<>();  // {String kind, int x, y, w, h, Object ref}
     private int serverContentH = 0;
 
-    private boolean isBindsTab()   { return search.isEmpty() && selectedCat == Category.values().length; }
-    private boolean isServerTab()  { return search.isEmpty() && selectedCat == Category.values().length + 1; }
+    private boolean isBindsTab()   { return search.isEmpty() && selectedCat == CATS.length; }
+    private boolean isServerTab()  { return search.isEmpty() && selectedCat == CATS.length + 1; }
     private boolean isEventsTab()  { return search.isEmpty() && topSection == 1; }
     private boolean isConfigTab()  { return search.isEmpty() && topSection == 2; }
     private boolean isFriendsTab() { return search.isEmpty() && topSection == 3; }
 
     private String tabTitle(int i) {
-        Category[] c = Category.values();
+        Category[] c = CATS;
         String en = i < c.length ? c[i].title : (i == c.length ? "Binds" : "Server");
         return com.lume.client.Lang.tCat(en);
     }
@@ -224,8 +234,8 @@ public class ClickGuiScreen extends Screen {
             String q = search.toLowerCase();
             for (Module m : LumeClient.MODULES.getModules())
                 if (m.getName().toLowerCase().contains(q)) out.add(m);
-        } else if (selectedCat < Category.values().length) {
-            for (Module m : LumeClient.MODULES.getModules(Category.values()[selectedCat]))
+        } else if (selectedCat < CATS.length) {
+            for (Module m : LumeClient.MODULES.getModules(CATS[selectedCat]))
                 if (!m.getName().equals("Server Helper") && !m.getName().equals("Free Look")) out.add(m);   // bind-only, no menu card
         }
         return out;
@@ -320,7 +330,7 @@ public class ClickGuiScreen extends Screen {
         RenderUtil.vanillaText(ctx, this.textRenderer, shown, sx + 12 * S, sy + (shei - 8 * S) / 2.0, empty ? Theme.txtDim() : Theme.txt(), S);
 
         // Category segmented pill (categories + Binds + Server)
-        int tabs = Category.values().length + 2;
+        int tabs = CATS.length + 2;
         segX = new int[tabs];
         segW = new int[tabs];
         segH = 26 * S;
@@ -657,7 +667,7 @@ public class ClickGuiScreen extends Screen {
             NanoVgRenderer.text(vg, sx + 12 * S, sy + shei / 2f, 11 * S, empty ? Theme.txtDim() : Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, shown);
 
             // category tabs (auto-shrink to always fit the window width)
-            int tabs = Category.values().length + 2;
+            int tabs = CATS.length + 2;
             segX = new int[tabs]; segW = new int[tabs];
             segH = 26 * S; segY = y + 82 * S;
             float tFont = 10 * S; int padSeg = 10 * S;
@@ -743,7 +753,7 @@ public class ClickGuiScreen extends Screen {
                 if (isExp) {
                     NanoVgRenderer.save(vg);
                     NanoVgRenderer.intersectScissor(vg, dx, dy, dw, dh);
-                    renderSettingsNvg(vg, m, dx, cy0 + headerH, dw, S, mxF, myF);
+                    renderSettingsNvg(vg, m, dx, cy0 + headerH, dw, S, mxF, myF, dt);
                     NanoVgRenderer.restore(vg);
                 }
             }
@@ -848,23 +858,41 @@ public class ClickGuiScreen extends Screen {
             h += 15 * S + 4 * S;   // Idle/Sprint Sway toggle
             boolean showStyle = ch.hand.index == 0;
             h += (showStyle ? 2 : 1) * (15 * S + 4 * S);   // Style (right hand only) + Animation (always)
-            if (showStyle && ch.style.index == com.lume.client.module.modules.render.CustomHand.STYLE_CUSTOM)
+            if (showStyle && ch.style.index == com.lume.client.module.modules.render.CustomHand.STYLE_CUSTOM) {
                 h += 3 * (15 * S + 4 * S);   // Custom Rot X/Y/Z sliders
+                h += handPresetsHeight(S);   // saved-preset rows + name field + Save button
+            }
+            if (ch.animation.index == com.lume.client.module.modules.render.CustomHand.ANIM_SIMPLE
+                    || ch.animation.index == com.lume.client.module.modules.render.CustomHand.ANIM_TILT)
+                h += 15 * S + 4 * S;   // Swing Angle slider
+            if (ch.animation.index == com.lume.client.module.modules.render.CustomHand.ANIM_SIMPLE)
+                h += 15 * S + 4 * S;   // Pivot slider
             h += 2 * (15 * S + 4 * S);   // Outline toggle + Fill mode
-            if (ch.outline.value || ch.fill.index == 1)
-                h += 15 * S + (ch.handColor == openColor ? PAL_H * S : 0) + 4 * S;   // shared Outline/Fill colour
+            if (ch.outline.value)
+                h += 15 * S + (ch.outlineColor == openColor ? PAL_H * S : 0) + 4 * S;   // Outline colour
+            if (ch.fill.index != 0)
+                h += 15 * S + 4 * S;   // Fill Opacity slider
+            if (ch.fill.index == 1)
+                h += 15 * S + (ch.fillColor == openColor ? PAL_H * S : 0) + 4 * S;      // Fill colour
             h += 15 * S + 4 * S;   // copy-pose text row
             h += 22 * S + 4 * S;   // paste button
             h += 26 * S;           // reset button
         }
         if (m instanceof Waypoints) h += wpManagerHeight(S);
+        if (m instanceof com.lume.client.module.modules.qol.KeybindManager) h += 2 * (22 * S + 4 * S);
         return h + 8 * S;
+    }
+
+    /** Saved-preset rows + name field + Save button, under Custom Hand's "Custom" style. */
+    private int handPresetsHeight(int S) {
+        int n = com.lume.client.module.modules.render.HandPresets.list.size();
+        return 12 * S + n * (16 * S + 2 * S) + (15 * S + 4 * S) + (18 * S + 4 * S);
     }
 
     /** Render a module's settings via NanoVG, recording {@code sHits} so the existing
      *  click/drag handlers work unchanged. (Crosshair preview / waypoint manager /
      *  event list are skipped here for now — only bool/slider/mode/color.) */
-    private void renderSettingsNvg(long vg, Module m, int x0, int yTop, int w, int S, int mx, int my) {
+    private void renderSettingsNvg(long vg, Module m, int x0, int yTop, int w, int S, int mx, int my, float dt) {
         NanoVgRenderer.roundedRect(vg, x0 + 10 * S, yTop, w - 20 * S, Math.max(1, S), 0.5f, Theme.border());
         int sx = x0 + 14 * S, swid = w - 28 * S, yy = yTop + 4 * S;
         // live crosshair preview
@@ -880,8 +908,8 @@ public class ClickGuiScreen extends Screen {
             if (s instanceof BoolSetting bs) renderBoolNvg(vg, bs, sx, yy, swid, h, S);
             else if (s instanceof SliderSetting ss) renderSliderNvg(vg, ss, sx, yy, swid, h, S);
             else if (s instanceof ModeSetting ms) renderModeNvg(vg, ms, sx, yy, swid, h, S);
-            else if (s instanceof StringSetting ts) renderStringNvg(vg, ts, sx, yy, swid, h, S);
-            else if (s instanceof ColorSetting cs) renderColorNvg(vg, cs, sx, yy, swid, S);
+            else if (s instanceof StringSetting ts) renderStringNvg(vg, ts, sx, yy, swid, h, S, mx, my, dt);
+            else if (s instanceof ColorSetting cs) renderColorNvg(vg, cs, sx, yy, swid, S, mx, my, dt);
             yy += h;
         }
         if (m instanceof com.lume.client.module.modules.performance.JvmOptimizer) {
@@ -957,19 +985,41 @@ public class ClickGuiScreen extends Screen {
                     renderSliderNvg(vg, ch.rRotX, sx, yy, swid, 15 * S, S); yy += 15 * S + 4 * S;
                     renderSliderNvg(vg, ch.rRotY, sx, yy, swid, 15 * S, S); yy += 15 * S + 4 * S;
                     renderSliderNvg(vg, ch.rRotZ, sx, yy, swid, 15 * S, S); yy += 15 * S + 4 * S;
+                    yy = renderHandPresetsNvg(vg, ch, sx, yy, swid, S, mx, my, dt);
                 }
             }
             renderModeNvg(vg, ch.animation, sx, yy, swid, 15 * S, S);
             yy += 15 * S + 4 * S;
+            // Swing Angle only matters for the two tilt animations (Simple / Tilt).
+            if (ch.animation.index == com.lume.client.module.modules.render.CustomHand.ANIM_SIMPLE
+                    || ch.animation.index == com.lume.client.module.modules.render.CustomHand.ANIM_TILT) {
+                renderSliderNvg(vg, ch.swingAngle, sx, yy, swid, 15 * S, S);
+                yy += 15 * S + 4 * S;
+            }
+            // Swing Pivot — Simple only (Tilt keeps its own auto-detected centre pivot, untouched).
+            // Direct hand-space offset now, not a fraction of the item's own (tiny) mesh bounds.
+            if (ch.animation.index == com.lume.client.module.modules.render.CustomHand.ANIM_SIMPLE) {
+                renderSliderNvg(vg, ch.swingPivotY, sx, yy, swid, 15 * S, S); yy += 15 * S + 4 * S;
+            }
 
             // --- Outline (enlarged rim behind the item) / Fill (recolour) — both hands ---
             renderBoolNvg(vg, ch.outline, sx, yy, swid, 15 * S, S);
             yy += 15 * S + 4 * S;
             renderModeNvg(vg, ch.fill, sx, yy, swid, 15 * S, S);
             yy += 15 * S + 4 * S;
-            if (ch.outline.value || ch.fill.index == 1) {
-                renderColorNvg(vg, ch.handColor, sx, yy, swid, S);
-                yy += 15 * S + (ch.handColor == openColor ? PAL_H * S : 0) + 4 * S;
+            // Outline and Fill each have their own colour now (CustomHand.outlineColor / fillColor);
+            // show whichever picker(s) are relevant. (Was a single ch.handColor that no longer exists.)
+            if (ch.outline.value) {
+                renderColorNvg(vg, ch.outlineColor, sx, yy, swid, S, mx, my, dt);
+                yy += 15 * S + (ch.outlineColor == openColor ? PAL_H * S : 0) + 4 * S;
+            }
+            if (ch.fill.index != 0) {
+                renderSliderNvg(vg, ch.fillOpacity, sx, yy, swid, 15 * S, S);
+                yy += 15 * S + 4 * S;
+            }
+            if (ch.fill.index == 1) {
+                renderColorNvg(vg, ch.fillColor, sx, yy, swid, S, mx, my, dt);
+                yy += 15 * S + (ch.fillColor == openColor ? PAL_H * S : 0) + 4 * S;
             }
 
             // --- copy current pose as text (paste it back to build a new named Style from it) ---
@@ -1009,6 +1059,58 @@ public class ClickGuiScreen extends Screen {
             yy += bh;
         }
         if (m instanceof Waypoints) renderWaypointManagerNvg(vg, sx, yy + 4 * S, swid, S);
+        if (m instanceof com.lume.client.module.modules.qol.KeybindManager) renderKeybindManagerButtonsNvg(vg, sx, yy, swid, S, mx, my, dt);
+    }
+
+    /** Saved-preset rows (click = load pose, ✕ = delete, kinds 23/24) + name field + Save button
+     *  (kind 25) — Custom Hand's "Custom" style, right hand only. Returns the y position after
+     *  everything this drew (same convention as {@link #renderParticlePickerNvg}). */
+    private int renderHandPresetsNvg(long vg, com.lume.client.module.modules.render.CustomHand ch, int sx, int yy, int swid, int S, int mx, int my, float dt) {
+        NanoVgRenderer.text(vg, sx, yy + 6 * S, 9 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, com.lume.client.Lang.tUI("Saved Presets"));
+        yy += 12 * S;
+        for (com.lume.client.module.modules.render.HandPresets.Preset p : com.lume.client.module.modules.render.HandPresets.list) {
+            int rh = 16 * S;
+            NanoVgRenderer.roundedRect(vg, sx, yy, swid, rh, 5 * S, Theme.glassRow());
+            NanoVgRenderer.text(vg, sx + 8 * S, yy + rh / 2f, 8.5f * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, p.name);
+            int dx = sx + swid - 14 * S;
+            NanoVgRenderer.text(vg, dx, yy + rh / 2f, 9 * S, 0xFFE05656, NanoVgRenderer.ALIGN_MIDDLE, "✕");
+            SHit lh = new SHit(); lh.s = null; lh.kind = 23; lh.tag = p.name; lh.x = sx; lh.y = yy; lh.w = swid - 18 * S; lh.h = rh; sHits.add(lh);
+            SHit dh = new SHit(); dh.s = null; dh.kind = 24; dh.tag = p.name; dh.x = dx - 3 * S; dh.y = yy; dh.w = 16 * S; dh.h = rh; sHits.add(dh);
+            yy += rh + 2 * S;
+        }
+        renderStringNvg(vg, ch.presetName, sx, yy, swid, 15 * S, S, mx, my, dt);
+        yy += 15 * S + 4 * S;
+        int bh = 18 * S;
+        NanoVgRenderer.roundedRect(vg, sx, yy, swid, bh, 6 * S, Theme.accent());
+        NanoVgRenderer.text(vg, sx + swid / 2f, yy + bh / 2f, 9 * S, Theme.activeText(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Save current as…"));
+        SHit sh = new SHit(); sh.s = null; sh.kind = 25; sh.x = sx; sh.y = yy; sh.w = swid; sh.h = bh; sHits.add(sh);
+        yy += bh + 4 * S;
+        return yy;
+    }
+
+    /** "Bind command" (kind 21 — press a key, then set what it sends, via {@link BindPopup}
+     *  anchored right below THIS button — no full-screen takeover for a quick single-key bind)
+     *  and "Open manager" (kind 22 — the full visual keyboard) action buttons for the
+     *  KeybindManager module's card. Same accent-button look as the Custom Hand Copy/Paste
+     *  buttons (kinds 19/20). */
+    private void renderKeybindManagerButtonsNvg(long vg, int sx, int yy, int swid, int S, int mx, int my, float dt) {
+        int bh = 22 * S, gap = 4 * S;
+        boolean capturing = bindingMacroKey;
+        NanoVgRenderer.roundedRect(vg, sx, yy, swid, bh, 8 * S, capturing ? Theme.accent() : Theme.glassHov());
+        NanoVgRenderer.strokeRoundedRect(vg, sx + 0.5f * S, yy + 0.5f * S, swid - S, bh - S, 8 * S, S, Theme.rim());
+        NanoVgRenderer.text(vg, sx + swid / 2f, yy + bh / 2f, 9.5f * S, capturing ? Theme.activeText() : Theme.txt(), NanoVgRenderer.ALIGN_CENTER_MIDDLE,
+                capturing ? com.lume.client.Lang.tUI("Press a key…") : com.lume.client.Lang.tUI("Bind command"));
+        SHit bh1 = new SHit(); bh1.s = null; bh1.kind = 21; bh1.x = sx; bh1.y = yy; bh1.w = swid; bh1.h = bh; sHits.add(bh1);
+        int bindBtnBottom = yy + bh;
+        yy += bh + gap;
+        NanoVgRenderer.roundedRect(vg, sx, yy, swid, bh, 8 * S, Theme.glassHov());
+        NanoVgRenderer.strokeRoundedRect(vg, sx + 0.5f * S, yy + 0.5f * S, swid - S, bh - S, 8 * S, S, Theme.rim());
+        NanoVgRenderer.text(vg, sx + swid / 2f, yy + bh / 2f, 9.5f * S, Theme.txt(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Open manager"));
+        SHit bh2 = new SHit(); bh2.s = null; bh2.kind = 22; bh2.x = sx; bh2.y = yy; bh2.w = swid; bh2.h = bh; sHits.add(bh2);
+
+        if (BindPopup.isActive()) {
+            BindPopup.render(vg, sx, bindBtnBottom + 4 * S, this.width * S, this.height * S, S, mx, my, dt);
+        }
     }
 
     /** NanoVG mirror of {@link #renderWaypointManager} — name + one free-form "x y z"
@@ -1177,18 +1279,26 @@ public class ClickGuiScreen extends Screen {
         SHit hit = new SHit(); hit.s = ms; hit.kind = 4; hit.x = x; hit.y = y; hit.w = w; hit.h = h; sHits.add(hit);
     }
 
-    private void renderStringNvg(long vg, StringSetting ts, int x, int y, int w, int h, int S) {
+    private void renderStringNvg(long vg, StringSetting ts, int x, int y, int w, int h, int S, int mx, int my, float dt) {
         NanoVgRenderer.text(vg, x, y + h / 2f, 10 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, com.lume.client.Lang.tUI(ts.name));
         boolean foc = "customstring".equals(focusedField) && focusedString == ts;
         int bw = Math.round(w * 0.55f), bh = 11 * S, bx = x + w - bw, by = y + (h - bh) / 2;
         NanoVgRenderer.roundedRect(vg, bx, by, bw, bh, 4 * S, foc ? Theme.glassHov() : Theme.glassRow());
-        NanoVgRenderer.strokeRoundedRect(vg, bx + 0.5f * S, by + 0.5f * S, bw - S, bh - S, 4 * S, S, foc ? Theme.accent() : Theme.rim());
+        // Premium-glass rim: brightens smoothly on hover (same approach()/dt lerp every hover
+        // state in this file already uses), not an instant on/off — focused stays a flat accent
+        // colour (the "committed" state reads better fixed, not pulsing).
+        float[] sa = animFor("str:" + ts.name);
+        boolean hov = inside(mx, my, bx, by, bw, bh);
+        sa[0] = approach(sa[0], hov ? 1f : 0f, 14f, dt);
+        // Same 0x30->0x70 alpha range the module-card hover rim already uses (see renderModulesNvg).
+        int rim = foc ? Theme.accent() : withAlpha(0xFFFFFF, Math.round(0x30 + 0x40 * sa[0]));
+        NanoVgRenderer.strokeRoundedRect(vg, bx + 0.5f * S, by + 0.5f * S, bw - S, bh - S, 4 * S, S, rim);
         String shown = ts.value + (foc ? "|" : "");
         NanoVgRenderer.text(vg, bx + 6 * S, by + bh / 2f, 9 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, shown);
         SHit hit = new SHit(); hit.s = ts; hit.kind = 18; hit.x = bx; hit.y = y; hit.w = bw; hit.h = h; sHits.add(hit);
     }
 
-    private void renderColorNvg(long vg, ColorSetting cs, int x, int y, int w, int S) {
+    private void renderColorNvg(long vg, ColorSetting cs, int x, int y, int w, int S, int mx, int my, float dt) {
         int row = 15 * S;
         NanoVgRenderer.text(vg, x, y + row / 2f, 10 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, com.lume.client.Lang.tUI(cs.name));
 
@@ -1201,15 +1311,23 @@ public class ClickGuiScreen extends Screen {
         int aw = 42 * S, agap = 4 * S, axb = sxb - agap - aw;
         boolean acc = cs.accent;
         NanoVgRenderer.roundedRect(vg, axb, syb, aw, sh, 4 * S, acc ? withAlpha(Theme.accentRgb(), 0x55) : Theme.glassRow());
-        NanoVgRenderer.strokeRoundedRect(vg, axb + 0.5f * S, syb + 0.5f * S, aw - S, sh - S, 4 * S, S, acc ? Theme.accent() : Theme.rim());
+        // Premium-glass rim, brightens smoothly on hover — same 0x30->0x70 range/approach()/dt
+        // lerp as the module-card hover rim and the StringSetting field above; the "committed"
+        // states (Accent on / palette open) stay a flat accent colour, unanimated.
+        float[] aa = animFor("colacc:" + cs.name);
+        aa[0] = approach(aa[0], inside(mx, my, axb, syb, aw, sh) ? 1f : 0f, 14f, dt);
+        int accRim = acc ? Theme.accent() : withAlpha(0xFFFFFF, Math.round(0x30 + 0x40 * aa[0]));
+        NanoVgRenderer.strokeRoundedRect(vg, axb + 0.5f * S, syb + 0.5f * S, aw - S, sh - S, 4 * S, S, accRim);
         NanoVgRenderer.text(vg, axb + aw / 2f, syb + sh / 2f, 7.2f * S, acc ? Theme.accent() : Theme.txtDim(),
                 NanoVgRenderer.ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Accent"));
         SHit accHit = new SHit(); accHit.s = cs; accHit.kind = 13; accHit.x = axb; accHit.y = y; accHit.w = aw; accHit.h = row; sHits.add(accHit);
 
         // colour swatch button (click → open palette)
         NanoVgRenderer.roundedRect(vg, sxb, syb, sw, sh, 4 * S, 0xFF000000 | (acc ? Theme.accentRgb() & 0xFFFFFF : cs.rgb()));
-        NanoVgRenderer.strokeRoundedRect(vg, sxb + 0.5f * S, syb + 0.5f * S, sw - S, sh - S, 4 * S, S,
-                cs == openColor ? Theme.accent() : Theme.rim());
+        float[] swa = animFor("colsw:" + cs.name);
+        swa[0] = approach(swa[0], inside(mx, my, sxb, syb, sw, sh) ? 1f : 0f, 14f, dt);
+        int swRim = cs == openColor ? Theme.accent() : withAlpha(0xFFFFFF, Math.round(0x30 + 0x40 * swa[0]));
+        NanoVgRenderer.strokeRoundedRect(vg, sxb + 0.5f * S, syb + 0.5f * S, sw - S, sh - S, 4 * S, S, swRim);
         SHit open = new SHit(); open.s = cs; open.kind = 2; open.x = sxb; open.y = y; open.w = sw; open.h = row; sHits.add(open);
 
         if (cs != openColor) return;
@@ -1993,6 +2111,7 @@ public class ClickGuiScreen extends Screen {
         for (Setting s : m.getSettings()) { if (!s.hidden) h += settingHeight(s, S); }
         if (m instanceof Waypoints) h += wpManagerHeight(S);
         if (m instanceof ServerHelper) h += (EventManager.rules.size() + 1) * 12 * S + 6 * S;
+        if (m instanceof com.lume.client.module.modules.qol.KeybindManager) h += 2 * (22 * S + 4 * S);
         return h + 8 * S;
     }
 
@@ -2027,6 +2146,21 @@ public class ClickGuiScreen extends Screen {
         }
         if (m instanceof Waypoints) renderWaypointManager(ctx, sx, yy + 4 * S, swid, S);
         if (m instanceof ServerHelper) renderEventList(ctx, sx, yy + 4 * S, swid, S);
+        if (m instanceof com.lume.client.module.modules.qol.KeybindManager) renderKeybindManagerButtons(ctx, sx, yy, swid, S);
+    }
+
+    /** DrawContext mirror of {@link #renderKeybindManagerButtonsNvg}. */
+    private void renderKeybindManagerButtons(DrawContext ctx, int sx, int yy, int swid, int S) {
+        int bh = 22 * S, gap = 4 * S;
+        boolean capturing = bindingMacroKey;
+        RenderUtil.roundedRect(ctx, sx, yy, swid, bh, 6 * S, capturing ? Theme.accent() : Theme.glassHov());
+        RenderUtil.textCentered(ctx, this.textRenderer, capturing ? com.lume.client.Lang.tUI("Press a key…") : com.lume.client.Lang.tUI("Bind command"),
+                sx, yy, swid, bh, capturing ? Theme.activeText() : Theme.txt(), 0.42f * S);
+        SHit bh1 = new SHit(); bh1.s = null; bh1.kind = 21; bh1.x = sx; bh1.y = yy; bh1.w = swid; bh1.h = bh; sHits.add(bh1);
+        yy += bh + gap;
+        RenderUtil.roundedRect(ctx, sx, yy, swid, bh, 6 * S, Theme.glassHov());
+        RenderUtil.textCentered(ctx, this.textRenderer, com.lume.client.Lang.tUI("Open manager"), sx, yy, swid, bh, Theme.txt(), 0.42f * S);
+        SHit bh2 = new SHit(); bh2.s = null; bh2.kind = 22; bh2.x = sx; bh2.y = yy; bh2.w = swid; bh2.h = bh; sHits.add(bh2);
     }
 
     /** Read-only list of configured FT/HW events (with live countdown if active). Cyrillic → vanilla font. */
@@ -2261,6 +2395,13 @@ public class ClickGuiScreen extends Screen {
         if (button == 0) {
             int S = sf();
             double mlx = localMx(mouseX), mly = localMy(mouseY);
+            if (BindPopup.isActive()) {
+                boolean consumed = BindPopup.mouseClicked((int) mlx, (int) mly, S);
+                if (consumed) return true;
+                // click landed outside the popup — let it fall through to close/absorb normally
+                // below (matches every other capture-state's "click elsewhere cancels" behaviour).
+                BindPopup.close();
+            }
             int W = WIN_W * S, H = WIN_H * S;
             int wx = (this.width * S - W) / 2, wy = (this.height * S - H) / 2;
             boolean inWindow = mlx >= wx && mlx <= wx + W && mly >= wy && mly <= wy + H;
@@ -2317,7 +2458,7 @@ public class ClickGuiScreen extends Screen {
                 if (inside(mlx, mly, themeBtn[0], themeBtn[1], themeBtn[2], themeBtn[3])) { Theme.toggle(); animFor("_theme")[2] = 1f; ThemeSync.save(); return true; }
                 if (inside(mlx, mly, colorsBtn[0], colorsBtn[1], colorsBtn[2], colorsBtn[3])) { animFor("_colors")[2] = 1f; if (client != null) client.setScreen(new ColorsScreen(this)); return true; }
                 for (int i = 0; i < segX.length; i++) {
-                    if (inside(mlx, mly, segX[i], segY - 3 * S, segW[i], segH + 6 * S)) { selectedCat = i; search = ""; scroll = scrollTarget = 0f; bindingModule = null; bindingSetting = null; bindingQuickCmd = null; return true; }
+                    if (inside(mlx, mly, segX[i], segY - 3 * S, segW[i], segH + 6 * S)) { selectedCat = i; search = ""; scroll = scrollTarget = 0f; bindingModule = null; bindingSetting = null; bindingQuickCmd = null; bindingMacroKey = false; return true; }
                 }
                 if (isBindsTab()) {
                     if (mly >= lastClipTop && mly <= lastClipBot) {
@@ -2533,6 +2674,20 @@ public class ClickGuiScreen extends Screen {
                     if (hpM instanceof com.lume.client.module.modules.render.HitParticles hp) hp.selectedFile = file;
                 }
             }
+            case 21 -> bindingMacroKey = !bindingMacroKey;   // KeybindManager "Bind command" — click again to cancel
+            case 22 -> { if (client != null) client.setScreen(new com.lume.client.gui.KeybindManagerScreen(this, null)); }
+            case 23 -> {   // Custom Hand — load a saved preset (tag = preset name)
+                Module chM7 = LumeClient.MODULES.getByName("Custom Hand");
+                if (chM7 instanceof com.lume.client.module.modules.render.CustomHand ch7) {
+                    com.lume.client.module.modules.render.HandPresets.Preset p = com.lume.client.module.modules.render.HandPresets.byName(h.tag);
+                    if (p != null) { ch7.loadPreset(p); com.lume.client.Config.save(); }
+                }
+            }
+            case 24 -> { com.lume.client.module.modules.render.HandPresets.remove(h.tag); com.lume.client.Config.save(); }   // delete preset
+            case 25 -> {   // "Save current as…"
+                Module chM8 = LumeClient.MODULES.getByName("Custom Hand");
+                if (chM8 instanceof com.lume.client.module.modules.render.CustomHand ch8) ch8.saveCurrentAsPreset();
+            }
         }
     }
 
@@ -2590,7 +2745,8 @@ public class ClickGuiScreen extends Screen {
 
     @Override
     public boolean charTyped(char chr, int modifiers) {
-        if (bindingModule != null || bindingSetting != null || bindingQuickCmd != null) return true;   // consume while capturing a bind
+        if (BindPopup.isActive()) { BindPopup.charTyped(chr); return true; }
+        if (bindingModule != null || bindingSetting != null || bindingQuickCmd != null || bindingMacroKey) return true;   // consume while capturing a bind
         if (!(chr >= 32 && chr != 127)) return super.charTyped(chr, modifiers);
         if ("colorhex".equals(focusedField)) {
             char up = Character.toUpperCase(chr);
@@ -2617,6 +2773,10 @@ public class ClickGuiScreen extends Screen {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        // BindPopup open (COMMAND typing / FUNCTION search) — let it handle Esc/Backspace/Enter first.
+        if (BindPopup.isActive() && !bindingMacroKey) {
+            if (BindPopup.keyPressed(keyCode, scanCode, modifiers)) return true;
+        }
         // capturing a module bind on the Binds tab
         if (bindingModule != null) {
             bindingModule.setKey(keyCode == 256 ? -1 : keyCode);   // Esc = unbind
@@ -2636,6 +2796,14 @@ public class ClickGuiScreen extends Screen {
             bindingQuickCmd.key = keyCode == 256 ? -1 : keyCode;
             bindingQuickCmd = null;
             com.lume.client.Config.save();
+            return true;
+        }
+        // KeybindManager "Bind command" — capture the key, then open BindPopup right here
+        // (anchored under the button itself, no full-screen takeover — see
+        // renderKeybindManagerButtonsNvg).
+        if (bindingMacroKey) {
+            bindingMacroKey = false;
+            if (keyCode != 256) BindPopup.open(keyCode, com.lume.client.gui.KeybindManagerScreen.labelFor(keyCode));   // Esc = cancel
             return true;
         }
         if ("colorhex".equals(focusedField)) {

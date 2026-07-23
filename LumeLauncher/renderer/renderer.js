@@ -125,7 +125,7 @@ let colorsReturnCard = null;   // whichever of #login/#home was showing before C
 // --- Launcher settings (currently just memory allocation) — kept in their own settings.json,
 // separate from theme.json, since theme.json is rewritten wholesale by the in-game
 // ColorsScreen and would silently drop a launcher-only field on the next colour edit. ---
-let currentSettings = { memory: 4 };
+let currentSettings = { memory: 4, perfMode: 'default' };
 let systemTotalMemGB = null;
 
 function refreshColorsUI() {
@@ -143,11 +143,32 @@ function refreshColorsUI() {
 }
 
 function refreshMemoryUI() {
+  // Both -Xmx AND -Xms get set to this value (see launcher.js), so the JVM tries to reserve it
+  // ALL immediately at startup — asking for more than the machine can actually spare crashes with
+  // a native "insufficient memory" error before the game even gets to load a single mod, which
+  // just reads as "won't launch" with no obvious cause. Clamp the slider itself to a safe max
+  // (leaving ~1.5GB headroom for Windows/GPU driver/the launcher) so that can't be picked in the
+  // first place, and silently correct+persist an already-saved value above that ceiling (e.g. one
+  // set before this clamp existed, or on a different/smaller machine) instead of letting the very
+  // next Play repeat the same crash.
+  if (systemTotalMemGB) {
+    const safeMax = Math.max(1, Math.floor(systemTotalMemGB - 1.5));
+    $('memorySlider').max = safeMax;
+    if (currentSettings.memory > safeMax) {
+      currentSettings.memory = safeMax;
+      window.lume.setSettings(currentSettings);
+    }
+  }
   $('memorySlider').value = currentSettings.memory;
   $('memoryLabel').textContent = 'Memory  ' + currentSettings.memory + ' GB';
   $('memoryHint').textContent = systemTotalMemGB
-    ? `Your system has ${systemTotalMemGB} GB total — leave some headroom for Windows and background apps.`
+    ? `Your system has ${systemTotalMemGB} GB total — capped below that to leave headroom for Windows and background apps.`
     : '';
+}
+
+function refreshPerfModeUI() {
+  const mode = currentSettings.perfMode === 'ultra' ? 'ultra' : 'default';
+  $('perfModeRow').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.perf === mode));
 }
 
 function refreshWallpaperUI() {
@@ -159,6 +180,7 @@ function refreshWallpaperUI() {
 window.lume.getSettings().then((s) => {
   currentSettings = s;
   refreshMemoryUI();
+  refreshPerfModeUI();
   refreshWallpaperUI();
   applyWallpaper();   // restore the saved wallpaper on launch
 });
@@ -169,6 +191,14 @@ $('memorySlider').addEventListener('input', () => {
   $('memoryLabel').textContent = 'Memory  ' + currentSettings.memory + ' GB';
 });
 $('memorySlider').addEventListener('change', () => window.lume.setSettings(currentSettings));
+
+$('perfModeRow').querySelectorAll('button').forEach((b) => {
+  b.onclick = () => {
+    currentSettings.perfMode = b.dataset.perf;
+    refreshPerfModeUI();
+    window.lume.setSettings(currentSettings);
+  };
+});
 
 // --- Custom wallpaper -------------------------------------------------------------
 // The chosen file lives in %APPDATA%/.lumeclient/wallpapers; main.js hands us a data:
@@ -468,6 +498,18 @@ window.lume.onProgress((d) => {
     progPct.textContent = pct + '%';
     if (d.type) progLabel.textContent = 'Downloading ' + d.type;
   }
+});
+window.lume.onLaunching(() => {
+  progLabel.textContent = 'Launching Minecraft…';
+  log('JVM started — waiting to confirm the game actually opened before closing this window…');
+});
+window.lume.onLaunchFailed((d) => {
+  progLabel.textContent = 'Launch failed (code ' + d.code + ')';
+  statusBox.textContent = 'Minecraft closed unexpectedly before finishing startup:\n\n' + (d.log || '(no output captured)');
+  statusBox.scrollTop = statusBox.scrollHeight;
+  setLaunching(false);
+  prog.style.width = '0%';
+  progPct.textContent = '';
 });
 window.lume.onGameClosed((d) => {
   log('Game closed (code ' + d.code + ').');

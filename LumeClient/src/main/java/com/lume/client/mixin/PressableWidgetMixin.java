@@ -4,13 +4,10 @@ import com.lume.client.LumeClient;
 import com.lume.client.gui.Theme;
 import com.lume.client.module.Module;
 import com.lume.client.module.modules.cosmetic.CustomDeathScreen;
-import com.lume.client.module.modules.cosmetic.CustomMenu;
 import com.lume.client.nanovg.NanoVgRenderer;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.DeathScreen;
-import net.minecraft.client.gui.screen.multiplayer.MultiplayerScreen;
-import net.minecraft.client.gui.screen.world.SelectWorldScreen;
 import net.minecraft.client.gui.widget.ClickableWidget;
 import net.minecraft.client.gui.widget.PressableWidget;
 import org.spongepowered.asm.mixin.Mixin;
@@ -19,15 +16,15 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Reskins vanilla buttons on the Singleplayer (SelectWorldScreen) and
- * Multiplayer (MultiplayerScreen) screens with the Lume glass look while
- * Custom Menu is on — every vanilla action, hover/disabled state and tooltip
- * keeps working exactly as before, and so does every button's size/position
- * (untouched, still vanilla layout) — only {@code renderWidget}'s paint call
- * is replaced, now via NanoVG (our own font + a shrink-to-fit label so text
- * never overflows the button). Scoped tightly to these two screens so
- * nothing else (options, pause, our own ClickGUI, the Lume title screen
- * which has no vanilla widgets left anyway) is affected.
+ * Reskins vanilla buttons on the Death screen with the Lume glass look while Custom Death
+ * Screen is on — every vanilla action, hover/disabled state and tooltip keeps working exactly
+ * as before, and so does every button's size/position (untouched, still vanilla layout) — only
+ * {@code renderWidget}'s paint call is replaced, now via NanoVG (our own font + a shrink-to-fit
+ * label so text never overflows the button).
+ *
+ * <p>Used to ALSO reskin Singleplayer (SelectWorldScreen) and Multiplayer (MultiplayerScreen)
+ * while Custom Menu was on — removed: those two screens are fully vanilla again now (see
+ * {@code LumeTitleMenu}'s doc — only the title screen itself gets a small 4-corner overlay).
  */
 @Mixin(PressableWidget.class)
 public class PressableWidgetMixin {
@@ -35,12 +32,10 @@ public class PressableWidgetMixin {
     @Inject(method = "renderWidget", at = @At("HEAD"), cancellable = true, require = 0)
     private void lume$reskin(DrawContext ctx, int mouseX, int mouseY, float delta, CallbackInfo ci) {
         MinecraftClient mc = MinecraftClient.getInstance();
-        boolean onMenuScreen = (mc.currentScreen instanceof SelectWorldScreen || mc.currentScreen instanceof MultiplayerScreen)
-                && CustomMenu.active();
         Module cdM = LumeClient.MODULES.getByName("Custom Death Screen");
         boolean onDeathScreen = mc.currentScreen instanceof DeathScreen
                 && cdM instanceof CustomDeathScreen cds && cds.isEnabled();
-        if (!onMenuScreen && !onDeathScreen) return;
+        if (!onDeathScreen) return;
 
         ClickableWidget w = (ClickableWidget) (Object) this;
         if (!w.visible) return;

@@ -33,13 +33,17 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * against the texture in the shader — so a MULTIPLY-based tint (an earlier
  * version of this mixin used {@code @ModifyArg} on that argument) can never
  * produce a true flat white: {@code texture * 0xFFFFFF} is the identity
- * multiply, i.e. picking white silently did nothing. Instead, right after
- * vanilla's own (unmodified) model render, this draws the SAME model A SECOND
- * TIME into {@code RenderLayer.getEntityTranslucentEmissiveNoOutline(texture)}
- * — a normal alpha-blended entity layer (used vanilla-side for glowing eyes
- * etc.) — through a {@link ForcedColorVertexConsumer} that overrides every
- * vertex colour to the chosen hue at near-opaque alpha. Being a separate
- * blended-over pass, not a multiply, white genuinely reads as white.
+ * multiply, i.e. picking white silently did nothing. Right after vanilla's own
+ * (unmodified) model render, this draws the SAME model A SECOND TIME into
+ * {@code RenderLayer.getEntityTranslucentEmissiveNoOutline(...)} through a
+ * {@link ForcedColorVertexConsumer} that overrides every vertex colour to the
+ * chosen hue — bound to a solid-WHITE 1x1 texture ({@link HeldItemRendererMixin}'s
+ * white texture, reused here) instead of the entity's own skin. That second fix
+ * matters just as much as the forced vertex colour: "emissive" only means "skip
+ * world lighting", the shader still multiplies texture RGB × vertex colour, so
+ * sampling the REAL skin texture reproduces the exact same white-is-identity bug
+ * one layer down. A texture that's white everywhere makes texture × colour ==
+ * colour exactly, for every colour, so white genuinely reads as white.
  *
  * <p><b>Death Animations, why {@code updateRenderState} is hooked too:</b>
  * {@code LivingEntityRenderState} doesn't carry the owning Entity (no id field
@@ -74,8 +78,8 @@ public class LivingEntityRendererMixin {
         @SuppressWarnings("rawtypes")
         LivingEntityRenderer self = (LivingEntityRenderer) (Object) this;
         @SuppressWarnings("unchecked")
-        RenderLayer layer = RenderLayer.getEntityTranslucentEmissiveNoOutline(self.getTexture(state));
-        VertexConsumer forced = new ForcedColorVertexConsumer(vcp.getBuffer(layer), 0xE6000000 | rgb);
+        RenderLayer layer = RenderLayer.getEntityTranslucentEmissiveNoOutline(com.lume.client.util.FlatColorTexture.id());
+        VertexConsumer forced = new ForcedColorVertexConsumer(vcp.getBuffer(layer), 0xFF000000 | rgb);
         @SuppressWarnings("unchecked")
         var model = self.getModel();
         model.render(matrices, forced, light, OverlayTexture.DEFAULT_UV, 0xFFFFFFFF);

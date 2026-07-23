@@ -1,5 +1,6 @@
 package com.lume.client.gui;
 
+import com.lume.client.Config;
 import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.text.Style;
@@ -142,6 +143,9 @@ public final class RenderUtil {
     /** Anti-aliased rounded rect filled with a vertical gradient (c1 top → c2 bottom). */
     public static void gradientRoundedRect(DrawContext ctx, int x, int y, int w, int h, int r, int c1, int c2) {
         if (w <= 0 || h <= 0) return;
+        // Ultra Performance: one flat fill (top colour) instead of an h-row per-scanline lerp —
+        // same panel, same spot, no gradient/rounding cost. See Config#ultra().
+        if (Config.ultra()) { ctx.fill(x, y, x + w, y + h, c1); return; }
         r = Math.min(r, Math.min(w, h) / 2);
         for (int i = 0; i < h; i++) {
             int yy = y + i;
@@ -169,24 +173,31 @@ public final class RenderUtil {
     }
 
     /**
-     * The Lume "Sparkle" logo mark — same shape/coordinates as {@link com.lume.client.nanovg.NanoVgRenderer#logoMark}
-     * and the website/launcher's SVG mark (big gradient sparkle + small light-lavender sparkle,
-     * its bottom tip directly above the big sparkle's right tip), rebuilt here via scanline
-     * polygon fill since DrawContext has no curved-path API — each quadratic-bezier "petal" is
-     * densely sampled into straight segments first,
-     * which is invisible at this icon's size. Used by the "Menu Logo" HUD watermark and the
-     * (effectively unreachable) pre-NanoVG ClickGUI fallback.
+     * The Lume "Glass Star" logo mark — rebranded to a single 4-point sparkle with a soft glow
+     * halo behind it (was: a big sparkle + a smaller secondary sparkle pinned to its tip — that
+     * secondary sparkle is gone, per the new Figma reference). Same shape/coordinates as
+     * {@link com.lume.client.nanovg.NanoVgRenderer#logoMark} and the launcher's SVG mark, rebuilt
+     * here via scanline polygon fill since DrawContext has no curved-path API — each quadratic-
+     * bezier "petal" is densely sampled into straight segments first, which is invisible at this
+     * icon's size. Used by the "Menu Logo" HUD watermark and the (effectively unreachable)
+     * pre-NanoVG ClickGUI fallback.
      */
     public static void drawLogo(DrawContext ctx, int x, int y, int s) {
         float u = s / 100f;
         // Follows the current accent (see NanoVgRenderer.logoMark, same relationship) instead
         // of a fixed lavender, so Customize Colors re-tints this fallback too.
         int bigC1 = Theme.accent(), bigC2 = Theme.accent2();
-        int smallC = 0xFF000000 | (Theme.colorLerp(Theme.accentRgb(), 0xFFFFFF, 0.25f) & 0xFFFFFF);
+        // Soft glass glow: the SAME sparkle outline, scaled up ~18% around its own centre (42,46
+        // in the shared 0..100 mark space) and filled at low alpha — a cheap stand-in for a real
+        // blur (DrawContext has none), same layered-translucent-copy trick used everywhere else
+        // in this codebase for glow (see RenderUtil.glow).
+        float gu = u * 1.18f;
+        float gx = x + 42 * u - 42 * gu, gy = y + 46 * u - 46 * gu;
+        float[][] glow = sparkleOutline(gx, gy, gu, 42, 16, 48.4f, 39.6f, 72, 46, 48.4f, 52.4f, 42, 76, 35.6f, 52.4f, 12, 46, 35.6f, 39.6f);
+        int glowCol = 0x40000000 | (Theme.accentRgb() & 0xFFFFFF);
+        fillPolygon(ctx, glow[0], glow[1], glowCol);
         float[][] big = sparkleOutline(x, y, u, 42, 16, 48.4f, 39.6f, 72, 46, 48.4f, 52.4f, 42, 76, 35.6f, 52.4f, 12, 46, 35.6f, 39.6f);
         fillPolygonGradient(ctx, big[0], big[1], bigC1, bigC2);
-        float[][] small = sparkleOutline(x, y, u, 72, 11, 74.8f, 21.2f, 85, 24, 74.8f, 26.8f, 72, 37, 69.2f, 26.8f, 59, 24, 69.2f, 21.2f);
-        fillPolygon(ctx, small[0], small[1], smallC);
     }
 
     /** Densely samples the sparkle's 4 quadratic-bezier "petals" (tip → control → tip, ×4)
@@ -260,6 +271,7 @@ public final class RenderUtil {
      * rgb is the glow colour (low 24 bits); strength = number of layers.
      */
     public static void glow(DrawContext ctx, int x, int y, int w, int h, int r, int rgb, int strength) {
+        if (Config.ultra()) return;   // purely decorative halo — skip entirely, see Config#ultra()
         int n = Math.min(strength, 5); // cap layers for performance
         if (n < 1) return;
         for (int k = n; k >= 1; k--) {
@@ -277,6 +289,7 @@ public final class RenderUtil {
      */
     public static void containedGlow(DrawContext ctx, int clipX, int clipY, int clipW, int clipH,
                                      int cx, int cy, int radius, int rgb, float intensity) {
+        if (Config.ultra()) return;   // decorative cursor-follow light — skip entirely, see Config#ultra()
         if (intensity <= 0.01f || radius <= 0) return;
         int layers = 5;
         for (int i = layers; i >= 1; i--) {
@@ -312,7 +325,9 @@ public final class RenderUtil {
     // the per-frame fill count massively versus filling every scanline.
     private static void roundedRectRaw(DrawContext ctx, int x, int y, int w, int h, int r, int color) {
         if (w <= 0 || h <= 0) return;
-        if (r <= 0) { ctx.fill(x, y, x + w, y + h, color); return; }
+        // Ultra Performance: sharp rect, one fill — no per-corner AA loop. Same panel, flat
+        // corners instead of rounded/glass. See Config#ultra().
+        if (r <= 0 || Config.ultra()) { ctx.fill(x, y, x + w, y + h, color); return; }
         r = Math.min(r, Math.min(w, h) / 2);
         int baseA = (color >>> 24) & 0xFF, rgb = color & 0xFFFFFF;
 

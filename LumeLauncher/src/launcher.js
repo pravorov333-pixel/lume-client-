@@ -4,6 +4,7 @@ const { Client } = require('minecraft-launcher-core');
 const { app } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
@@ -267,9 +268,34 @@ async function launchGame(win, { username, memory, version }) {
   writeOptions(win, ver);
   if (abort()) return { cancelled: true };
 
+  // Hard backstop against OOM-at-boot: -Xmx/-Xms BOTH set to the same value means the JVM tries
+  // to reserve that much address space immediately at startup — asking for more than the machine
+  // can actually spare fails as a native "insufficient memory ... mmap failed" crash before a
+  // single mod even loads, which reads to the user as "the game won't start" with no obvious
+  // cause. TOTAL installed RAM alone isn't the right ceiling here, though — a machine that's
+  // mostly full of OTHER running programs can fail this exact same way well under a total-based
+  // cap (confirmed live: 7.8GB total but only ~0.25GB FREE crashed at 6GB requested, comfortably
+  // under a total-minus-headroom limit). Clamp against BOTH: total (generous margin, catches
+  // "this machine just doesn't have that much RAM ever") and free (tight margin, catches "the
+  // RAM exists but something else is using nearly all of it right now"). Never trust the
+  // renderer's own slider clamp alone (a stale settings.json predating that clamp could still
+  // carry an old too-high value) — reclamp here too, right where the flag is actually built.
+  const totalMemGB = os.totalmem() / (1024 ** 3);
+  const freeMemGB = os.freemem() / (1024 ** 3);
+  const totalSafeGB = Math.max(0.5, totalMemGB - 1.5);
+  const freeSafeGB = Math.max(0.5, freeMemGB - 0.5);
+  const safeMaxGB = Math.min(totalSafeGB, freeSafeGB);
+  const requestedGB = memory || 4;
+  const finalGB = Math.min(requestedGB, safeMaxGB);
+  if (finalGB < requestedGB) {
+    status(win, `Memory ${requestedGB}GB isn't safe right now (${freeMemGB.toFixed(1)}GB free of ${totalMemGB.toFixed(1)}GB total) — using ${finalGB.toFixed(1)}GB instead.`);
+  }
+  if (freeMemGB < 1.5) {
+    status(win, `Free RAM is very low (${freeMemGB.toFixed(1)}GB) — close some other programs (browser tabs, other apps) before launching if this still fails.`);
+  }
   // Whole MB, not "G" suffix — the memory slider allows half-GB steps (e.g. 2.5) and
   // -Xmx/-Xms don't reliably accept fractional G values across JVM builds.
-  const ram = Math.round((memory || 4) * 1024) + 'M';
+  const ram = Math.round(finalGB * 1024) + 'M';
   const launcher = new Client();
   const opts = {
     authorization: Promise.resolve(offlineAuth(username || 'LumePlayer')),
@@ -282,16 +308,83 @@ async function launchGame(win, { username, memory, version }) {
     customArgs: JVM_FLAGS,
   };
 
-  let hidden = false;
-  const hideLauncher = () => {
-    if (!cancelled && !hidden && win && !win.isDestroyed()) { hidden = true; win.hide(); }
+  // Instead of just hiding the window (which keeps the whole Electron/Chromium process —
+  // 150-500MB+ — resident in memory for the entire play session), fully quit and hand off
+  // to a tiny detached watcher that polls the game's PID and relaunches the launcher once
+  // it exits. The watcher runs via `electron.exe` with ELECTRON_RUN_AS_NODE=1 — plain Node,
+  // no Chromium/GPU process — so it costs a few MB instead of hundreds. See watcher.js.
+  let watcherSpawned = false;
+  const spawnWatcherAndQuit = () => {
+    if (watcherSpawned || cancelled || !win || win.isDestroyed()) return;
+    if (!gameProc || !gameProc.pid) { setTimeout(spawnWatcherAndQuit, 300); return; }   // launch() hasn't resolved yet — retry shortly
+    watcherSpawned = true;
+    try {
+      const relaunchExe = process.execPath;
+      const relaunchArgs = app.isPackaged ? [] : [app.getAppPath()];
+      spawn(process.execPath, [path.join(__dirname, 'watcher.js'), String(gameProc.pid), relaunchExe, ...relaunchArgs], {
+        detached: true,
+        stdio: 'ignore',
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      }).unref();
+    } catch (e) { /* worst case: launcher just won't auto-reopen, user relaunches it manually */ }
+    app.quit();
   };
+
+  // Ring buffer of recent game output — shown if the game dies before we're confident it
+  // actually launched (see launchConfirmTimer below), so a crash reads as "here's the error"
+  // instead of the launcher window just vanishing with no explanation.
+  const recentLog = [];
+  function pushLog(text) {
+    recentLog.push(text);
+    if (recentLog.length > 80) recentLog.shift();
+  }
+
+  // The OLD behaviour quit the launcher (and handed off to the watcher) the instant the JVM
+  // printed its very FIRST log line — which happens right as the process starts, long before
+  // Fabric finishes applying mixins / loading mods and the game window actually appears. A
+  // crash in that gap (e.g. a bad mixin) left NOTHING on screen: no launcher (already quit),
+  // no game (never got that far) — reads as "doesn't launch" with zero explanation. Now we
+  // keep this window alive and switch it to a small "Launching…" view instead, and only
+  // hand off to the watcher + quit once the game has stayed alive for a confirmation window
+  // (or the process exits/errors first, in which case we show the crash instead).
+  const LAUNCH_CONFIRM_MS = 20000;
+  let launchConfirmTimer = null;
+  let confirmArmed = false;
+  function armLaunchConfirm() {
+    if (confirmArmed) return;
+    confirmArmed = true;
+    send(win, 'launching', {});
+    launchConfirmTimer = setTimeout(() => {
+      launchConfirmTimer = null;
+      spawnWatcherAndQuit();
+    }, LAUNCH_CONFIRM_MS);
+  }
 
   launcher.on('progress', (e) => send(win, 'progress', e));
   launcher.on('download-status', (e) => send(win, 'progress', e));
-  launcher.on('data', (line) => { send(win, 'log', { text: String(line) }); hideLauncher(); });
-  launcher.on('debug', (line) => send(win, 'log', { text: String(line) }));
+  launcher.on('data', (line) => {
+    const text = String(line);
+    send(win, 'log', { text });
+    pushLog(text);
+    armLaunchConfirm();
+  });
+  launcher.on('debug', (line) => {
+    const text = String(line);
+    send(win, 'log', { text });
+    pushLog(text);
+  });
   launcher.on('close', (code) => {
+    if (launchConfirmTimer) {
+      // Died before the confirmation window elapsed — the actual crash, surfaced.
+      clearTimeout(launchConfirmTimer);
+      launchConfirmTimer = null;
+      send(win, 'launch-failed', { code, log: recentLog.join('\n') });
+      if (win && !win.isDestroyed()) { win.show(); win.focus(); }
+      return;
+    }
+    // Fallback only — in the normal path we've already app.quit()'d by the time the game
+    // closes, and the watcher process (not this one) brings the window back. This still runs
+    // if spawnWatcherAndQuit() was skipped (e.g. cancelled), same as the old behaviour.
     if (win && !win.isDestroyed()) { win.show(); win.focus(); }
     send(win, 'game-closed', { code });
   });
@@ -301,15 +394,19 @@ async function launchGame(win, { username, memory, version }) {
   gameProc = proc || null;
   // if the user cancelled while assets were downloading, kill the freshly-started game
   if (cancelled && gameProc) { try { gameProc.kill(); } catch (e) {} return { cancelled: true }; }
-  status(win, 'Minecraft is starting…');
+  // Shown for several seconds while the JVM boots (before the game's first 'data' event
+  // triggers spawnWatcherAndQuit) — plenty of time to actually render, unlike anything set
+  // right before the window closes. Without this, the launcher just vanishing when the game
+  // starts (now a real process exit, not a hide()) could read as "did it crash?" instead of
+  // working as intended.
+  status(win, 'Minecraft is starting… launcher will close and reopen automatically when you quit the game.');
   return { ok: true };
 }
 
-// Writes {key, hwid} into this version's profile config/lume.json under "license" so the
-// MOD (which has no other way to know the key) can check subscription status against
-// LumeKeyServer itself for the account widget. Merges with whatever the mod already wrote
-// there (module settings etc.) instead of clobbering the file — read-modify-write.
-function writeLicense(version, key, hwid) {
+// Read-modify-write helper for this version's profile config/lume.json — merges one field in
+// without clobbering whatever the mod itself already wrote there (module settings, theme, etc).
+// Shared by writeLicense/writePerfMode so both follow the exact same safe pattern.
+function patchLumeConfig(version, patch) {
   try {
     const ver = resolveVersion(version);
     const cfgDir = path.join(profileDir(ver), 'config');
@@ -319,9 +416,24 @@ function writeLicense(version, key, hwid) {
     if (fs.existsSync(file)) {
       try { data = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { data = {}; }
     }
-    data.license = { key, hwid };
+    Object.assign(data, patch);
     fs.writeFileSync(file, JSON.stringify(data, null, 2));
   } catch (e) { /* best-effort — don't block launch over this */ }
 }
 
-module.exports = { launchGame, cancelLaunch, rootDir, profileDir, writeLicense };
+// Writes {key, hwid} into this version's profile config/lume.json under "license" so the
+// MOD (which has no other way to know the key) can check subscription status against
+// LumeKeyServer itself for the account widget.
+function writeLicense(version, key, hwid) {
+  patchLumeConfig(version, { license: { key, hwid } });
+}
+
+// Writes the chosen launcher performance mode so the mod can gate ClickGUI/HUD/CustomMenu
+// glass+animations at startup (see Config.perfMode / Perf.ultra() on the Java side). Written on
+// every launch (not just when it changes) so switching modes in the launcher always takes effect
+// on the next Play, same as the license write above.
+function writePerfMode(version, ultra) {
+  patchLumeConfig(version, { perfMode: !!ultra });
+}
+
+module.exports = { launchGame, cancelLaunch, rootDir, profileDir, writeLicense, writePerfMode };

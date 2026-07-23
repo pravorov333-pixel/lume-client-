@@ -21,12 +21,12 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Custom Hand's rotation pivot — computed entirely from the held item's own baked
- * mesh, not from any vanilla-authored "how to hold this" hint and not from a manually
- * tuned slider. We read every quad's raw LOCAL vertex positions (before any transform
- * is applied to them — {@link #IDENTITY} is a no-op MatrixStack.Entry, so
- * {@link VertexConsumer#quad} hands back untouched model-space coordinates) and take
- * the centre of their bounding box.
+ * Custom Hand's rotation pivot for Style and the Tilt/Spin animations — computed entirely from
+ * the held item's own baked mesh, not from any vanilla-authored "how to hold this" hint and not
+ * from a manually tuned slider. We read every quad's raw LOCAL vertex positions (before any
+ * transform is applied to them — {@link #IDENTITY} is a no-op MatrixStack.Entry, so {@link
+ * VertexConsumer#quad} hands back untouched model-space coordinates) and take the centre of
+ * their bounding box.
  *
  * <p>Why the raw local-space centre is the mathematically correct pivot: our rotation
  * (applied in HeldItemRendererMixin, BEFORE vanilla's own first-person placement
@@ -36,6 +36,17 @@ import java.util.Map;
  * space, means the point we rotate around and the mesh's visual centre land on the same
  * screen pixel after everything downstream is applied — so rotating around it never
  * reads as the item swinging or drifting, for any item shape, with no per-item tuning.
+ *
+ * <p>(The Simple animation used to pivot on a point from here too — first a hardcoded "grip
+ * corner" guess, then a user-adjustable fraction of {@code center}'s own bounds. Both failed:
+ * for a "generated" 2D-icon item model (any sword/tool), that bounding box always comes back as
+ * exactly the full [0,1]x[0,1] icon canvas regardless of the item's actual silhouette — confirmed
+ * via debug log, e.g. wooden_sword bounds [0,0,0.469]→[1,1,0.531] — because the model's flat
+ * front/back "backing" quads cover the whole square canvas no matter where the opaque diagonal
+ * pixels sit. So {@code center} is really just the trivial canvas centre (0.5,0.5,0.5) for every
+ * generated-model item, and a fraction of it has almost no usable range once everything
+ * downstream scales it down. Simple's pivot ({@link CustomHand#swingPivotY}) is now a direct
+ * hand-space offset instead — the same units/scale {@code rPosX} etc. use, with real range.)
  */
 public final class HandGeometryPivot {
 

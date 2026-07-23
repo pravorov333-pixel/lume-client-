@@ -27,7 +27,6 @@ public final class ThemeIcons {
         float tbw = 22f * S, tbh = 22f * S;
         int themeBg = Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), themeHover);
         NanoVgRenderer.roundedRect(vg, tbx, tby, tbw, tbh, 8f * S, themeBg);
-        NanoVgRenderer.strokeRoundedRect(vg, tbx + 0.5f * S, tby + 0.5f * S, tbw - S, tbh - S, 8f * S, S, Theme.rim());
         float icx = tbx + tbw / 2f, icy = tby + tbh / 2f;
         // 13-unit glyph box maps the launcher's 24x24 viewBox 1:1 (icoS/24 = unit).
         float icoS = 13f * S;
@@ -42,7 +41,6 @@ public final class ThemeIcons {
     public static void drawColors(long vg, float cbx, float cby, float S, float colorsHover) {
         float cbw = 22f * S, cbh = 22f * S;
         NanoVgRenderer.roundedRect(vg, cbx, cby, cbw, cbh, 8f * S, Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), colorsHover));
-        NanoVgRenderer.strokeRoundedRect(vg, cbx + 0.5f * S, cby + 0.5f * S, cbw - S, cbh - S, 8f * S, S, Theme.rim());
         float pcx = cbx + cbw / 2f, pcy = cby + cbh / 2f;
         float icoS = 13f * S;
         colorsIcon(vg, pcx, pcy, icoS, Theme.txt());
@@ -85,6 +83,38 @@ public final class ThemeIcons {
         for (float[] p : pts) {
             float px = cx + (p[0] - 12f) * u, py = cy + (p[1] - 12f) * u;
             NanoVgRenderer.strokeEllipse(vg, px, py, dotR, dotR, strokeW, col);
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // DrawContext (non-NanoVG) fallbacks — simplified silhouettes (a plain sun disc
+    // instead of ring+rays, a plain ring instead of 4 stroked dots), used only where NanoVG
+    // itself is the thing being avoided (see LumeTitleMenu's top-right cluster, which moved off
+    // NanoVG entirely after it reproducibly crashed one user's Intel iGPU driver from inside
+    // nvgEndFrame — same root cause as LogoDrawerMixin, see there for the full story).
+
+    public static void drawThemeLegacy(net.minecraft.client.gui.DrawContext ctx, int x, int y, int size, int bg) {
+        RenderUtil.roundedRect(ctx, x, y, size, size, size / 3, bg);
+        int r = Math.round(size * 0.27f);
+        int cx = x + size / 2, cy = y + size / 2;
+        if (Theme.isDark()) {
+            RenderUtil.roundedRect(ctx, cx - r, cy - r, 2 * r, 2 * r, r, Theme.txt());
+            int bite = Math.round(r * 0.82f), off = Math.round(r * 0.4f);
+            RenderUtil.roundedRect(ctx, cx - bite + off, cy - bite - off, 2 * bite, 2 * bite, bite, bg);
+        } else {
+            RenderUtil.roundedRect(ctx, cx - r, cy - r, 2 * r, 2 * r, r, Theme.txt());
+        }
+    }
+
+    public static void drawColorsLegacy(net.minecraft.client.gui.DrawContext ctx, int x, int y, int size, int bg) {
+        RenderUtil.roundedRect(ctx, x, y, size, size, size / 3, bg);
+        int dotR = Math.max(1, Math.round(size * 0.1f));
+        float u = size / 24f;
+        float[][] pts = {{13.5f, 6.5f}, {19f, 13f}, {6f, 12f}, {10f, 19f}};
+        for (float[] p : pts) {
+            int px = x + Math.round((p[0] - 12f + 12f) * u) - dotR;
+            int py = y + Math.round((p[1] - 12f + 12f) * u) - dotR;
+            RenderUtil.roundedRect(ctx, px, py, 2 * dotR, 2 * dotR, dotR, Theme.txt());
         }
     }
 }
