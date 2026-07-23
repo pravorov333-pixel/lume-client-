@@ -140,6 +140,20 @@ public final class RenderUtil {
         return (oa << 24) | (or << 16) | (og << 8) | ob;
     }
 
+    /** Plain (non-rounded) horizontal gradient fill, left→right — for overlaying on top of an
+     *  already-rounded base rect (the color-picker SV square's white→transparent sweep), where a
+     *  handful of unrounded corner pixels at the very edge are imperceptible at this size. Vanilla
+     *  {@code DrawContext.fillGradient} only interpolates vertically, hence this column-by-column
+     *  version instead of reusing it. */
+    public static void hGradientRect(DrawContext ctx, int x, int y, int w, int h, int argbLeft, int argbRight) {
+        if (w <= 0 || h <= 0) return;
+        for (int i = 0; i < w; i++) {
+            float t = w > 1 ? (float) i / (w - 1) : 0;
+            int col = lerp(argbLeft, argbRight, t);
+            ctx.fill(x + i, y, x + i + 1, y + h, col);
+        }
+    }
+
     /** Anti-aliased rounded rect filled with a vertical gradient (c1 top → c2 bottom). */
     public static void gradientRoundedRect(DrawContext ctx, int x, int y, int w, int h, int r, int c1, int c2) {
         if (w <= 0 || h <= 0) return;

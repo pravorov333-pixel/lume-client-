@@ -374,6 +374,7 @@ public class ClickGuiScreen extends Screen {
                 RenderUtil.roundedRect(ctx, x + W - o - 2 * S, y + H - 5 * S, o, 2 * S, S, gripHov ? Theme.accent() : Theme.txtDim());
             }
             mtx.pop();
+            renderBindPopupIfPending(ctx, cx, cy, total, S, mouseX, mouseY, dt);
             return;
         }
         if (isServerTab()) {
@@ -385,6 +386,7 @@ public class ClickGuiScreen extends Screen {
                 RenderUtil.roundedRect(ctx, x + W - o - 2 * S, y + H - 5 * S, o, 2 * S, S, gripHov2 ? Theme.accent() : Theme.txtDim());
             }
             mtx.pop();
+            renderBindPopupIfPending(ctx, cx, cy, total, S, mouseX, mouseY, dt);
             return;
         }
 
@@ -511,7 +513,7 @@ public class ClickGuiScreen extends Screen {
             // expanded settings (revealed by the growing card via a nested scissor)
             if (ex > 0.01f && m.hasSettings()) {
                 winScissor(ctx, dx, dy, dx + dw, dy + dh);
-                renderSettings(ctx, m, dx, cy0 + headerH, dw, S, mx, my);
+                renderSettings(ctx, m, dx, cy0 + headerH, dw, S, mx, my, dt);
                 ctx.disableScissor();
             }
 
@@ -538,6 +540,7 @@ public class ClickGuiScreen extends Screen {
         }
 
         mtx.pop();
+        renderBindPopupIfPending(ctx, cx, cy, total, S, mouseX, mouseY, dt);
     }
 
     // ======================================================================
@@ -814,14 +817,8 @@ public class ClickGuiScreen extends Screen {
         // anim()'s ~200ms, so it reads as "coming into focus" rather than growing.
         if (p < 1f) GlassRenderer.transitionOverlay(panelSx, panelSy, panelSw, panelSh, (1f - p) * 0.8f, 1f - p);
 
-        // BindPopup (DrawContext-based) drawn last, on top of everything — see the field doc for
-        // bindPopupPending. Converts the window-local anchor the NanoVG pass stashed into real
-        // screen px with the SAME formula used for gsx0/gsy0 above.
-        if (bindPopupPending && BindPopup.isActive()) {
-            double sx0 = winOffX * S + cx + total * (bindPopupLocalX - cx);
-            double sy0 = winOffY * S + cy + total * (bindPopupLocalY - cy);
-            BindPopup.render(ctx, (int) Math.round(sx0 / S), (int) Math.round(sy0 / S), this.width, this.height, mouseX, mouseY, dt);
-        }
+        // BindPopup (DrawContext-based) drawn last, on top of everything.
+        renderBindPopupIfPending(ctx, cx, cy, total, S, mouseX, mouseY, dt);
     }
 
     /** Lume logo mark: half-square (triangle) with a circle centred inside. */
@@ -2142,7 +2139,7 @@ public class ClickGuiScreen extends Screen {
         return 6 * S + 18 * S + 6 * S + Waypoints.visible().size() * 16 * S;
     }
 
-    private void renderSettings(DrawContext ctx, Module m, int x0, int yTop, int w, int S, int mx, int my) {
+    private void renderSettings(DrawContext ctx, Module m, int x0, int yTop, int w, int S, int mx, int my, float dt) {
         RenderUtil.roundedRect(ctx, x0 + 10 * S, yTop, w - 20 * S, Math.max(1, S), S, Theme.border()); // separator
         int sx = x0 + 14 * S, swid = w - 28 * S;
         int yy = yTop + 4 * S;
@@ -2164,7 +2161,7 @@ public class ClickGuiScreen extends Screen {
             else if (s instanceof SliderSetting ss) renderSlider(ctx, ss, sx, yy, swid, h, S);
             else if (s instanceof ModeSetting ms) renderMode(ctx, ms, sx, yy, swid, h, S);
             else if (s instanceof StringSetting ts) renderString(ctx, ts, sx, yy, swid, h, S);
-            else if (s instanceof ColorSetting cs) renderColor(ctx, cs, sx, yy, swid, S);
+            else if (s instanceof ColorSetting cs) renderColor(ctx, cs, sx, yy, swid, S, mx, my, dt);
             yy += h;
         }
         if (m instanceof Waypoints) renderWaypointManager(ctx, sx, yy + 4 * S, swid, S);
@@ -2172,7 +2169,14 @@ public class ClickGuiScreen extends Screen {
         if (m instanceof com.lume.client.module.modules.qol.KeybindManager) renderKeybindManagerButtons(ctx, sx, yy, swid, S);
     }
 
-    /** DrawContext mirror of {@link #renderKeybindManagerButtonsNvg}. */
+    /** DrawContext mirror of {@link #renderKeybindManagerButtonsNvg} — including the {@link
+     *  BindPopup} hook, which this method used to be missing entirely (an invisible-modal bug:
+     *  BindPopup would still capture input while never being drawn on this render path). Can't
+     *  call {@code BindPopup.render(ctx,...)} directly here — this runs inside the window's own
+     *  pan/zoom {@code MatrixStack} transform, and BindPopup's own internal sizing assumes plain
+     *  untransformed logical px (it's shared with {@code KeybindManagerScreen}, which has no such
+     *  transform) — so like the NanoVG path, the local anchor is stashed and rendered in real
+     *  screen space after the transform is popped (see {@link #renderBindPopupIfPending}). */
     private void renderKeybindManagerButtons(DrawContext ctx, int sx, int yy, int swid, int S) {
         int bh = 22 * S, gap = 4 * S;
         boolean capturing = bindingMacroKey;
@@ -2180,10 +2184,32 @@ public class ClickGuiScreen extends Screen {
         RenderUtil.textCentered(ctx, this.textRenderer, capturing ? com.lume.client.Lang.tUI("Press a key…") : com.lume.client.Lang.tUI("Bind command"),
                 sx, yy, swid, bh, capturing ? Theme.activeText() : Theme.txt(), 0.42f * S);
         SHit bh1 = new SHit(); bh1.s = null; bh1.kind = 21; bh1.x = sx; bh1.y = yy; bh1.w = swid; bh1.h = bh; sHits.add(bh1);
+        int bindBtnBottom = yy + bh;
         yy += bh + gap;
         RenderUtil.roundedRect(ctx, sx, yy, swid, bh, 6 * S, Theme.glassHov());
         RenderUtil.textCentered(ctx, this.textRenderer, com.lume.client.Lang.tUI("Open manager"), sx, yy, swid, bh, Theme.txt(), 0.42f * S);
         SHit bh2 = new SHit(); bh2.s = null; bh2.kind = 22; bh2.x = sx; bh2.y = yy; bh2.w = swid; bh2.h = bh; sHits.add(bh2);
+
+        if (BindPopup.isActive()) {
+            bindPopupPending = true;
+            bindPopupLocalX = sx;
+            bindPopupLocalY = bindBtnBottom + gap;
+        } else {
+            bindPopupPending = false;
+        }
+    }
+
+    /** Converts the window-local anchor {@link #renderKeybindManagerButtons} stashed into real
+     *  screen px (same window-local -> framebuffer formula used for the panel rect throughout
+     *  this file: {@code winOffX*S + cx + total*(local-cx)}) and draws BindPopup there — call
+     *  once per frame, AFTER the window's MatrixStack transform has been popped (or, on the
+     *  NanoVG path, after the NanoVG frame itself has closed — see renderNvgMain). Deliberately
+     *  NOT zoom-scaled with the window, same as the NanoVG path's version of this bridge. */
+    private void renderBindPopupIfPending(DrawContext ctx, double cx, double cy, float total, int S, int mouseX, int mouseY, float dt) {
+        if (!bindPopupPending || !BindPopup.isActive()) return;
+        double sx0 = winOffX * S + cx + total * (bindPopupLocalX - cx);
+        double sy0 = winOffY * S + cy + total * (bindPopupLocalY - cy);
+        BindPopup.render(ctx, (int) Math.round(sx0 / S), (int) Math.round(sy0 / S), this.width, this.height, mouseX, mouseY, dt);
     }
 
     /** Read-only list of configured FT/HW events (with live countdown if active). Cyrillic → vanilla font. */
@@ -2333,36 +2359,74 @@ public class ClickGuiScreen extends Screen {
         SHit hit = new SHit(); hit.s = ss; hit.kind = 1; hit.x = x; hit.y = y; hit.w = w; hit.h = h; hit.trackX = x; hit.trackW = w; sHits.add(hit);
     }
 
-    private void renderColor(DrawContext ctx, ColorSetting cs, int x, int y, int w, int S) {
+    /** DrawContext mirror of {@link #renderColorNvg} (name, Accent toggle pill, swatch → opens
+     *  the HSV/hue/hex palette below). This used to be a different, simpler design (just an
+     *  Accent on/off switch + always-visible R/G/B sliders, no palette) that reused kind=2 for
+     *  the switch — but the shared click handler's kind=2 case has always meant "open/close the
+     *  colour palette" (see handleSettingClick), not "toggle accent", so that switch silently did
+     *  nothing visible when clicked (toggled `openColor` with nothing drawn for it) while real
+     *  Accent-toggle kind=13 clicks were unreachable. Rebuilt to match the NanoVG version exactly
+     *  — the click/drag handlers for kinds 2/3/6/7/8/13 already exist and are shared, they just
+     *  had no matching UI to draw them from on this render path. */
+    private void renderColor(DrawContext ctx, ColorSetting cs, int x, int y, int w, int S, int mx, int my, float dt) {
         int row = 15 * S;
-        RenderUtil.textVCentered(ctx, this.textRenderer, cs.name, x, y, row, Theme.txt(), 0.42f * S);
-        int pw = 18 * S, ph = 10 * S, px = x + w - pw, py = y + (row - ph) / 2;
-        RenderUtil.roundedRect(ctx, px, py, pw, ph, ph / 2, cs.accent ? Theme.accent() : Theme.pillOff());
-        int kd = ph - 4 * S, kx = cs.accent ? px + pw - kd - 2 * S : px + 2 * S;
-        RenderUtil.roundedRect(ctx, kx, py + 2 * S, kd, kd, kd / 2, 0xFFFFFFFF);
-        int swx = px - 16 * S, swatch = cs.accent ? Theme.accent() : (0xFF000000 | cs.rgb());
-        RenderUtil.roundedRect(ctx, swx, py, 12 * S, ph, 3 * S, swatch);
-        SHit at = new SHit(); at.s = cs; at.kind = 2; at.x = px; at.y = y; at.w = pw; at.h = row; sHits.add(at);
+        RenderUtil.textVCentered(ctx, this.textRenderer, com.lume.client.Lang.tUI(cs.name), x, y, row, Theme.txt(), 0.42f * S);
 
-        if (!cs.accent) {
-            int yy = y + row;
-            channel(ctx, cs, 0, "R", 0xFFE05656, x, yy, w, S); yy += 14 * S;
-            channel(ctx, cs, 1, "G", 0xFF6FCF7F, x, yy, w, S); yy += 14 * S;
-            channel(ctx, cs, 2, "B", 0xFF6F9CE0, x, yy, w, S);
+        int sw = 30 * S, sh = 11 * S, sxb = x + w - sw, syb = y + (row - sh) / 2;
+        int aw = 42 * S, agap = 4 * S, axb = sxb - agap - aw;
+        boolean acc = cs.accent;
+        RenderUtil.roundedRect(ctx, axb, syb, aw, sh, 4 * S, acc ? withAlpha(Theme.accentRgb(), 0x55) : Theme.glassRow());
+        float[] aa = animFor("colacc:" + cs.name);
+        aa[0] = approach(aa[0], inside(mx, my, axb, syb, aw, sh) ? 1f : 0f, 14f, dt);
+        int accRim = acc ? Theme.accent() : withAlpha(0xFFFFFF, Math.round(0x30 + 0x40 * aa[0]));
+        RenderUtil.strokeRoundedRect(ctx, axb, syb, aw, sh, 4 * S, Math.max(1, S), accRim);
+        RenderUtil.textCentered(ctx, this.textRenderer, com.lume.client.Lang.tUI("Accent"), axb, syb, aw, sh, acc ? Theme.accent() : Theme.txtDim(), 0.36f * S);
+        SHit accHit = new SHit(); accHit.s = cs; accHit.kind = 13; accHit.x = axb; accHit.y = y; accHit.w = aw; accHit.h = row; sHits.add(accHit);
+
+        RenderUtil.roundedRect(ctx, sxb, syb, sw, sh, 4 * S, 0xFF000000 | (acc ? Theme.accentRgb() & 0xFFFFFF : cs.rgb()));
+        float[] swa = animFor("colsw:" + cs.name);
+        swa[0] = approach(swa[0], inside(mx, my, sxb, syb, sw, sh) ? 1f : 0f, 14f, dt);
+        int swRim = cs == openColor ? Theme.accent() : withAlpha(0xFFFFFF, Math.round(0x30 + 0x40 * swa[0]));
+        RenderUtil.strokeRoundedRect(ctx, sxb, syb, sw, sh, 4 * S, Math.max(1, S), swRim);
+        SHit open = new SHit(); open.s = cs; open.kind = 2; open.x = sxb; open.y = y; open.w = sw; open.h = row; sHits.add(open);
+
+        if (cs != openColor) return;
+
+        // --- HSV picker: saturation/value square + hue bar ---
+        int py = y + row + 4 * S;
+        int hueW = 12 * S, gap2 = 4 * S;
+        int sqW = w - hueW - gap2, sqH = 52 * S;
+        int hueColor = 0xFF000000 | hsvToRgb(pickH, 1f, 1f);
+        RenderUtil.roundedRect(ctx, x, py, sqW, sqH, 3 * S, hueColor);
+        RenderUtil.hGradientRect(ctx, x, py, sqW, sqH, 0xFFFFFFFF, 0x00FFFFFF);
+        ctx.fillGradient(x, py, x + sqW, py + sqH, 0x00000000, 0xFF000000);
+        RenderUtil.strokeRoundedRect(ctx, x, py, sqW, sqH, 3 * S, Math.max(1, S), Theme.rim());
+        float curX = x + pickS * sqW, curY = py + (1f - pickV) * sqH;
+        RenderUtil.roundedRect(ctx, Math.round(curX - 3.5f * S), Math.round(curY - 3.5f * S), Math.round(7 * S), Math.round(7 * S), Math.round(3.5f * S), 0xFF000000);
+        RenderUtil.roundedRect(ctx, Math.round(curX - 2.5f * S), Math.round(curY - 2.5f * S), Math.round(5 * S), Math.round(5 * S), Math.round(2.5f * S), 0xFFFFFFFF);
+        SHit sv = new SHit(); sv.s = cs; sv.kind = 7; sv.x = x; sv.y = py; sv.w = sqW; sv.h = sqH; sHits.add(sv);
+
+        // hue bar (vertical rainbow, 6 segments)
+        int hx = x + sqW + gap2;
+        int[] hueStops = { 0xFFFF0000, 0xFFFFFF00, 0xFF00FF00, 0xFF00FFFF, 0xFF0000FF, 0xFFFF00FF, 0xFFFF0000 };
+        float seg = sqH / 6f;
+        for (int i = 0; i < 6; i++) {
+            int yA = py + Math.round(i * seg), yB = py + Math.round((i + 1) * seg);
+            ctx.fillGradient(hx, yA, hx + hueW, yB, hueStops[i], hueStops[i + 1]);
         }
-    }
+        RenderUtil.strokeRoundedRect(ctx, hx, py, hueW, sqH, 2 * S, Math.max(1, S), Theme.rim());
+        float hueY = py + (pickH / 360f) * sqH;
+        RenderUtil.roundedRect(ctx, Math.round(hx - 2 * S), Math.round(hueY - 1.5f * S), Math.round(hueW + 4 * S), Math.round(3 * S), Math.round(1.5f * S), 0xFFFFFFFF);
+        SHit hb = new SHit(); hb.s = cs; hb.kind = 8; hb.x = hx; hb.y = py; hb.w = hueW; hb.h = sqH; sHits.add(hb);
 
-    private void channel(DrawContext ctx, ColorSetting cs, int idx, String label, int chCol, int x, int y, int w, int S) {
-        int h = 14 * S;
-        RenderUtil.textVCentered(ctx, this.textRenderer, label, x, y, h, Theme.txtDim(), 0.4f * S);
-        int tx = x + 12 * S, tw = w - 12 * S, ty = y + (h - 4 * S) / 2, th = 4 * S;
-        RenderUtil.roundedRect(ctx, tx, ty, tw, th, th / 2, Theme.pillOff());
-        int val = idx == 0 ? cs.r : idx == 1 ? cs.g : cs.b;
-        float frac = val / 255f;
-        if (frac > 0) RenderUtil.roundedRect(ctx, tx, ty, Math.max(th, Math.round(tw * frac)), th, th / 2, chCol);
-        int kd = 8 * S, kx = tx + Math.round(tw * frac);
-        RenderUtil.roundedRect(ctx, Math.min(tx + tw - kd, Math.max(tx, kx - kd / 2)), ty + th / 2 - kd / 2, kd, kd, kd / 2, 0xFFFFFFFF);
-        SHit hit = new SHit(); hit.s = cs; hit.kind = 3; hit.channel = idx; hit.x = x; hit.y = y; hit.w = w; hit.h = h; hit.trackX = tx; hit.trackW = tw; sHits.add(hit);
+        // hex field
+        int hy = py + sqH + 4 * S, hh = 14 * S;
+        boolean foc = "colorhex".equals(focusedField) && openColor == cs;
+        RenderUtil.roundedRect(ctx, x, hy, w, hh, 5 * S, foc ? Theme.glassHov() : Theme.glassRow());
+        RenderUtil.strokeRoundedRect(ctx, x, hy, w, hh, 5 * S, Math.max(1, S), foc ? Theme.accent() : Theme.rim());
+        String shown = "#" + (foc ? colorHex + "|" : String.format("%06X", cs.rgb() & 0xFFFFFF));
+        RenderUtil.textVCentered(ctx, this.textRenderer, shown, x + 8 * S, hy, hh, Theme.txt(), 0.47f * S);
+        SHit hex = new SHit(); hex.s = cs; hex.kind = 6; hex.x = x; hex.y = hy; hex.w = w; hex.h = hh; sHits.add(hex);
     }
 
     /** Small chevron that rotates from ▶ (collapsed) to ▼ (expanded) by {@code ex}. */
