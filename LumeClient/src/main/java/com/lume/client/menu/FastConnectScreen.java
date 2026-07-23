@@ -1,10 +1,11 @@
 package com.lume.client.menu;
 
 import com.lume.client.Config;
+import com.lume.client.gui.RenderUtil;
 import com.lume.client.gui.Theme;
 import com.lume.client.module.modules.cosmetic.CustomMenu;
-import com.lume.client.nanovg.NanoVgRenderer;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.TitleScreen;
@@ -18,8 +19,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-
-import static com.lume.client.nanovg.NanoVgRenderer.*;
 
 /** Full-page Fast Connect list — a real screen (not the small corner dropdown), same
  *  server-list/add/connect/delete data and actions FastConnect always had. */
@@ -45,7 +44,6 @@ public class FastConnectScreen extends Screen {
     @Override public boolean shouldPause() { return false; }
 
     private int sf() { return (int) Math.max(1, client.getWindow().getScaleFactor()); }
-    private static int withAlpha(int rgb, int alpha) { return (alpha << 24) | (rgb & 0xFFFFFF); }
     private final Map<String, float[]> anim = new HashMap<>();
     private float[] animFor(String id) { return anim.computeIfAbsent(id, k -> new float[1]); }
     private static float approach(float cur, float target, float rate, float dt) { return cur + (target - cur) * Math.min(1f, rate * dt); }
@@ -55,88 +53,83 @@ public class FastConnectScreen extends Screen {
     public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
         this.renderBackground(ctx, mouseX, mouseY, delta);
         CustomMenu.drawDimOverlay(ctx, width, height);
-        NanoVgRenderer.ensureInit();
-        if (!NanoVgRenderer.ready()) return;
         long now = System.currentTimeMillis();
         float dt = Math.min(0.05f, (now - lastFrame) / 1000f);
         lastFrame = now;
         hits.clear();
 
-        int S = sf();
         List<FastConnect.Entry> list = FastConnect.list;
         int rowsH = list.size() * (ROW_H + ROW_GAP);
         int formH = formOpen ? (2 * 20 + 6 + 24) : (ROW_H + ROW_GAP);
         int winH = 50 + rowsH + formH + 16;
-        int sw = width * S, sh = height * S;
-        int W = WIN_W * S, H = winH * S;
-        int x = (sw - W) / 2, y = (sh - H) / 2;
-        int mx = mouseX * S, my = mouseY * S;
+        int W = WIN_W, H = winH;
+        int x = (width - W) / 2, y = (height - H) / 2;
         float p = openAnim();
-        int r = 14 * S;
+        int r = 14;
 
-        int rowX = x / S + 14, rowW = WIN_W - 28;
+        int rowX = x + 14, rowW = WIN_W - 28;
         int ry = 40;
 
         try {
-            ctx.draw();
-            NanoVgRenderer.frame(vg -> {
-                save(vg);
-                globalAlpha(vg, p);
-                shadow(vg, x, y, W, H, r, 22 * S, 0x70000000);
-                shadow(vg, x, y, W, H, r, 30 * S, withAlpha(Theme.accentRgb(), 0x33));
-                gradientRoundedRect(vg, x, y, W, H, r, Theme.winTop(), Theme.winBot());
-                strokeRoundedRect(vg, x + 0.5f * S, y + 0.5f * S, W - S, H - S, r, S, Theme.rim());
-                text(vg, x + W / 2f, y + 22 * S, 11 * S, Theme.txt(), ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Fast Connect"));
+            TextRenderer tr = MinecraftClient.getInstance().textRenderer;
+            RenderUtil.glow(ctx, x, y, W, H, r, 0x000000, 3);
+            RenderUtil.gradientRoundedRect(ctx, x, y, W, H, r, fade(Theme.winTop(), p), fade(Theme.winBot(), p));
+            RenderUtil.strokeRoundedRect(ctx, x, y, W, H, r, 1, fade(Theme.rim(), p));
+            RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Fast Connect"), x, y + 12, W, 20, fade(Theme.txt(), p), 0.6f);
 
-                int yy = (int) (y / S) + ry;
-                for (int i = 0; i < list.size(); i++) {
-                    FastConnect.Entry e = list.get(i);
-                    int delW = 16, delX = rowX + rowW - delW - 4;
-                    float[] rh = animFor("row:" + i);
-                    rh[0] = approach(rh[0], inside(mx, my, rowX * S, yy * S, rowW * S, ROW_H * S) ? 1f : 0f, 14f, dt);
-                    roundedRect(vg, rowX * S, yy * S, rowW * S, ROW_H * S, 7 * S, Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), rh[0]));
-                    text(vg, (rowX + 10) * S, (yy + ROW_H / 2f) * S, 9 * S, Theme.txt(), ALIGN_MIDDLE, e.name);
-                    text(vg, (rowX + rowW - 40) * S, (yy + ROW_H / 2f) * S, 8 * S, Theme.txtDim(), ALIGN_MIDDLE, e.address);
-                    text(vg, (delX + delW / 2f) * S, (yy + ROW_H / 2f) * S, 8.5f * S, Theme.txtDim(), ALIGN_CENTER_MIDDLE, "✕");
-                    hits.add(new Object[]{"connect", rowX, yy, rowW - delW - 6, ROW_H, i});
-                    hits.add(new Object[]{"delete", delX, yy, delW, ROW_H, i});
-                    yy += ROW_H + ROW_GAP;
-                }
+            int yy = y + ry;
+            for (int i = 0; i < list.size(); i++) {
+                FastConnect.Entry e = list.get(i);
+                int delW = 16, delX = rowX + rowW - delW - 4;
+                float[] rh = animFor("row:" + i);
+                rh[0] = approach(rh[0], inside(mouseX, mouseY, rowX, yy, rowW, ROW_H) ? 1f : 0f, 14f, dt);
+                RenderUtil.roundedRect(ctx, rowX, yy, rowW, ROW_H, 7, fade(Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), rh[0]), p));
+                RenderUtil.textVCentered(ctx, tr, e.name, rowX + 10, yy, ROW_H, fade(Theme.txt(), p), 0.5f);
+                RenderUtil.textVCentered(ctx, tr, e.address, rowX + rowW - 40, yy, ROW_H, fade(Theme.txtDim(), p), 0.44f);
+                RenderUtil.textCentered(ctx, tr, "✕", delX, yy, delW, ROW_H, fade(Theme.txtDim(), p), 0.47f);
+                hits.add(new Object[]{"connect", rowX, yy, rowW - delW - 6, ROW_H, i});
+                hits.add(new Object[]{"delete", delX, yy, delW, ROW_H, i});
+                yy += ROW_H + ROW_GAP;
+            }
 
-                if (!formOpen) {
-                    float[] ah = animFor("addRow");
-                    ah[0] = approach(ah[0], inside(mx, my, rowX * S, yy * S, rowW * S, ROW_H * S) ? 1f : 0f, 14f, dt);
-                    roundedRect(vg, rowX * S, yy * S, rowW * S, ROW_H * S, 7 * S, Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), ah[0]));
-                    text(vg, (rowX + rowW / 2f) * S, (yy + ROW_H / 2f) * S, 9 * S, Theme.accent(), ALIGN_CENTER_MIDDLE, "+ " + com.lume.client.Lang.tUI("Add server"));
-                    hits.add(new Object[]{"openForm", rowX, yy, rowW, ROW_H});
-                    yy += ROW_H + ROW_GAP;
-                } else {
-                    fieldNvg(vg, "name", rowX, yy, rowW, 20, "server name", S);
-                    yy += 23;
-                    fieldNvg(vg, "addr", rowX, yy, rowW, 20, "ip:port", S);
-                    yy += 26;
-                    int halfW = (rowW - 6) / 2;
-                    roundedRect(vg, rowX * S, yy * S, halfW * S, 22 * S, 7 * S, Theme.accent());
-                    text(vg, (rowX + halfW / 2f) * S, (yy + 11) * S, 8.5f * S, Theme.activeText(), ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Add"));
-                    roundedRect(vg, (rowX + halfW + 6) * S, yy * S, halfW * S, 22 * S, 7 * S, Theme.glassRow());
-                    text(vg, (rowX + halfW + 6 + halfW / 2f) * S, (yy + 11) * S, 8.5f * S, Theme.txt(), ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Cancel"));
-                    hits.add(new Object[]{"saveForm", rowX, yy, halfW, 22});
-                    hits.add(new Object[]{"cancelForm", rowX + halfW + 6, yy, halfW, 22});
-                    yy += 22 + ROW_GAP;
-                }
+            if (!formOpen) {
+                float[] ah = animFor("addRow");
+                ah[0] = approach(ah[0], inside(mouseX, mouseY, rowX, yy, rowW, ROW_H) ? 1f : 0f, 14f, dt);
+                RenderUtil.roundedRect(ctx, rowX, yy, rowW, ROW_H, 7, fade(Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), ah[0]), p));
+                RenderUtil.textCentered(ctx, tr, "+ " + com.lume.client.Lang.tUI("Add server"), rowX, yy, rowW, ROW_H, fade(Theme.accent(), p), 0.5f);
+                hits.add(new Object[]{"openForm", rowX, yy, rowW, ROW_H});
+                yy += ROW_H + ROW_GAP;
+            } else {
+                fieldVanilla(ctx, tr, "name", rowX, yy, rowW, 20, "server name", p);
+                yy += 23;
+                fieldVanilla(ctx, tr, "addr", rowX, yy, rowW, 20, "ip:port", p);
+                yy += 26;
+                int halfW = (rowW - 6) / 2;
+                RenderUtil.roundedRect(ctx, rowX, yy, halfW, 22, 7, fade(Theme.accent(), p));
+                RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Add"), rowX, yy, halfW, 22, fade(Theme.activeText(), p), 0.47f);
+                RenderUtil.roundedRect(ctx, rowX + halfW + 6, yy, halfW, 22, 7, fade(Theme.glassRow(), p));
+                RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Cancel"), rowX + halfW + 6, yy, halfW, 22, fade(Theme.txt(), p), 0.47f);
+                hits.add(new Object[]{"saveForm", rowX, yy, halfW, 22});
+                hits.add(new Object[]{"cancelForm", rowX + halfW + 6, yy, halfW, 22});
+                yy += 22 + ROW_GAP;
+            }
 
-                int homeW = 90, homeH = 26;
-                float homeX = x / S + (WIN_W - homeW) / 2f;
-                roundedRect(vg, homeX * S, yy * S, homeW * S, homeH * S, 8 * S, Theme.glassRow());
-                text(vg, (homeX + homeW / 2f) * S, (yy + homeH / 2f) * S, 8.5f * S, Theme.txt(), ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Home"));
-                hits.add(new Object[]{"home", (int) homeX, yy, homeW, homeH});
-
-                restore(vg);
-            });
+            int homeW = 90, homeH = 26;
+            int homeX = x + (WIN_W - homeW) / 2;
+            RenderUtil.roundedRect(ctx, homeX, yy, homeW, homeH, 8, fade(Theme.glassRow(), p));
+            RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Home"), homeX, yy, homeW, homeH, fade(Theme.txt(), p), 0.47f);
+            hits.add(new Object[]{"home", homeX, yy, homeW, homeH});
         } catch (Throwable t) {
             System.out.println("[Lume] FastConnectScreen render failed: " + t);
         }
         if (p < 1f) com.lume.client.nanovg.GlassRenderer.transitionOverlay(x, y, W, H, (1f - p) * 0.8f, 1f - p);
+    }
+
+    /** Multiplies an ARGB color's alpha by {@code p} — the DrawContext equivalent of NanoVG's
+     *  {@code globalAlpha}, which has no per-call analogue here so each draw bakes it in. */
+    private static int fade(int argb, float p) {
+        int a = Math.round(((argb >>> 24) & 0xFF) * p);
+        return (a << 24) | (argb & 0xFFFFFF);
     }
 
     private float openAnim() {
@@ -148,14 +141,14 @@ public class FastConnectScreen extends Screen {
 
     private String textFor(String id) { return "name".equals(id) ? fcName : fcAddr; }
 
-    private void fieldNvg(long vg, String id, int x, int y, int w, int h, String placeholder, int S) {
+    private void fieldVanilla(DrawContext ctx, TextRenderer tr, String id, int x, int y, int w, int h, String placeholder, float p) {
         boolean foc = id.equals(focused);
         String txt = textFor(id);
         String show = txt.isEmpty() && !foc ? placeholder : txt + (foc ? "_" : "");
         int color = txt.isEmpty() && !foc ? Theme.txtDim() : Theme.txt();
-        roundedRect(vg, x * S, y * S, w * S, h * S, 5 * S, foc ? Theme.glassHov() : Theme.glassRow());
-        if (foc) roundedRect(vg, x * S, (y + h - 1) * S, w * S, S, 1, Theme.accent());
-        text(vg, (x + 6) * S, (y + h / 2f) * S, 8 * S, color, ALIGN_MIDDLE, show);
+        RenderUtil.roundedRect(ctx, x, y, w, h, 5, fade(foc ? Theme.glassHov() : Theme.glassRow(), p));
+        if (foc) RenderUtil.roundedRect(ctx, x, y + h - 1, w, 1, 1, fade(Theme.accent(), p));
+        RenderUtil.textVCentered(ctx, tr, show, x + 6, y, h, fade(color, p), 0.44f);
         hits.add(new Object[]{"field:" + id, x, y, w, h});
     }
 

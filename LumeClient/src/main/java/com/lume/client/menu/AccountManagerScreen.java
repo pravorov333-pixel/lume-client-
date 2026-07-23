@@ -1,9 +1,9 @@
 package com.lume.client.menu;
 
 import com.lume.client.Config;
+import com.lume.client.gui.RenderUtil;
 import com.lume.client.gui.Theme;
 import com.lume.client.module.modules.cosmetic.CustomMenu;
-import com.lume.client.nanovg.NanoVgRenderer;
 import com.lume.client.util.AltService;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
@@ -20,8 +20,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-
-import static com.lume.client.nanovg.NanoVgRenderer.*;
 
 /**
  * Full-page Accounts manager (fills the whole screen, no floating bordered window — matches the
@@ -92,19 +90,15 @@ public class AccountManagerScreen extends Screen {
         // own background), so it's applied directly here instead.
         this.renderBackground(ctx, mouseX, mouseY, delta);
         CustomMenu.drawDimOverlay(ctx, width, height);
-        NanoVgRenderer.ensureInit();
-        if (!NanoVgRenderer.ready()) return;
         long now = System.currentTimeMillis();
         float dt = Math.min(0.05f, (now - lastFrame) / 1000f);
         lastFrame = now;
         hits.clear();
 
-        int S = sf();
         List<String> accounts = Config.savedAccounts;
         int rows = (accounts.size() + COLS - 1) / COLS;
         int gridW = COLS * CARD_W + (COLS - 1) * CARD_GAP_X;
         int gridH = Math.max(1, rows) * CARD_H + Math.max(0, rows - 1) * CARD_GAP_Y;
-        int mx = mouseX * S, my = mouseY * S;
         float p = openAnim();
 
         int gridX = (width - gridW) / 2;
@@ -123,75 +117,74 @@ public class AccountManagerScreen extends Screen {
         int homeY = (editing != null ? serverY + fieldH : fy + fieldH) + 20;
         int homeX = (width - homeW) / 2;
 
-        // Pass 1: card backgrounds + real player-head icons — DrawContext (a real GL skin
-        // texture can't be sampled from inside a raw NanoVG paint call), flushed before the
-        // NanoVG frame below draws text on TOP of this same footprint.
-        for (Card c : cards) {
-            boolean hov = mx >= c.x() * S && mx <= (c.x() + CARD_W) * S && my >= c.y() * S && my <= (c.y() + CARD_H) * S;
-            float[] st = animFor("card:" + c.name());
-            st[0] = approach(st[0], hov ? 1f : 0f, 14f, dt);
-            if (!MenuAssets.blit(ctx, MenuAssets.ACCOUNT, c.x(), c.y(), CARD_W, CARD_H)) {
-                int bg = c.active() ? withAlpha(Theme.accentRgb(), 0x33) : Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), st[0]);
-                com.lume.client.gui.RenderUtil.roundedRect(ctx, c.x(), c.y(), CARD_W, CARD_H, 0, bg);
-            } else if (st[0] > 0.02f || c.active()) {
-                int tint = c.active() ? withAlpha(Theme.accentRgb(), 0x33) : (Math.round(st[0] * 44) << 24) | 0xFFFFFF;
-                com.lume.client.gui.RenderUtil.roundedRect(ctx, c.x(), c.y(), CARD_W, CARD_H, 0, tint);
-            }
-
-            var session = MinecraftClient.getInstance().getSession();
-            boolean isActiveSession = session != null && c.name().equals(session.getUsername());
-            SkinTextures skin = isActiveSession && MinecraftClient.getInstance().player != null
-                    ? MinecraftClient.getInstance().player.getSkinTextures()
-                    : DefaultSkinHelper.getSkinTextures(offlineUuid(c.name()));
-            int hs = CARD_H - 8;
-            net.minecraft.client.gui.PlayerSkinDrawer.draw(ctx, skin, c.x() + 4, c.y() + 4, hs);
-
-            drawPencilIcon(ctx, c.x() + CARD_W - 30, c.y() + CARD_H / 2, 4);
-        }
-
         try {
-            ctx.draw();
-            NanoVgRenderer.frame(vg -> {
-                save(vg);
-                globalAlpha(vg, p);
+            var tr = MinecraftClient.getInstance().textRenderer;
 
-                drawPeopleIcon(vg, width / 2f * S, 30 * S, 8 * S);
-                text(vg, width / 2f * S, 50 * S, 12 * S, Theme.txt(), ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Accounts"));
-                text(vg, width / 2f * S, 63 * S, 8 * S, Theme.txtDim(), ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Create or select an existing account"));
-
-                for (Card c : cards) drawCardText(vg, c, mx, my, S, dt);
-
-                boolean foc = "add".equals(focusedField);
-                roundedRect(vg, formX * S, fy * S, fieldW * S, fieldH * S, 0, foc ? Theme.glassHov() : Theme.glassRow());
-                if (foc) roundedRect(vg, formX * S, (fy + fieldH - 1) * S, fieldW * S, S, 1, Theme.accent());
-                String placeholder = editing != null ? editing : com.lume.client.Lang.tUI("nickname");
-                String show = addName.isEmpty() && !foc ? placeholder : addName + (foc ? "_" : "");
-                text(vg, (formX + 10) * S, (fy + fieldH / 2f) * S, 8.5f * S, addName.isEmpty() && !foc ? Theme.txtDim() : Theme.txt(), ALIGN_MIDDLE, show);
-                int addX = formX + fieldW + 8;
-                roundedRect(vg, addX * S, fy * S, addW * S, fieldH * S, 0, Theme.accent());
-                text(vg, (addX + addW / 2f) * S, (fy + fieldH / 2f) * S, 8.5f * S, Theme.activeText(), ALIGN_CENTER_MIDDLE,
-                        editing != null ? com.lume.client.Lang.tUI("Save") : com.lume.client.Lang.tUI("Create"));
-                hits.add(new Object[]{"field", formX, fy, fieldW, fieldH, null});
-                hits.add(new Object[]{"submit", addX, fy, addW, fieldH, null});
-
-                if (editing != null) {
-                    boolean sFoc = "server".equals(focusedField);
-                    roundedRect(vg, formX * S, serverY * S, (fieldW + addW + 8) * S, fieldH * S, 0, sFoc ? Theme.glassHov() : Theme.glassRow());
-                    if (sFoc) roundedRect(vg, formX * S, (serverY + fieldH - 1) * S, (fieldW + addW + 8) * S, S, 1, Theme.accent());
-                    String sShow = editServer.isEmpty() && !sFoc ? com.lume.client.Lang.tUI("bind to server ip:port (optional)") : editServer + (sFoc ? "_" : "");
-                    text(vg, (formX + 10) * S, (serverY + fieldH / 2f) * S, 8.5f * S, editServer.isEmpty() && !sFoc ? Theme.txtDim() : Theme.txt(), ALIGN_MIDDLE, sShow);
-                    hits.add(new Object[]{"serverField", formX, serverY, fieldW + addW + 8, fieldH, null});
+            // Card backgrounds + real player-head icons + pencil, then name/delete text — all
+            // plain DrawContext now, no separate NanoVG pass needed.
+            for (Card c : cards) {
+                boolean hov = mouseX >= c.x() && mouseX <= c.x() + CARD_W && mouseY >= c.y() && mouseY <= c.y() + CARD_H;
+                float[] st = animFor("card:" + c.name());
+                st[0] = approach(st[0], hov ? 1f : 0f, 14f, dt);
+                if (!MenuAssets.blit(ctx, MenuAssets.ACCOUNT, c.x(), c.y(), CARD_W, CARD_H)) {
+                    int bg = c.active() ? withAlpha(Theme.accentRgb(), 0x33) : Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), st[0]);
+                    RenderUtil.roundedRect(ctx, c.x(), c.y(), CARD_W, CARD_H, 0, fade(bg, p));
+                } else if (st[0] > 0.02f || c.active()) {
+                    int tint = c.active() ? withAlpha(Theme.accentRgb(), 0x33) : (Math.round(st[0] * 44) << 24) | 0xFFFFFF;
+                    RenderUtil.roundedRect(ctx, c.x(), c.y(), CARD_W, CARD_H, 0, fade(tint, p));
                 }
 
-                roundedRect(vg, homeX * S, homeY * S, homeW * S, homeH * S, 0, Theme.glassRow());
-                text(vg, (homeX + homeW / 2f) * S, (homeY + homeH / 2f) * S, 8.5f * S, Theme.txt(), ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Home"));
-                hits.add(new Object[]{"home", homeX, homeY, homeW, homeH, null});
+                var session = MinecraftClient.getInstance().getSession();
+                boolean isActiveSession = session != null && c.name().equals(session.getUsername());
+                SkinTextures skin = isActiveSession && MinecraftClient.getInstance().player != null
+                        ? MinecraftClient.getInstance().player.getSkinTextures()
+                        : DefaultSkinHelper.getSkinTextures(offlineUuid(c.name()));
+                int hs = CARD_H - 8;
+                net.minecraft.client.gui.PlayerSkinDrawer.draw(ctx, skin, c.x() + 4, c.y() + 4, hs);
 
-                restore(vg);
-            });
+                drawPencilIcon(ctx, c.x() + CARD_W - 30, c.y() + CARD_H / 2, 4);
+                drawCardText(ctx, tr, c, p);
+            }
+
+            drawPeopleIcon(ctx, width / 2f, 30, 8);
+            RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Accounts"), 0, 44, width, 12, fade(Theme.txt(), p), 0.67f);
+            RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Create or select an existing account"), 0, 59, width, 8, fade(Theme.txtDim(), p), 0.44f);
+
+            boolean foc = "add".equals(focusedField);
+            RenderUtil.roundedRect(ctx, formX, fy, fieldW, fieldH, 0, fade(foc ? Theme.glassHov() : Theme.glassRow(), p));
+            if (foc) RenderUtil.roundedRect(ctx, formX, fy + fieldH - 1, fieldW, 1, 1, fade(Theme.accent(), p));
+            String placeholder = editing != null ? editing : com.lume.client.Lang.tUI("nickname");
+            String show = addName.isEmpty() && !foc ? placeholder : addName + (foc ? "_" : "");
+            RenderUtil.textVCentered(ctx, tr, show, formX + 10, fy, fieldH, fade(addName.isEmpty() && !foc ? Theme.txtDim() : Theme.txt(), p), 0.47f);
+            int addX = formX + fieldW + 8;
+            RenderUtil.roundedRect(ctx, addX, fy, addW, fieldH, 0, fade(Theme.accent(), p));
+            RenderUtil.textCentered(ctx, tr, editing != null ? com.lume.client.Lang.tUI("Save") : com.lume.client.Lang.tUI("Create"),
+                    addX, fy, addW, fieldH, fade(Theme.activeText(), p), 0.47f);
+            hits.add(new Object[]{"field", formX, fy, fieldW, fieldH, null});
+            hits.add(new Object[]{"submit", addX, fy, addW, fieldH, null});
+
+            if (editing != null) {
+                boolean sFoc = "server".equals(focusedField);
+                RenderUtil.roundedRect(ctx, formX, serverY, fieldW + addW + 8, fieldH, 0, fade(sFoc ? Theme.glassHov() : Theme.glassRow(), p));
+                if (sFoc) RenderUtil.roundedRect(ctx, formX, serverY + fieldH - 1, fieldW + addW + 8, 1, 1, fade(Theme.accent(), p));
+                String sShow = editServer.isEmpty() && !sFoc ? com.lume.client.Lang.tUI("bind to server ip:port (optional)") : editServer + (sFoc ? "_" : "");
+                RenderUtil.textVCentered(ctx, tr, sShow, formX + 10, serverY, fieldH, fade(editServer.isEmpty() && !sFoc ? Theme.txtDim() : Theme.txt(), p), 0.47f);
+                hits.add(new Object[]{"serverField", formX, serverY, fieldW + addW + 8, fieldH, null});
+            }
+
+            RenderUtil.roundedRect(ctx, homeX, homeY, homeW, homeH, 0, fade(Theme.glassRow(), p));
+            RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Home"), homeX, homeY, homeW, homeH, fade(Theme.txt(), p), 0.47f);
+            hits.add(new Object[]{"home", homeX, homeY, homeW, homeH, null});
         } catch (Throwable t) {
             System.out.println("[Lume] AccountManagerScreen render failed: " + t);
         }
+    }
+
+    /** Multiplies an ARGB color's alpha by {@code p} — the DrawContext equivalent of NanoVG's
+     *  {@code globalAlpha}, which has no per-call analogue here so each draw bakes it in. */
+    private static int fade(int argb, float p) {
+        int a = Math.round(((argb >>> 24) & 0xFF) * p);
+        return (a << 24) | (argb & 0xFFFFFF);
     }
 
     private float openAnim() {
@@ -201,16 +194,17 @@ public class AccountManagerScreen extends Screen {
         return 1f - (1f - pr) * (1f - pr);
     }
 
-    /** Name text + delete ✕ (the card background/head/pencil icon were already drawn via
-     *  DrawContext in the pass before this NanoVG frame started — see {@link #render}). A small
-     *  server-link glyph shows under the name when this account has a bound server. */
-    private void drawCardText(long vg, Card c, int mx, int my, int S, float dt) {
+    /** Name text + delete ✕ (the card background/head/pencil icon were already drawn just before
+     *  this call — see {@link #render}). A small server-link glyph shows under the name when
+     *  this account has a bound server. */
+    private void drawCardText(DrawContext ctx, net.minecraft.client.font.TextRenderer tr, Card c, float p) {
         int textX = c.x() + CARD_H;
         String bound = Config.accountServers.get(c.name());
-        text(vg, textX * S, (c.y() + (bound != null ? CARD_H / 2f - 6 : CARD_H / 2f)) * S, 8.5f * S, c.active() ? Theme.accent() : Theme.txt(), ALIGN_MIDDLE, c.name());
-        if (bound != null) text(vg, textX * S, (c.y() + CARD_H / 2f + 6) * S, 6.5f * S, Theme.txtDim(), ALIGN_MIDDLE, "→ " + bound);
+        int nameY = bound != null ? c.y() + CARD_H / 2 - 6 : c.y() + CARD_H / 2;
+        RenderUtil.text(ctx, tr, c.name(), textX, nameY - 3, fade(c.active() ? Theme.accent() : Theme.txt(), p), false, 0.47f);
+        if (bound != null) RenderUtil.text(ctx, tr, "→ " + bound, textX, c.y() + CARD_H / 2 + 3, fade(Theme.txtDim(), p), false, 0.36f);
         int delW = 16, delX = c.x() + CARD_W - delW - 4;
-        text(vg, (delX + delW / 2f) * S, (c.y() + CARD_H / 2f) * S, 8.5f * S, Theme.txtDim(), ALIGN_CENTER_MIDDLE, "✕");
+        RenderUtil.textCentered(ctx, tr, "✕", delX, c.y(), delW, CARD_H, fade(Theme.txtDim(), p), 0.47f);
         hits.add(new Object[]{"select", c.x(), c.y(), CARD_W - 46, CARD_H, c.name()});
         hits.add(new Object[]{"edit", c.x() + CARD_W - 34, c.y(), 16, CARD_H, c.name()});
         hits.add(new Object[]{"delete", delX, c.y(), delW, CARD_H, c.name()});
@@ -228,10 +222,13 @@ public class AccountManagerScreen extends Screen {
         ms.pop();
     }
 
-    /** Two overlapping head-ish circles — the "Accounts" header glyph from the reference. */
-    private void drawPeopleIcon(long vg, float cx, float cy, float r) {
-        circle(vg, cx - r * 0.35f, cy, r * 0.55f, Theme.txtDim());
-        circle(vg, cx + r * 0.35f, cy, r * 0.55f, Theme.txt());
+    /** Two overlapping head-ish circles — the "Accounts" header glyph from the reference. Drawn
+     *  as small rounded squares (DrawContext has no circle primitive) — indistinguishable from a
+     *  circle at this icon size. */
+    private void drawPeopleIcon(DrawContext ctx, float cx, float cy, float r) {
+        int d = Math.round(r * 1.1f);
+        RenderUtil.roundedRect(ctx, Math.round(cx - r * 0.35f - d / 2f), Math.round(cy - d / 2f), d, d, d / 2, Theme.txtDim());
+        RenderUtil.roundedRect(ctx, Math.round(cx + r * 0.35f - d / 2f), Math.round(cy - d / 2f), d, d, d / 2, Theme.txt());
     }
 
     private final Map<String, float[]> anim = new HashMap<>();

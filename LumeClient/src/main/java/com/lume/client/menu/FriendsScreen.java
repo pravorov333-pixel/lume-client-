@@ -1,9 +1,11 @@
 package com.lume.client.menu;
 
+import com.lume.client.gui.RenderUtil;
 import com.lume.client.gui.Theme;
 import com.lume.client.module.modules.cosmetic.CustomMenu;
-import com.lume.client.nanovg.NanoVgRenderer;
 import com.lume.client.social.Friends;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.TitleScreen;
@@ -14,8 +16,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-
-import static com.lume.client.nanovg.NanoVgRenderer.*;
 
 /** Full-page Friends list — a real screen (not the small corner dropdown), same
  *  friend-list/add/connect/delete data and actions Friends always had. */
@@ -40,86 +40,80 @@ public class FriendsScreen extends Screen {
     @Override public boolean shouldPause() { return false; }
 
     private int sf() { return (int) Math.max(1, client.getWindow().getScaleFactor()); }
-    private static int withAlpha(int rgb, int alpha) { return (alpha << 24) | (rgb & 0xFFFFFF); }
     private final Map<String, float[]> anim = new HashMap<>();
     private float[] animFor(String id) { return anim.computeIfAbsent(id, k -> new float[1]); }
     private static float approach(float cur, float target, float rate, float dt) { return cur + (target - cur) * Math.min(1f, rate * dt); }
     private static boolean inside(double mx, double my, int x, int y, int w, int h) { return mx >= x && mx <= x + w && my >= y && my <= y + h; }
 
+    /** Multiplies an ARGB color's alpha by {@code p} — the DrawContext equivalent of NanoVG's
+     *  {@code globalAlpha}, which has no per-call analogue here so each draw bakes it in. */
+    private static int fade(int argb, float p) {
+        int a = Math.round(((argb >>> 24) & 0xFF) * p);
+        return (a << 24) | (argb & 0xFFFFFF);
+    }
+
     @Override
     public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
         this.renderBackground(ctx, mouseX, mouseY, delta);
         CustomMenu.drawDimOverlay(ctx, width, height);
-        NanoVgRenderer.ensureInit();
-        if (!NanoVgRenderer.ready()) return;
         long now = System.currentTimeMillis();
         float dt = Math.min(0.05f, (now - lastFrame) / 1000f);
         lastFrame = now;
         hits.clear();
 
-        int S = sf();
         List<String> friends = new ArrayList<>(Friends.friendList);
         friends.sort((a, b) -> Boolean.compare(Friends.isOnline(b), Friends.isOnline(a)));   // online first
 
         int rowsH = friends.size() * (ROW_H + ROW_GAP);
         int fieldH = 26;
         int winH = 50 + rowsH + fieldH + 16 + 16 + 26;
-        int sw = width * S, sh = height * S;
-        int W = WIN_W * S, H = winH * S;
-        int x = (sw - W) / 2, y = (sh - H) / 2;
-        int mx = mouseX * S, my = mouseY * S;
+        int W = WIN_W, H = winH;
+        int x = (width - W) / 2, y = (height - H) / 2;
         float p = openAnim();
-        int r = 14 * S;
+        int r = 14;
 
-        int rowX = x / S + 14, rowW = WIN_W - 28;
+        int rowX = x + 14, rowW = WIN_W - 28;
 
         try {
-            ctx.draw();
-            NanoVgRenderer.frame(vg -> {
-                save(vg);
-                globalAlpha(vg, p);
-                shadow(vg, x, y, W, H, r, 22 * S, 0x70000000);
-                shadow(vg, x, y, W, H, r, 30 * S, withAlpha(Theme.accentRgb(), 0x33));
-                gradientRoundedRect(vg, x, y, W, H, r, Theme.winTop(), Theme.winBot());
-                strokeRoundedRect(vg, x + 0.5f * S, y + 0.5f * S, W - S, H - S, r, S, Theme.rim());
-                text(vg, x + W / 2f, y + 22 * S, 11 * S, Theme.txt(), ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Friends"));
+            TextRenderer tr = MinecraftClient.getInstance().textRenderer;
+            RenderUtil.glow(ctx, x, y, W, H, r, 0x000000, 3);
+            RenderUtil.gradientRoundedRect(ctx, x, y, W, H, r, fade(Theme.winTop(), p), fade(Theme.winBot(), p));
+            RenderUtil.strokeRoundedRect(ctx, x, y, W, H, r, 1, fade(Theme.rim(), p));
+            RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Friends"), x, y + 12, W, 20, fade(Theme.txt(), p), 0.6f);
 
-                int yy = (int) (y / S) + 40;
-                for (String name : friends) {
-                    boolean online = Friends.isOnline(name);
-                    int delW = 16, delX = rowX + rowW - delW - 4;
-                    float[] rh = animFor("row:" + name);
-                    rh[0] = approach(rh[0], inside(mx, my, rowX * S, yy * S, rowW * S, ROW_H * S) ? 1f : 0f, 14f, dt);
-                    roundedRect(vg, rowX * S, yy * S, rowW * S, ROW_H * S, 7 * S, Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), rh[0]));
-                    circle(vg, (rowX + 10) * S, (yy + ROW_H / 2f) * S, 2.5f * S, online ? 0xFF6FCF7F : Theme.txtDim());
-                    text(vg, (rowX + 18) * S, (yy + ROW_H / 2f) * S, 9 * S, Theme.txt(), ALIGN_MIDDLE, name);
-                    text(vg, (delX + delW / 2f) * S, (yy + ROW_H / 2f) * S, 8.5f * S, Theme.txtDim(), ALIGN_CENTER_MIDDLE, "✕");
-                    hits.add(new Object[]{"friendConnect", rowX, yy, rowW - delW - 6, ROW_H, name});
-                    hits.add(new Object[]{"friendDelete", delX, yy, delW, ROW_H, name});
-                    yy += ROW_H + ROW_GAP;
-                }
+            int yy = y + 40;
+            for (String name : friends) {
+                boolean online = Friends.isOnline(name);
+                int delW = 16, delX = rowX + rowW - delW - 4;
+                float[] rh = animFor("row:" + name);
+                rh[0] = approach(rh[0], inside(mouseX, mouseY, rowX, yy, rowW, ROW_H) ? 1f : 0f, 14f, dt);
+                RenderUtil.roundedRect(ctx, rowX, yy, rowW, ROW_H, 7, fade(Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), rh[0]), p));
+                RenderUtil.roundedRect(ctx, rowX + 7, yy + ROW_H / 2 - 3, 5, 5, 3, fade(online ? 0xFF6FCF7F : Theme.txtDim(), p));
+                RenderUtil.textVCentered(ctx, tr, name, rowX + 18, yy, ROW_H, fade(Theme.txt(), p), 0.5f);
+                RenderUtil.textCentered(ctx, tr, "✕", delX, yy, delW, ROW_H, fade(Theme.txtDim(), p), 0.47f);
+                hits.add(new Object[]{"friendConnect", rowX, yy, rowW - delW - 6, ROW_H, name});
+                hits.add(new Object[]{"friendDelete", delX, yy, delW, ROW_H, name});
+                yy += ROW_H + ROW_GAP;
+            }
 
-                boolean foc = "add".equals(focused);
-                int addW = 70, fieldW = rowW - addW - 6;
-                roundedRect(vg, rowX * S, yy * S, fieldW * S, fieldH * S, 7 * S, foc ? Theme.glassHov() : Theme.glassRow());
-                if (foc) roundedRect(vg, rowX * S, (yy + fieldH - 1) * S, fieldW * S, S, 1, Theme.accent());
-                String show = friendAddName.isEmpty() && !foc ? com.lume.client.Lang.tUI("friend name") : friendAddName + (foc ? "_" : "");
-                text(vg, (rowX + 8) * S, (yy + fieldH / 2f) * S, 8.5f * S, friendAddName.isEmpty() && !foc ? Theme.txtDim() : Theme.txt(), ALIGN_MIDDLE, show);
-                int addX = rowX + fieldW + 6;
-                roundedRect(vg, addX * S, yy * S, addW * S, fieldH * S, 7 * S, Theme.accent());
-                text(vg, (addX + addW / 2f) * S, (yy + fieldH / 2f) * S, 8.5f * S, Theme.activeText(), ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Add"));
-                hits.add(new Object[]{"field", rowX, yy, fieldW, fieldH});
-                hits.add(new Object[]{"friendAdd", addX, yy, addW, fieldH});
-                yy += fieldH + 16;
+            boolean foc = "add".equals(focused);
+            int addW = 70, fieldW = rowW - addW - 6;
+            RenderUtil.roundedRect(ctx, rowX, yy, fieldW, fieldH, 7, fade(foc ? Theme.glassHov() : Theme.glassRow(), p));
+            if (foc) RenderUtil.roundedRect(ctx, rowX, yy + fieldH - 1, fieldW, 1, 1, fade(Theme.accent(), p));
+            String show = friendAddName.isEmpty() && !foc ? com.lume.client.Lang.tUI("friend name") : friendAddName + (foc ? "_" : "");
+            RenderUtil.textVCentered(ctx, tr, show, rowX + 8, yy, fieldH, fade(friendAddName.isEmpty() && !foc ? Theme.txtDim() : Theme.txt(), p), 0.47f);
+            int addX = rowX + fieldW + 6;
+            RenderUtil.roundedRect(ctx, addX, yy, addW, fieldH, 7, fade(Theme.accent(), p));
+            RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Add"), addX, yy, addW, fieldH, fade(Theme.activeText(), p), 0.47f);
+            hits.add(new Object[]{"field", rowX, yy, fieldW, fieldH});
+            hits.add(new Object[]{"friendAdd", addX, yy, addW, fieldH});
+            yy += fieldH + 16;
 
-                int homeW = 90, homeH = 26;
-                float homeX = x / S + (WIN_W - homeW) / 2f;
-                roundedRect(vg, homeX * S, yy * S, homeW * S, homeH * S, 8 * S, Theme.glassRow());
-                text(vg, (homeX + homeW / 2f) * S, (yy + homeH / 2f) * S, 8.5f * S, Theme.txt(), ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Home"));
-                hits.add(new Object[]{"home", (int) homeX, yy, homeW, homeH});
-
-                restore(vg);
-            });
+            int homeW = 90, homeH = 26;
+            int homeX = x + (WIN_W - homeW) / 2;
+            RenderUtil.roundedRect(ctx, homeX, yy, homeW, homeH, 8, fade(Theme.glassRow(), p));
+            RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Home"), homeX, yy, homeW, homeH, fade(Theme.txt(), p), 0.47f);
+            hits.add(new Object[]{"home", homeX, yy, homeW, homeH});
         } catch (Throwable t) {
             System.out.println("[Lume] FriendsScreen render failed: " + t);
         }
