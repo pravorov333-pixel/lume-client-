@@ -2128,7 +2128,46 @@ public class ClickGuiScreen extends Screen {
     private int panelHeight(Module m, int S) {
         int h = 4 * S;
         if (m instanceof CustomCrosshair) h += PREVIEW_H * S + 4 * S;
-        for (Setting s : m.getSettings()) { if (!s.hidden) h += settingHeight(s, S); }
+        for (Setting s : m.getSettings()) { if (!s.hidden && !hideCustomHandRightPos(m, s)) h += settingHeight(s, S); }
+        if (m instanceof com.lume.client.module.modules.performance.JvmOptimizer) h += 78 * S;
+        if (m instanceof com.lume.client.module.modules.render.HitSound) {
+            int n = com.lume.client.audio.CustomAudioPlayer.list("hitsound").length;
+            h += 16 * S + 26 * S + Math.max(1, n) * 18 * S;
+        }
+        if (m instanceof com.lume.client.module.modules.render.WorldParticles wp && wp.useMyParticle.value) {
+            int n = com.lume.client.fx.ParticleTexture.list(com.lume.client.module.modules.render.WorldParticles.FOLDER).length;
+            h += 16 * S + 26 * S + Math.max(1, n) * 18 * S;
+        }
+        if (m instanceof com.lume.client.module.modules.render.HitParticles hpz && hpz.useMyParticle.value) {
+            int n = com.lume.client.fx.ParticleTexture.list(com.lume.client.module.modules.render.HitParticles.FOLDER).length;
+            h += 16 * S + 26 * S + Math.max(1, n) * 18 * S;
+        }
+        if (m instanceof com.lume.client.module.modules.visual.Hud) h += 26 * S;
+        if (m instanceof com.lume.client.module.modules.render.CustomHand ch) {
+            h += 20 * S + 4 * S;   // hand tabs
+            h += 15 * S + 4 * S;   // Idle/Sprint Sway toggle
+            boolean showStyle = ch.hand.index == 0;
+            h += (showStyle ? 2 : 1) * (15 * S + 4 * S);   // Style (right hand only) + Animation (always)
+            if (showStyle && ch.style.index == com.lume.client.module.modules.render.CustomHand.STYLE_CUSTOM) {
+                h += 3 * (15 * S + 4 * S);   // Custom Rot X/Y/Z sliders
+                h += handPresetsHeight(S);   // saved-preset rows + name field + Save button
+            }
+            if (ch.animation.index == com.lume.client.module.modules.render.CustomHand.ANIM_SIMPLE
+                    || ch.animation.index == com.lume.client.module.modules.render.CustomHand.ANIM_TILT)
+                h += 15 * S + 4 * S;   // Swing Angle slider
+            if (ch.animation.index == com.lume.client.module.modules.render.CustomHand.ANIM_SIMPLE)
+                h += 15 * S + 4 * S;   // Pivot slider
+            h += 2 * (15 * S + 4 * S);   // Outline toggle + Fill mode
+            if (ch.outline.value)
+                h += 15 * S + (ch.outlineColor == openColor ? PAL_H * S : 0) + 4 * S;   // Outline colour
+            if (ch.fill.index != 0)
+                h += 15 * S + 4 * S;   // Fill Opacity slider
+            if (ch.fill.index == 1)
+                h += 15 * S + (ch.fillColor == openColor ? PAL_H * S : 0) + 4 * S;      // Fill colour
+            h += 15 * S + 4 * S;   // copy-pose text row
+            h += 22 * S + 4 * S;   // paste button
+            h += 26 * S;           // reset button
+        }
         if (m instanceof Waypoints) h += wpManagerHeight(S);
         if (m instanceof ServerHelper) h += (EventManager.rules.size() + 1) * 12 * S + 6 * S;
         if (m instanceof com.lume.client.module.modules.qol.KeybindManager) h += 2 * (22 * S + 4 * S);
@@ -2155,7 +2194,7 @@ public class ClickGuiScreen extends Screen {
         }
 
         for (Setting s : m.getSettings()) {
-            if (s.hidden) continue;
+            if (s.hidden || hideCustomHandRightPos(m, s)) continue;
             int h = settingHeight(s, S);
             if (s instanceof BoolSetting bs) renderBool(ctx, bs, sx, yy, swid, h, S);
             else if (s instanceof SliderSetting ss) renderSlider(ctx, ss, sx, yy, swid, h, S);
@@ -2164,9 +2203,223 @@ public class ClickGuiScreen extends Screen {
             else if (s instanceof ColorSetting cs) renderColor(ctx, cs, sx, yy, swid, S, mx, my, dt);
             yy += h;
         }
+        if (m instanceof com.lume.client.module.modules.performance.JvmOptimizer) {
+            renderJvmInfo(ctx, sx, yy + 4 * S, swid, S);
+        }
+        if (m instanceof com.lume.client.module.modules.render.HitSound hs2) {
+            RenderUtil.textVCentered(ctx, this.textRenderer, com.lume.client.Lang.tUI("My Sounds"), sx, yy, 16 * S, Theme.txtDim(), 0.5f * S);
+            yy += 16 * S;
+            int bh = 22 * S;
+            RenderUtil.roundedRect(ctx, sx, yy, swid, bh, 8 * S, Theme.glassHov());
+            RenderUtil.strokeRoundedRect(ctx, sx, yy, swid, bh, 8 * S, Math.max(1, S), Theme.rim());
+            RenderUtil.textCentered(ctx, this.textRenderer, com.lume.client.Lang.tUI("Open Sounds Folder"), sx, yy, swid, bh, Theme.txt(), 0.53f * S);
+            SHit fh = new SHit(); fh.s = null; fh.kind = 9; fh.x = sx; fh.y = yy; fh.w = swid; fh.h = bh; sHits.add(fh);
+            yy += bh + 4 * S;
+
+            java.io.File[] files = com.lume.client.audio.CustomAudioPlayer.list("hitsound");
+            if (files.length == 0) {
+                RenderUtil.textVCentered(ctx, this.textRenderer, com.lume.client.Lang.tUI("No files yet — drop an .ogg above"), sx, yy, 18 * S, Theme.txtDim(), 0.47f * S);
+                yy += 18 * S;
+            } else {
+                for (java.io.File f : files) {
+                    boolean sel = f.getName().equals(hs2.selectedFile) || (hs2.selectedFile == null && f == files[0]);
+                    int rh = 16 * S;
+                    RenderUtil.roundedRect(ctx, sx, yy, swid, rh, 5 * S, sel ? withAlpha(Theme.accentRgb(), 0x44) : Theme.glassRow());
+                    RenderUtil.textVCentered(ctx, this.textRenderer, f.getName(), sx + 8 * S, yy, rh, sel ? Theme.accent() : Theme.txt(), 0.47f * S);
+                    SHit rhit = new SHit(); rhit.s = null; rhit.kind = 11; rhit.tag = f.getName();
+                    rhit.x = sx; rhit.y = yy; rhit.w = swid; rhit.h = rh; sHits.add(rhit);
+                    yy += rh + 2 * S;
+                }
+            }
+        }
+        if (m instanceof com.lume.client.module.modules.render.WorldParticles wp2 && wp2.useMyParticle.value) {
+            yy = renderParticlePicker(ctx, com.lume.client.module.modules.render.WorldParticles.FOLDER, "world", wp2.selectedFile, sx, yy, swid, S);
+        }
+        if (m instanceof com.lume.client.module.modules.render.HitParticles hp2 && hp2.useMyParticle.value) {
+            yy = renderParticlePicker(ctx, com.lume.client.module.modules.render.HitParticles.FOLDER, "hit", hp2.selectedFile, sx, yy, swid, S);
+        }
+        if (m instanceof com.lume.client.module.modules.visual.Hud) {
+            int bh = 22 * S;
+            RenderUtil.roundedRect(ctx, sx, yy, swid, bh, 8 * S, withAlpha(0xFFE05656, 0x33));
+            RenderUtil.strokeRoundedRect(ctx, sx, yy, swid, bh, 8 * S, Math.max(1, S), withAlpha(0xFFE05656, 0x66));
+            RenderUtil.textCentered(ctx, this.textRenderer, com.lume.client.Lang.tUI("Reset all HUD elements"), sx, yy, swid, bh, 0xFFE05656, 0.53f * S);
+            SHit rh = new SHit(); rh.s = null; rh.kind = 10; rh.x = sx; rh.y = yy; rh.w = swid; rh.h = bh; sHits.add(rh);
+            yy += bh;
+        }
+        if (m instanceof com.lume.client.module.modules.render.CustomHand ch) {
+            // --- hand tabs: Right | Left ---
+            int tabH = 20 * S, tabGap = 4 * S;
+            int tabW = (swid - tabGap) / 2;
+            String[] tabNames = { com.lume.client.Lang.tUI("Right"), com.lume.client.Lang.tUI("Left") };
+            for (int i = 0; i < 2; i++) {
+                int tx = sx + i * (tabW + tabGap);
+                boolean sel = ch.hand.index == i;
+                RenderUtil.roundedRect(ctx, tx, yy, tabW, tabH, 7 * S, sel ? Theme.accent() : Theme.glassRow());
+                RenderUtil.textCentered(ctx, this.textRenderer, tabNames[i], tx, yy, tabW, tabH, sel ? Theme.activeText() : Theme.txtDim(), 0.5f * S);
+                SHit th = new SHit(); th.s = ch.hand; th.kind = 15; th.channel = i; th.x = tx; th.y = yy; th.w = tabW; th.h = tabH; sHits.add(th);
+            }
+            yy += tabH + 4 * S;
+
+            renderBool(ctx, ch.sway, sx, yy, swid, 15 * S, S);
+            yy += 15 * S + 4 * S;
+
+            if (ch.hand.index == 0) {
+                renderMode(ctx, ch.style, sx, yy, swid, 15 * S, S);
+                yy += 15 * S + 4 * S;
+                if (ch.style.index == com.lume.client.module.modules.render.CustomHand.STYLE_CUSTOM) {
+                    renderSlider(ctx, ch.rRotX, sx, yy, swid, 15 * S, S); yy += 15 * S + 4 * S;
+                    renderSlider(ctx, ch.rRotY, sx, yy, swid, 15 * S, S); yy += 15 * S + 4 * S;
+                    renderSlider(ctx, ch.rRotZ, sx, yy, swid, 15 * S, S); yy += 15 * S + 4 * S;
+                    yy = renderHandPresets(ctx, ch, sx, yy, swid, S);
+                }
+            }
+            renderMode(ctx, ch.animation, sx, yy, swid, 15 * S, S);
+            yy += 15 * S + 4 * S;
+            if (ch.animation.index == com.lume.client.module.modules.render.CustomHand.ANIM_SIMPLE
+                    || ch.animation.index == com.lume.client.module.modules.render.CustomHand.ANIM_TILT) {
+                renderSlider(ctx, ch.swingAngle, sx, yy, swid, 15 * S, S);
+                yy += 15 * S + 4 * S;
+            }
+            if (ch.animation.index == com.lume.client.module.modules.render.CustomHand.ANIM_SIMPLE) {
+                renderSlider(ctx, ch.swingPivotY, sx, yy, swid, 15 * S, S); yy += 15 * S + 4 * S;
+            }
+
+            renderBool(ctx, ch.outline, sx, yy, swid, 15 * S, S);
+            yy += 15 * S + 4 * S;
+            renderMode(ctx, ch.fill, sx, yy, swid, 15 * S, S);
+            yy += 15 * S + 4 * S;
+            if (ch.outline.value) {
+                renderColor(ctx, ch.outlineColor, sx, yy, swid, S, mx, my, dt);
+                yy += 15 * S + (ch.outlineColor == openColor ? PAL_H * S : 0) + 4 * S;
+            }
+            if (ch.fill.index != 0) {
+                renderSlider(ctx, ch.fillOpacity, sx, yy, swid, 15 * S, S);
+                yy += 15 * S + 4 * S;
+            }
+            if (ch.fill.index == 1) {
+                renderColor(ctx, ch.fillColor, sx, yy, swid, S, mx, my, dt);
+                yy += 15 * S + (ch.fillColor == openColor ? PAL_H * S : 0) + 4 * S;
+            }
+
+            // --- copy current pose as text ---
+            {
+                int copyH = 15 * S;
+                int copyBtnW = 44 * S;
+                int textW = swid - copyBtnW - 4 * S;
+                RenderUtil.roundedRect(ctx, sx, yy, textW, copyH, 6 * S, Theme.glassRow());
+                String exportStr = ch.exportText();
+                RenderUtil.textVCentered(ctx, this.textRenderer, exportStr, sx + 6 * S, yy, copyH, Theme.txtDim(), 0.32f * S);
+                int copyBtnX = sx + textW + 4 * S;
+                RenderUtil.roundedRect(ctx, copyBtnX, yy, copyBtnW, copyH, 6 * S, Theme.glassHov());
+                RenderUtil.textCentered(ctx, this.textRenderer, com.lume.client.Lang.tUI("Copy"), copyBtnX, yy, copyBtnW, copyH, Theme.accent(), 0.44f * S);
+                SHit ch19 = new SHit(); ch19.s = null; ch19.kind = 19; ch19.x = copyBtnX; ch19.y = yy; ch19.w = copyBtnW; ch19.h = copyH; sHits.add(ch19);
+                yy += copyH + 4 * S;
+            }
+
+            // --- paste a pose from the clipboard ---
+            {
+                int pasteH = 22 * S;
+                RenderUtil.roundedRect(ctx, sx, yy, swid, pasteH, 8 * S, Theme.glassHov());
+                RenderUtil.strokeRoundedRect(ctx, sx, yy, swid, pasteH, 8 * S, Math.max(1, S), Theme.rim());
+                RenderUtil.textCentered(ctx, this.textRenderer, com.lume.client.Lang.tUI("Paste"), sx, yy, swid, pasteH, Theme.accent(), 0.53f * S);
+                SHit ph20 = new SHit(); ph20.s = null; ph20.kind = 20; ph20.x = sx; ph20.y = yy; ph20.w = swid; ph20.h = pasteH; sHits.add(ph20);
+                yy += pasteH + 4 * S;
+            }
+
+            // --- reset ---
+            int bh = 22 * S;
+            RenderUtil.roundedRect(ctx, sx, yy, swid, bh, 8 * S, withAlpha(0xFFE05656, 0x33));
+            RenderUtil.strokeRoundedRect(ctx, sx, yy, swid, bh, 8 * S, Math.max(1, S), withAlpha(0xFFE05656, 0x66));
+            RenderUtil.textCentered(ctx, this.textRenderer, com.lume.client.Lang.tUI("Reset to default"), sx, yy, swid, bh, 0xFFE05656, 0.53f * S);
+            SHit rh = new SHit(); rh.s = null; rh.kind = 12; rh.x = sx; rh.y = yy; rh.w = swid; rh.h = bh; sHits.add(rh);
+            yy += bh;
+        }
         if (m instanceof Waypoints) renderWaypointManager(ctx, sx, yy + 4 * S, swid, S);
         if (m instanceof ServerHelper) renderEventList(ctx, sx, yy + 4 * S, swid, S);
         if (m instanceof com.lume.client.module.modules.qol.KeybindManager) renderKeybindManagerButtons(ctx, sx, yy, swid, S);
+    }
+
+    /** DrawContext mirror of {@link #renderJvmInfoNvg}. */
+    private void renderJvmInfo(DrawContext ctx, int x, int y, int w, int S) {
+        RenderUtil.roundedRect(ctx, x - 4 * S, y, w + 8 * S, Math.max(1, S), 0, Theme.border());
+        int yy = y + 6 * S;
+
+        String arch = com.lume.client.module.modules.performance.JvmOptimizer.is64bit() ? "64-bit ✓" : "32-bit ✗";
+        String jv = "Java " + com.lume.client.module.modules.performance.JvmOptimizer.javaVersion() + "  ·  " + arch;
+        RenderUtil.vanillaText(ctx, this.textRenderer, jv, x, yy, Theme.txt(), S);
+        yy += 14 * S;
+
+        long used = com.lume.client.module.modules.performance.JvmOptimizer.usedMb();
+        long max = com.lume.client.module.modules.performance.JvmOptimizer.maxMb();
+        RenderUtil.vanillaText(ctx, this.textRenderer, "RAM: " + used + " MB  /  " + max + " MB", x, yy, Theme.txt(), S);
+        yy += 14 * S;
+
+        float frac = max > 0 ? (float) used / max : 0f;
+        int barH = 5 * S;
+        RenderUtil.roundedRect(ctx, x, yy, w, barH, barH / 2, Theme.pillOff());
+        int barCol = frac < 0.6f ? 0xFF6FCF7F : frac < 0.8f ? 0xFFE8C15A : 0xFFE05656;
+        int fw = Math.max(barH, Math.round(w * frac));
+        RenderUtil.roundedRect(ctx, x, yy, fw, barH, barH / 2, barCol);
+        yy += barH + 10 * S;
+
+        RenderUtil.vanillaText(ctx, this.textRenderer, "Флаги JVM (рекомендуемые):", x, yy, Theme.txtDim(), S);
+        yy += 14 * S;
+        RenderUtil.vanillaText(ctx, this.textRenderer, "-Xmx4G -Xms4G -XX:+UseG1GC -XX:+UnlockExperimentalVMOptions", x, yy, Theme.accent(), S);
+        yy += 12 * S;
+        RenderUtil.vanillaText(ctx, this.textRenderer, "-XX:G1NewSizePercent=20 -XX:G1ReservePercent=20 -XX:MaxGCPauseMillis=50", x, yy, Theme.accent(), S);
+    }
+
+    /** DrawContext mirror of {@link #renderParticlePickerNvg}. */
+    private int renderParticlePicker(DrawContext ctx, String folderKey, String tagPrefix, String selectedFile, int sx, int yy, int swid, int S) {
+        RenderUtil.textVCentered(ctx, this.textRenderer, com.lume.client.Lang.tUI("My Particles"), sx, yy, 16 * S, Theme.txtDim(), 0.5f * S);
+        yy += 16 * S;
+        int bh = 22 * S;
+        RenderUtil.roundedRect(ctx, sx, yy, swid, bh, 8 * S, Theme.glassHov());
+        RenderUtil.strokeRoundedRect(ctx, sx, yy, swid, bh, 8 * S, Math.max(1, S), Theme.rim());
+        RenderUtil.textCentered(ctx, this.textRenderer, com.lume.client.Lang.tUI("Open Particles Folder"), sx, yy, swid, bh, Theme.txt(), 0.53f * S);
+        SHit fh = new SHit(); fh.s = null; fh.kind = 16; fh.tag = folderKey; fh.x = sx; fh.y = yy; fh.w = swid; fh.h = bh; sHits.add(fh);
+        yy += bh + 4 * S;
+
+        java.io.File[] files = com.lume.client.fx.ParticleTexture.list(folderKey);
+        if (files.length == 0) {
+            RenderUtil.textVCentered(ctx, this.textRenderer, com.lume.client.Lang.tUI("No files yet — drop a .png above"), sx, yy, 18 * S, Theme.txtDim(), 0.47f * S);
+            yy += 18 * S;
+        } else {
+            for (java.io.File f : files) {
+                boolean sel = f.getName().equals(selectedFile) || (selectedFile == null && f == files[0]);
+                int rh = 16 * S;
+                RenderUtil.roundedRect(ctx, sx, yy, swid, rh, 5 * S, sel ? withAlpha(Theme.accentRgb(), 0x44) : Theme.glassRow());
+                RenderUtil.textVCentered(ctx, this.textRenderer, f.getName(), sx + 8 * S, yy, rh, sel ? Theme.accent() : Theme.txt(), 0.47f * S);
+                SHit rhit = new SHit(); rhit.s = null; rhit.kind = 17; rhit.tag = tagPrefix + ":" + f.getName();
+                rhit.x = sx; rhit.y = yy; rhit.w = swid; rhit.h = rh; sHits.add(rhit);
+                yy += rh + 2 * S;
+            }
+        }
+        return yy;
+    }
+
+    /** DrawContext mirror of {@link #renderHandPresetsNvg}. */
+    private int renderHandPresets(DrawContext ctx, com.lume.client.module.modules.render.CustomHand ch, int sx, int yy, int swid, int S) {
+        RenderUtil.textVCentered(ctx, this.textRenderer, com.lume.client.Lang.tUI("Saved Presets"), sx, yy, 12 * S, Theme.txtDim(), 0.5f * S);
+        yy += 12 * S;
+        for (com.lume.client.module.modules.render.HandPresets.Preset p : com.lume.client.module.modules.render.HandPresets.list) {
+            int rh = 16 * S;
+            RenderUtil.roundedRect(ctx, sx, yy, swid, rh, 5 * S, Theme.glassRow());
+            RenderUtil.textVCentered(ctx, this.textRenderer, p.name, sx + 8 * S, yy, rh, Theme.txt(), 0.47f * S);
+            int dx = sx + swid - 14 * S;
+            RenderUtil.textVCentered(ctx, this.textRenderer, "✕", dx, yy, rh, 0xFFE05656, 0.5f * S);
+            SHit lh = new SHit(); lh.s = null; lh.kind = 23; lh.tag = p.name; lh.x = sx; lh.y = yy; lh.w = swid - 18 * S; lh.h = rh; sHits.add(lh);
+            SHit dh = new SHit(); dh.s = null; dh.kind = 24; dh.tag = p.name; dh.x = dx - 3 * S; dh.y = yy; dh.w = 16 * S; dh.h = rh; sHits.add(dh);
+            yy += rh + 2 * S;
+        }
+        renderString(ctx, ch.presetName, sx, yy, swid, 15 * S, S);
+        yy += 15 * S + 4 * S;
+        int bh = 18 * S;
+        RenderUtil.roundedRect(ctx, sx, yy, swid, bh, 6 * S, Theme.accent());
+        RenderUtil.textCentered(ctx, this.textRenderer, com.lume.client.Lang.tUI("Save current as…"), sx, yy, swid, bh, Theme.activeText(), 0.5f * S);
+        SHit sh = new SHit(); sh.s = null; sh.kind = 25; sh.x = sx; sh.y = yy; sh.w = swid; sh.h = bh; sHits.add(sh);
+        yy += bh + 4 * S;
+        return yy;
     }
 
     /** DrawContext mirror of {@link #renderKeybindManagerButtonsNvg} — including the {@link
