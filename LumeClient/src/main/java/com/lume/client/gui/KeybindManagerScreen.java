@@ -5,7 +5,8 @@ import com.lume.client.command.MacroManager;
 import com.lume.client.fthw.QuickCommands;
 import com.lume.client.module.Module;
 import com.lume.client.module.modules.cosmetic.CustomMenu;
-import com.lume.client.nanovg.NanoVgRenderer;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.text.Text;
@@ -13,8 +14,6 @@ import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.List;
-
-import static com.lume.client.nanovg.NanoVgRenderer.*;
 
 /**
  * Full visual keyboard overview of every keybind in the client — module toggles (bindable
@@ -129,56 +128,51 @@ public class KeybindManagerScreen extends Screen {
         // separate page, not an overlay on top of ClickGUI.
         this.renderBackground(ctx, mouseX, mouseY, delta);
         CustomMenu.drawDimOverlay(ctx, width, height);
-        NanoVgRenderer.ensureInit();
-        if (!NanoVgRenderer.ready()) return;
         long now = System.currentTimeMillis();
         float dt = Math.min(0.05f, (now - lastFrame) / 1000f);
         lastFrame = now;
         keyHits.clear();
 
-        int S = sf();
-        int mx = mouseX * S, my = mouseY * S;
         float p = openAnim();
 
         int exitW = 70, exitH = 24, exitX = 12, exitY = 12;
 
         int kbUnitsW = MAIN_ROWS_W + 1;   // + side column
-        int winW = 32 + kbUnitsW * UNIT, winH = 300;
-        int W = winW * S, H = winH * S;
-        int x = (width * S - W) / 2, y = (height * S - H) / 2;
-        int r = 16 * S;
+        int W = 32 + kbUnitsW * UNIT, H = 300;
+        int x = (width - W) / 2, y = (height - H) / 2;
+        int r = 16;
 
         try {
-            ctx.draw();
-            NanoVgRenderer.frame(vg -> {
-                save(vg);
-                globalAlpha(vg, p);
+            TextRenderer tr = MinecraftClient.getInstance().textRenderer;
 
-                roundedRect(vg, exitX * S, exitY * S, exitW * S, exitH * S, 6 * S, Theme.glassRow());
-                text(vg, (exitX + exitW / 2f) * S, (exitY + exitH / 2f) * S, 8.5f * S, Theme.txt(), ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("← Exit"));
+            RenderUtil.roundedRect(ctx, exitX, exitY, exitW, exitH, 6, fade(Theme.glassRow(), p));
+            RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("← Exit"), exitX, exitY, exitW, exitH, fade(Theme.txt(), p), 0.47f);
 
-                shadow(vg, x, y, W, H, r, 22 * S, 0x70000000);
-                shadow(vg, x, y, W, H, r, 30 * S, withAlpha(Theme.accentRgb(), 0x33));
-                gradientRoundedRect(vg, x, y, W, H, r, Theme.winTop(), Theme.winBot());
-                strokeRoundedRect(vg, x + 0.5f * S, y + 0.5f * S, W - S, H - S, r, S, Theme.rim());
-                text(vg, x + W / 2f, y + 20 * S, 11.5f * S, Theme.txt(), ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Keybind Manager"));
-                text(vg, x + W / 2f, y + 34 * S, 8 * S, Theme.txtDim(), ALIGN_CENTER_MIDDLE,
-                        com.lume.client.Lang.tUI("Lit keys are bound — click to inspect. Click an empty key to bind."));
+            RenderUtil.glow(ctx, x, y, W, H, r, 0x000000, 3);
+            RenderUtil.gradientRoundedRect(ctx, x, y, W, H, r, fade(Theme.winTop(), p), fade(Theme.winBot(), p));
+            RenderUtil.strokeRoundedRect(ctx, x, y, W, H, r, 1, fade(Theme.rim(), p));
+            RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Keybind Manager"), x, y + 10, W, 20, fade(Theme.txt(), p), 0.64f);
+            RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Lit keys are bound — click to inspect. Click an empty key to bind."),
+                    x, y + 30, W, 14, fade(Theme.txtDim(), p), 0.44f);
 
-                int kbX = x + 16 * S, kbY = y + 46 * S;
-                drawKeyboard(vg, kbX, kbY, S, mx, my);
+            int kbX = x + 16, kbY = y + 46;
+            drawKeyboard(ctx, tr, kbX, kbY, mouseX, mouseY, p);
 
-                if (BindPopup.isActive()) {
-                    int akX = 0, akY = 0, akH = 0;
-                    for (Object[] h : keyHits) if (((Key) h[0]).code() == BindPopup.keyCode()) { akX = (int) h[1]; akY = (int) h[2]; akH = (int) h[4]; }
-                    BindPopup.render(vg, akX, akY + akH + 4 * S, width * S, height * S, S, mx, my, dt);
-                }
-
-                restore(vg);
-            });
+            if (BindPopup.isActive()) {
+                int akX = 0, akY = 0, akH = 0;
+                for (Object[] h : keyHits) if (((Key) h[0]).code() == BindPopup.keyCode()) { akX = (int) h[1]; akY = (int) h[2]; akH = (int) h[4]; }
+                BindPopup.render(ctx, akX, akY + akH + 4, width, height, mouseX, mouseY, dt);
+            }
         } catch (Throwable t) {
             System.out.println("[Lume] KeybindManagerScreen render failed: " + t);
         }
+    }
+
+    /** Multiplies an ARGB color's alpha by {@code p} — the DrawContext equivalent of NanoVG's
+     *  {@code globalAlpha}, which has no per-call analogue here so each draw bakes it in. */
+    private static int fade(int argb, float p) {
+        int a = Math.round(((argb >>> 24) & 0xFF) * p);
+        return (a << 24) | (argb & 0xFFFFFF);
     }
 
     private float openAnim() {
@@ -188,41 +182,41 @@ public class KeybindManagerScreen extends Screen {
         return 1f - (1f - pr) * (1f - pr);
     }
 
-    private void drawKeyboard(long vg, int kbX, int kbY, int S, int mx, int my) {
-        int sideX = kbX + MAIN_ROWS_W * UNIT * S + 8 * S;
+    private void drawKeyboard(DrawContext ctx, TextRenderer tr, int kbX, int kbY, int mouseX, int mouseY, float p) {
+        int sideX = kbX + MAIN_ROWS_W * UNIT + 8;
         int yy = kbY;
         int bottomRowEndX = kbX, bottomRowY = kbY;
         for (int r = 0; r < ROWS.length; r++) {
             int xx = kbX;
             for (Key k : ROWS[r]) {
-                int w = Math.round(k.w() * UNIT * S) - KEY_GAP * S;
-                int h = UNIT * S - ROW_GAP * S;
-                drawKey(vg, k, xx, yy, w, h, S, mx, my);
-                xx += Math.round(k.w() * UNIT * S);
+                int w = Math.round(k.w() * UNIT) - KEY_GAP;
+                int h = UNIT - ROW_GAP;
+                drawKey(ctx, tr, k, xx, yy, w, h, mouseX, mouseY, p);
+                xx += Math.round(k.w() * UNIT);
             }
             if (r == ROWS.length - 1) { bottomRowEndX = xx; bottomRowY = yy; }   // real accumulated width, not a hand-summed guess
             // side column: Del/PgUp/PgDn next to rows 1-3, Up next to row 4
-            int sw = UNIT * S - KEY_GAP * S, sh = UNIT * S - ROW_GAP * S;
-            if (r < SIDE_COL.length) drawKey(vg, SIDE_COL[r], sideX, yy, sw, sh, S, mx, my);
-            else if (r == 3) drawKey(vg, UP_KEY, sideX, yy, sw, sh, S, mx, my);
-            yy += UNIT * S;
+            int sw = UNIT - KEY_GAP, sh = UNIT - ROW_GAP;
+            if (r < SIDE_COL.length) drawKey(ctx, tr, SIDE_COL[r], sideX, yy, sw, sh, mouseX, mouseY, p);
+            else if (r == 3) drawKey(ctx, tr, UP_KEY, sideX, yy, sw, sh, mouseX, mouseY, p);
+            yy += UNIT;
         }
         // arrows go inline right after the bottom row's own last key
-        int bx = bottomRowEndX + 8 * S;
-        int aw = UNIT * S - KEY_GAP * S, ah = UNIT * S - ROW_GAP * S;
-        for (Key k : BOTTOM_ARROWS) { drawKey(vg, k, bx, bottomRowY, aw, ah, S, mx, my); bx += UNIT * S; }
+        int bx = bottomRowEndX + 8;
+        int aw = UNIT - KEY_GAP, ah = UNIT - ROW_GAP;
+        for (Key k : BOTTOM_ARROWS) { drawKey(ctx, tr, k, bx, bottomRowY, aw, ah, mouseX, mouseY, p); bx += UNIT; }
     }
 
-    private void drawKey(long vg, Key k, int x, int y, int w, int h, int S, int mx, int my) {
+    private void drawKey(DrawContext ctx, TextRenderer tr, Key k, int x, int y, int w, int h, int mouseX, int mouseY, float p) {
         keyHits.add(new Object[]{k, x, y, w, h});
-        boolean hov = mx >= x && mx <= x + w && my >= y && my <= y + h;
+        boolean hov = mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h;
         boolean bound = isBound(k.code());
         boolean open = BindPopup.isActive() && BindPopup.keyCode() == k.code();
         int fill = bound ? withAlpha(Theme.accentRgb(), open ? 0xCC : (hov ? 0xAA : 0x88))
                           : (hov ? Theme.glassHov() : Theme.glassRow());
-        if (bound) neonGlow(vg, x, y, w, h, 6 * S, 8 * S, withAlpha(Theme.accentRgb(), hov ? 0x55 : 0x30));
-        roundedRect(vg, x, y, w, h, 5 * S, fill);
-        text(vg, x + w / 2f, y + h / 2f, 7.5f * S, bound ? Theme.activeText() : Theme.txt(), ALIGN_CENTER_MIDDLE, k.label());
+        if (bound) RenderUtil.glow(ctx, x, y, w, h, 5, Theme.accentRgb(), hov ? 3 : 2);
+        RenderUtil.roundedRect(ctx, x, y, w, h, 5, fade(fill, p));
+        RenderUtil.textCentered(ctx, tr, k.label(), x, y, w, h, fade(bound ? Theme.activeText() : Theme.txt(), p), 0.4f);
     }
 
     // ---------------------------------------------------------------------
@@ -231,13 +225,12 @@ public class KeybindManagerScreen extends Screen {
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
         if (button != 0) return super.mouseClicked(mouseX, mouseY, button);
-        int S = sf();
-        int mx = (int) (mouseX * S), my = (int) (mouseY * S);
+        int mx = (int) mouseX, my = (int) mouseY;
 
         int exitW = 70, exitH = 24, exitX = 12, exitY = 12;
-        if (mx >= exitX * S && mx <= (exitX + exitW) * S && my >= exitY * S && my <= (exitY + exitH) * S) { close(); return true; }
+        if (mx >= exitX && mx <= exitX + exitW && my >= exitY && my <= exitY + exitH) { close(); return true; }
 
-        if (BindPopup.isActive() && BindPopup.mouseClicked(mx, my, S)) return true;
+        if (BindPopup.isActive() && BindPopup.mouseClicked(mx, my)) return true;
 
         for (Object[] h : keyHits) {
             Key k = (Key) h[0];

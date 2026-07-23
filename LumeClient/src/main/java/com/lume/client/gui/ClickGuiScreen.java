@@ -84,6 +84,16 @@ public class ClickGuiScreen extends Screen {
     private SHit activeSlider = null;
     private int lastClipTop = 0, lastClipBot = 0;
 
+    // BindPopup is DrawContext-based (see task: NanoVG removal) but this window's content is
+    // still drawn through NanoVG's own pan/zoom transform — renderKeybindManagerButtonsNvg only
+    // has the window-LOCAL anchor available, so it stashes that here and the actual ctx-based
+    // render call happens after the NanoVG frame closes (see renderNvgMain), converted to real
+    // screen coordinates via the same window-local -> framebuffer formula used for the panel
+    // rect itself (gsx0/gsy0 below). Deliberately NOT zoom-scaled with the window (a small utility
+    // popup staying a fixed size regardless of window zoom reads fine, like an OS tooltip).
+    private boolean bindPopupPending = false;
+    private int bindPopupLocalX, bindPopupLocalY;
+
     // Colour picker: which ColorSetting's palette is open, HSV state + hex buffer.
     private ColorSetting openColor = null;
     private String colorHex = "";
@@ -803,6 +813,15 @@ public class ClickGuiScreen extends Screen {
         // visibly changed the window's size). Blur strength ramps 1→0 as p goes 0→1 over
         // anim()'s ~200ms, so it reads as "coming into focus" rather than growing.
         if (p < 1f) GlassRenderer.transitionOverlay(panelSx, panelSy, panelSw, panelSh, (1f - p) * 0.8f, 1f - p);
+
+        // BindPopup (DrawContext-based) drawn last, on top of everything — see the field doc for
+        // bindPopupPending. Converts the window-local anchor the NanoVG pass stashed into real
+        // screen px with the SAME formula used for gsx0/gsy0 above.
+        if (bindPopupPending && BindPopup.isActive()) {
+            double sx0 = winOffX * S + cx + total * (bindPopupLocalX - cx);
+            double sy0 = winOffY * S + cy + total * (bindPopupLocalY - cy);
+            BindPopup.render(ctx, (int) Math.round(sx0 / S), (int) Math.round(sy0 / S), this.width, this.height, mouseX, mouseY, dt);
+        }
     }
 
     /** Lume logo mark: half-square (triangle) with a circle centred inside. */
@@ -1109,7 +1128,11 @@ public class ClickGuiScreen extends Screen {
         SHit bh2 = new SHit(); bh2.s = null; bh2.kind = 22; bh2.x = sx; bh2.y = yy; bh2.w = swid; bh2.h = bh; sHits.add(bh2);
 
         if (BindPopup.isActive()) {
-            BindPopup.render(vg, sx, bindBtnBottom + 4 * S, this.width * S, this.height * S, S, mx, my, dt);
+            bindPopupPending = true;
+            bindPopupLocalX = sx;
+            bindPopupLocalY = bindBtnBottom + 4 * S;
+        } else {
+            bindPopupPending = false;
         }
     }
 
@@ -2396,7 +2419,9 @@ public class ClickGuiScreen extends Screen {
             int S = sf();
             double mlx = localMx(mouseX), mly = localMy(mouseY);
             if (BindPopup.isActive()) {
-                boolean consumed = BindPopup.mouseClicked((int) mlx, (int) mly, S);
+                // BindPopup now renders in real screen space (see renderNvgMain), not
+                // window-local — so hit-testing uses the raw mouse position too, not mlx/mly.
+                boolean consumed = BindPopup.mouseClicked((int) mouseX, (int) mouseY);
                 if (consumed) return true;
                 // click landed outside the popup — let it fall through to close/absorb normally
                 // below (matches every other capture-state's "click elsewhere cancels" behaviour).

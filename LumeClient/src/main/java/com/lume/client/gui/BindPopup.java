@@ -4,14 +4,14 @@ import com.lume.client.LumeClient;
 import com.lume.client.command.MacroManager;
 import com.lume.client.fthw.QuickCommands;
 import com.lume.client.module.Module;
-import com.lume.client.nanovg.NanoVgRenderer;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.font.TextRenderer;
+import net.minecraft.client.gui.DrawContext;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-
-import static com.lume.client.nanovg.NanoVgRenderer.*;
 
 /**
  * "What should this key do" popup — Command (a macro, see {@link MacroManager}, always sent as a
@@ -23,6 +23,9 @@ import static com.lume.client.nanovg.NanoVgRenderer.*;
  * a quick single-key bind). Only one instance is ever open at a time (a static singleton), since
  * only one bind action can be in flight at once — the caller checks {@link #isActive()} and
  * routes input to {@link #mouseClicked}/{@link #charTyped}/{@link #keyPressed} while it is.
+ *
+ * <p>Plain {@code DrawContext}/{@link RenderUtil} rendering — no NanoVG. Coordinates passed in
+ * and out (anchor, hit bounds) are logical GUI px, same space every vanilla {@code Screen} uses.
  */
 public final class BindPopup {
     private BindPopup() {}
@@ -114,19 +117,26 @@ public final class BindPopup {
 
     private static int withAlpha(int rgb, int alpha) { return (alpha << 24) | (rgb & 0xFFFFFF); }
 
-    public static int height(int S) {
-        int rowH = 16 * S;
+    /** Multiplies an ARGB color's alpha by {@code p} — the DrawContext equivalent of NanoVG's
+     *  {@code globalAlpha}, which has no per-call analogue here so each draw bakes it in. */
+    private static int fade(int argb, float p) {
+        int a = Math.round(((argb >>> 24) & 0xFF) * p);
+        return (a << 24) | (argb & 0xFFFFFF);
+    }
+
+    public static int height() {
+        int rowH = 16;
         return switch (mode) {
-            case CHOOSE -> 26 * S + 22 * S + 6 * S + 14 * S + 8 * S;
-            case COMMAND -> 26 * S + rowH + 24 * S + 8 * S;
+            case CHOOSE -> 26 + 22 + 6 + 14 + 8;
+            case COMMAND -> 26 + rowH + 24 + 8;
             case FUNCTION -> {
                 int n = Math.max(1, filteredModules().size());
-                yield 26 * S + (n + 1) * (rowH + 4 * S) + 8 * S;
+                yield 26 + (n + 1) * (rowH + 4) + 8;
             }
             case INFO -> {
                 List<BindInfo> binds = bindsFor(keyCode);
                 int n = Math.max(1, binds.size());
-                yield 26 * S + n * (rowH + 4 * S) + (binds.stream().anyMatch(b -> b.source() == Source.MACRO) ? 14 * S : 0) + 8 * S;
+                yield 26 + n * (rowH + 4) + (binds.stream().anyMatch(b -> b.source() == Source.MACRO) ? 14 : 0) + 8;
             }
         };
     }
@@ -134,133 +144,128 @@ public final class BindPopup {
     /** Draws near {@code (anchorX, anchorBelowY)}, sliding up to stay inside the screen if it
      *  doesn't fit below. Fades + slides in on open, and again on every mode switch (Command vs
      *  Function, etc.) — matches the same ease-out easing every other Lume popup/window uses. */
-    public static void render(long vg, int anchorX, int anchorBelowY, int screenW, int screenH, int S, int mx, int my, float dt) {
+    public static void render(DrawContext ctx, int anchorX, int anchorBelowY, int screenW, int screenH, int mx, int my, float dt) {
         if (!active) return;
         hits.clear();
-        int pw = 220 * S, ph = height(S);
-        int px = Math.max(8 * S, Math.min(anchorX, screenW - pw - 8 * S));
-        int py = Math.max(8 * S, Math.min(anchorBelowY, screenH - ph - 8 * S));
+        int pw = 220, ph = height();
+        int px = Math.max(8, Math.min(anchorX, screenW - pw - 8));
+        int py = Math.max(8, Math.min(anchorBelowY, screenH - ph - 8));
         lastPx = px; lastPy = py; lastPw = pw; lastPh = ph;
 
+        TextRenderer tr = MinecraftClient.getInstance().textRenderer;
         float p = ease(openTime, 140f);
-        save(vg);
-        globalAlpha(vg, p);
-        translate(vg, 0, -(1f - p) * 6f * S);
+        int slide = Math.round((1f - p) * 6f);
+        py -= slide;   // fold the open-slide into the draw position (no matrix-translate group here)
 
-        shadow(vg, px, py, pw, ph, 10 * S, 14 * S, 0x55000000);
-        roundedRect(vg, px, py, pw, ph, 10 * S, Theme.winBg());
-        strokeRoundedRect(vg, px + 0.5f * S, py + 0.5f * S, pw - S, ph - S, 10 * S, S, Theme.rim());
+        RenderUtil.glow(ctx, px, py, pw, ph, 10, 0x000000, 3);
+        RenderUtil.roundedRect(ctx, px, py, pw, ph, 10, fade(Theme.winBg(), p));
+        RenderUtil.strokeRoundedRect(ctx, px, py, pw, ph, 10, 1, fade(Theme.rim(), p));
         List<BindInfo> binds = bindsFor(keyCode);
-        text(vg, px + 10 * S, py + 14 * S, 9 * S, Theme.txtDim(), ALIGN_MIDDLE, keyLabel + (binds.isEmpty() ? " — " + com.lume.client.Lang.tUI("unbound") : ""));
+        RenderUtil.textVCentered(ctx, tr, keyLabel + (binds.isEmpty() ? " — " + com.lume.client.Lang.tUI("unbound") : ""),
+                px + 10, py, 20, fade(Theme.txtDim(), p), 0.5f);
 
         // Mode content fades/slides in on its OWN timer, separate from the popup's own open
         // animation, so switching Command<->Function reads as a deliberate transition too.
         float mp = ease(modeTime, 120f);
-        save(vg);
-        globalAlpha(vg, mp);
-        translate(vg, 0, -(1f - mp) * 4f * S);
-        int ry = py + 26 * S, rowH = 16 * S;
+        float combined = p * mp;
+        int mSlide = Math.round((1f - mp) * 4f);
+        int ry = py + 26 - mSlide, rowH = 16;
         switch (mode) {
             case CHOOSE -> {
-                int halfW = (pw - 24 * S) / 2;
-                roundedRect(vg, px + 10 * S, ry, halfW, 22 * S, 7 * S, Theme.accent());
-                text(vg, px + 10 * S + halfW / 2f, ry + 11 * S, 8.5f * S, Theme.activeText(), ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Command"));
-                roundedRect(vg, px + 14 * S + halfW, ry, halfW, 22 * S, 7 * S, Theme.glassRow());
-                text(vg, px + 14 * S + halfW + halfW / 2f, ry + 11 * S, 8.5f * S, Theme.txt(), ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Function"));
-                ry += 22 * S + 6 * S;
-                text(vg, px + 10 * S, ry, 7 * S, Theme.txtDim(), ALIGN_MIDDLE, com.lume.client.Lang.tUI("Command: sent to chat. Function: toggles a module."));
+                int halfW = (pw - 24) / 2;
+                RenderUtil.roundedRect(ctx, px + 10, ry, halfW, 22, 7, fade(Theme.accent(), combined));
+                RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Command"), px + 10, ry, halfW, 22, fade(Theme.activeText(), combined), 0.47f);
+                RenderUtil.roundedRect(ctx, px + 14 + halfW, ry, halfW, 22, 7, fade(Theme.glassRow(), combined));
+                RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Function"), px + 14 + halfW, ry, halfW, 22, fade(Theme.txt(), combined), 0.47f);
+                ry += 22 + 6;
+                RenderUtil.textVCentered(ctx, tr, com.lume.client.Lang.tUI("Command: sent to chat. Function: toggles a module."), px + 10, ry - 7, 14, fade(Theme.txtDim(), combined), 0.39f);
             }
             case COMMAND -> {
-                roundedRect(vg, px + 10 * S, ry, pw - 20 * S, rowH, 5 * S, Theme.glassHov());
-                roundedRect(vg, px + 10 * S, ry + rowH - Math.max(1, S), pw - 20 * S, Math.max(1, S), 1, Theme.accent());
+                RenderUtil.roundedRect(ctx, px + 10, ry, pw - 20, rowH, 5, fade(Theme.glassHov(), combined));
+                RenderUtil.roundedRect(ctx, px + 10, ry + rowH - 1, pw - 20, 1, 1, fade(Theme.accent(), combined));
                 String show = editText.isEmpty() ? com.lume.client.Lang.tUI("/command…") : editText + "_";
-                text(vg, px + 15 * S, ry + rowH / 2f, 8 * S, editText.isEmpty() ? Theme.txtDim() : Theme.txt(), ALIGN_MIDDLE, show);
-                ry += rowH + 6 * S;
-                int halfW = (pw - 24 * S) / 2;
-                roundedRect(vg, px + 10 * S, ry, halfW, 18 * S, 6 * S, Theme.accent());
-                text(vg, px + 10 * S + halfW / 2f, ry + 9 * S, 8.5f * S, Theme.activeText(), ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Save"));
-                roundedRect(vg, px + 14 * S + halfW, ry, halfW, 18 * S, 6 * S, Theme.glassRow());
-                text(vg, px + 14 * S + halfW + halfW / 2f, ry + 9 * S, 8.5f * S, Theme.txt(), ALIGN_CENTER_MIDDLE, com.lume.client.Lang.tUI("Cancel"));
+                RenderUtil.textVCentered(ctx, tr, show, px + 15, ry, rowH, fade(editText.isEmpty() ? Theme.txtDim() : Theme.txt(), combined), 0.44f);
+                ry += rowH + 6;
+                int halfW = (pw - 24) / 2;
+                RenderUtil.roundedRect(ctx, px + 10, ry, halfW, 18, 6, fade(Theme.accent(), combined));
+                RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Save"), px + 10, ry, halfW, 18, fade(Theme.activeText(), combined), 0.47f);
+                RenderUtil.roundedRect(ctx, px + 14 + halfW, ry, halfW, 18, 6, fade(Theme.glassRow(), combined));
+                RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Cancel"), px + 14 + halfW, ry, halfW, 18, fade(Theme.txt(), combined), 0.47f);
             }
             case FUNCTION -> {
-                roundedRect(vg, px + 10 * S, ry, pw - 20 * S, rowH, 5 * S, searchFocused ? Theme.glassHov() : Theme.glassRow());
+                RenderUtil.roundedRect(ctx, px + 10, ry, pw - 20, rowH, 5, fade(searchFocused ? Theme.glassHov() : Theme.glassRow(), combined));
                 String show = search.isEmpty() && !searchFocused ? com.lume.client.Lang.tUI("search functions…") : search + (searchFocused ? "_" : "");
-                text(vg, px + 15 * S, ry + rowH / 2f, 8 * S, search.isEmpty() && !searchFocused ? Theme.txtDim() : Theme.txt(), ALIGN_MIDDLE, show);
-                ry += rowH + 4 * S;
+                RenderUtil.textVCentered(ctx, tr, show, px + 15, ry, rowH, fade(search.isEmpty() && !searchFocused ? Theme.txtDim() : Theme.txt(), combined), 0.44f);
+                ry += rowH + 4;
                 List<Module> list = filteredModules();
                 for (Module m : list) {
-                    roundedRect(vg, px + 10 * S, ry, pw - 20 * S, rowH, 5 * S, Theme.glassRow());
-                    text(vg, px + 15 * S, ry + rowH / 2f, 8 * S, Theme.txt(), ALIGN_MIDDLE, m.getName());
-                    ry += rowH + 4 * S;
+                    RenderUtil.roundedRect(ctx, px + 10, ry, pw - 20, rowH, 5, fade(Theme.glassRow(), combined));
+                    RenderUtil.textVCentered(ctx, tr, m.getName(), px + 15, ry, rowH, fade(Theme.txt(), combined), 0.44f);
+                    ry += rowH + 4;
                 }
-                if (list.isEmpty()) text(vg, px + 10 * S, ry + 4 * S, 7.5f * S, Theme.txtDim(), ALIGN_MIDDLE, com.lume.client.Lang.tUI("no match"));
+                if (list.isEmpty()) RenderUtil.textVCentered(ctx, tr, com.lume.client.Lang.tUI("no match"), px + 10, ry, rowH, fade(Theme.txtDim(), combined), 0.42f);
             }
             case INFO -> {
                 for (BindInfo b : binds) {
                     String badge = switch (b.source()) { case MODULE -> "Module"; case QUICK -> "Quick"; case MACRO -> "Macro"; };
-                    roundedRect(vg, px + 10 * S, ry, pw - 20 * S, rowH, 5 * S, Theme.glassRow());
-                    text(vg, px + 14 * S, ry + rowH / 2f, 7.5f * S, Theme.accent(), ALIGN_MIDDLE, badge);
-                    text(vg, px + 52 * S, ry + rowH / 2f, 8 * S, Theme.txt(), ALIGN_MIDDLE, b.text());
-                    int xW = 14 * S;
-                    text(vg, px + pw - 10 * S - xW / 2f, ry + rowH / 2f, 8.5f * S, 0xFFE06868, ALIGN_CENTER_MIDDLE, "✕");
-                    ry += rowH + 4 * S;
+                    RenderUtil.roundedRect(ctx, px + 10, ry, pw - 20, rowH, 5, fade(Theme.glassRow(), combined));
+                    RenderUtil.textVCentered(ctx, tr, badge, px + 14, ry, rowH, fade(Theme.accent(), combined), 0.42f);
+                    RenderUtil.textVCentered(ctx, tr, b.text(), px + 52, ry, rowH, fade(Theme.txt(), combined), 0.44f);
+                    int xW = 14;
+                    RenderUtil.textCentered(ctx, tr, "✕", px + pw - 10 - xW, ry, xW, rowH, fade(0xFFE06868, combined), 0.47f);
+                    ry += rowH + 4;
                 }
                 if (binds.stream().anyMatch(b -> b.source() == Source.MACRO)) {
-                    text(vg, px + 10 * S, ry + 4 * S, 7.5f * S, Theme.txtDim(), ALIGN_MIDDLE, com.lume.client.Lang.tUI("click to unbind, or the text to edit"));
+                    RenderUtil.textVCentered(ctx, tr, com.lume.client.Lang.tUI("click to unbind, or the text to edit"), px + 10, ry, 14, fade(Theme.txtDim(), combined), 0.39f);
                 }
             }
         }
-        restore(vg);
-        restore(vg);
 
         if (selecting) {
             long elapsed = System.currentTimeMillis() - selectTime;
             float inP = ease(selectTime, 120f);
-            save(vg);
-            globalAlpha(vg, inP * p);
-            roundedRect(vg, px, py, pw, ph, 10 * S, withAlpha(Theme.accent(), 235));
-            text(vg, px + pw / 2f, py + ph / 2f, 9 * S, Theme.activeText(), ALIGN_CENTER_MIDDLE,
-                    "✓ " + com.lume.client.Lang.tUI("Bound") + ": " + selectedLabel);
-            restore(vg);
+            RenderUtil.roundedRect(ctx, px, py, pw, ph, 10, fade(withAlpha(Theme.accent(), 235), inP * p));
+            RenderUtil.textCentered(ctx, tr, "✓ " + com.lume.client.Lang.tUI("Bound") + ": " + selectedLabel,
+                    px, py, pw, ph, fade(Theme.activeText(), inP * p), 0.5f);
             if (elapsed > FLASH_MS) { selecting = false; close(); }
         }
     }
 
     /** @return true if the click was consumed (inside the popup bounds, whether or not it hit a
      *  specific control) — the caller should NOT also treat it as a click on whatever's behind. */
-    public static boolean mouseClicked(int mx, int my, int S) {
+    public static boolean mouseClicked(int mx, int my) {
         if (!active) return false;
         if (selecting) return true;   // ignore clicks during the confirmation flash
         int px = lastPx, py = lastPy, pw = lastPw, ph = lastPh;
         if (mx < px || mx > px + pw || my < py || my > py + ph) return false;   // outside — caller decides what happens
 
-        int ry = py + 26 * S, rowH = 16 * S;
+        int ry = py + 26, rowH = 16;
         switch (mode) {
             case CHOOSE -> {
-                int halfW = (pw - 24 * S) / 2;
-                if (my >= ry && my <= ry + 22 * S) {
-                    if (mx >= px + 10 * S && mx <= px + 10 * S + halfW) setMode(Mode.COMMAND);
-                    else if (mx >= px + 14 * S + halfW) { setMode(Mode.FUNCTION); search = ""; searchFocused = true; }
+                int halfW = (pw - 24) / 2;
+                if (my >= ry && my <= ry + 22) {
+                    if (mx >= px + 10 && mx <= px + 10 + halfW) setMode(Mode.COMMAND);
+                    else if (mx >= px + 14 + halfW) { setMode(Mode.FUNCTION); search = ""; searchFocused = true; }
                 }
             }
             case COMMAND -> {
-                ry += rowH + 6 * S;
-                int halfW = (pw - 24 * S) / 2;
-                if (my >= ry && my <= ry + 18 * S) {
-                    if (mx >= px + 10 * S && mx <= px + 10 * S + halfW) {
+                ry += rowH + 6;
+                int halfW = (pw - 24) / 2;
+                if (my >= ry && my <= ry + 18) {
+                    if (mx >= px + 10 && mx <= px + 10 + halfW) {
                         if (!editText.isBlank()) {
                             MacroManager.add(keyCode, editText.trim());
                             com.lume.client.Config.save();
                             completeAndFlash(editText.trim());
                         } else close();
-                    } else if (mx >= px + 14 * S + halfW) {
+                    } else if (mx >= px + 14 + halfW) {
                         close();
                     }
                 }
             }
             case FUNCTION -> {
                 if (my >= ry && my <= ry + rowH) { searchFocused = true; return true; }
-                ry += rowH + 4 * S;
+                ry += rowH + 4;
                 for (Module m : filteredModules()) {
                     if (my >= ry && my <= ry + rowH) {
                         m.setKey(keyCode);
@@ -268,15 +273,15 @@ public final class BindPopup {
                         completeAndFlash(m.getName());
                         return true;
                     }
-                    ry += rowH + 4 * S;
+                    ry += rowH + 4;
                 }
             }
             case INFO -> {
                 List<BindInfo> binds = bindsFor(keyCode);
                 for (BindInfo b : binds) {
                     if (my >= ry && my <= ry + rowH) {
-                        int xW = 14 * S;
-                        if (mx >= px + pw - 10 * S - xW) {
+                        int xW = 14;
+                        if (mx >= px + pw - 10 - xW) {
                             switch (b.source()) {
                                 case MODULE -> ((Module) b.ref()).setKey(-1);
                                 case QUICK -> ((QuickCommands.Cmd) b.ref()).key = -1;
@@ -290,7 +295,7 @@ public final class BindPopup {
                         }
                         return true;
                     }
-                    ry += rowH + 4 * S;
+                    ry += rowH + 4;
                 }
             }
         }
