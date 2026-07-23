@@ -309,10 +309,16 @@ public class ClickGuiScreen extends Screen {
                 Theme.winBg(), Theme.rim(), 1.5f * S, 0, 0f);
         RenderUtil.roundedRect(ctx, x + 16 * S, y + 2 * S, W - 32 * S, Math.max(1, S), 1 * S, Theme.border());
 
-        // Header: logo + wordmark
-        RenderUtil.drawLogo(ctx, x + 20 * S, y + 15 * S, 22 * S);
-        Wordmark.drawLegacy(ctx, MinecraftClient.getInstance().textRenderer,
-                x + 20 * S + 28 * S, y + 17 * S, 0.6f);
+        // Header: centred wordmark + a SEPARATE logo mark pinned to the top-left corner — matches
+        // the NanoVG header's layout exactly (Wordmark.drawCentered + a standalone corner
+        // nvgLogo() call there). A previous pass here accidentally glued the two into one
+        // left-aligned lockup, and the wordmark's scale (0.6, unscaled by S) rendered smaller
+        // than intended at any GUI scale above 100% — RenderUtil.text's scale, like every other
+        // size/position argument in this whole render() tree, needs *S to match the 1/S the
+        // outer mtx.scale(1f/S,...) divides everything back down by at the very end.
+        RenderUtil.drawLogo(ctx, x + 16 * S, y + 12 * S, 22 * S);
+        Wordmark.drawLegacyCentered(ctx, MinecraftClient.getInstance().textRenderer,
+                x, W, y + 14 * S, 0.83f * S);
 
         // Theme toggle (right) — animated hover + press pulse
         int tbw = 56 * S, tbh = 22 * S, tbx = x + W - tbw - 20 * S, tby = y + 14 * S;
