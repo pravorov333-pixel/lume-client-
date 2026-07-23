@@ -299,9 +299,8 @@ public class ClickGuiScreen extends Screen {
         int x = (sw - W) / 2, y = (sh - H) / 2;
         int r = 18 * S;
 
-        // Panel
+        // Panel — flat minimalist chrome: soft drop shadow only, no accent glow/bloom halo.
         RenderUtil.roundedRect(ctx, x + 3 * S, y + 7 * S, W - 6 * S, H, r, Theme.shadow());
-        RenderUtil.glow(ctx, x, y, W, H, r, Theme.accentRgb(), 5);
         glass(ctx, x, y, W, H, r, Theme.winBg(), 2 * S);
         RenderUtil.roundedRect(ctx, x + 16 * S, y + 2 * S, W - 32 * S, Math.max(1, S), 1 * S, Theme.border());
 
@@ -323,7 +322,6 @@ public class ClickGuiScreen extends Screen {
         mt.scale(tps, tps, 1f);
         mt.translate(-(tbx + tbw / 2.0), -(tby + tbh / 2.0), 0.0);
         glass(ctx, tbx, tby, tbw, tbh, 11 * S, Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), ta[0]), S);
-        if (ta[0] > 0.01f) RenderUtil.containedGlow(ctx, tbx + S, tby + S, tbw - 2 * S, tbh - 2 * S, (tbx + tbw / 2), (tby + tbh / 2), 20 * S, Theme.colorLerp(0xFFFFFF, Theme.accentRgb(), 0.4f), ta[0]);
         String tl = Theme.isDark() ? "Dark" : "Light";
         RenderUtil.textCentered(ctx, this.textRenderer, tl, tbx, tby, tbw, tbh, Theme.txt(), 0.5f * scale);
         mt.pop();
@@ -356,8 +354,7 @@ public class ClickGuiScreen extends Screen {
             segX[i] = cx2; segW[i] = ww[i];
             boolean sel = i == selectedCat && search.isEmpty();
             if (sel) {
-                RenderUtil.glow(ctx, cx2, segY, ww[i], segH, 12 * S, Theme.accentRgb(), 4);
-                RenderUtil.gradientRoundedRect(ctx, cx2, segY, ww[i], segH, 12 * S, Theme.accent(), Theme.accent2());
+                RenderUtil.roundedRect(ctx, cx2, segY, ww[i], segH, 12 * S, Theme.accent());
             }
             int tw = width(tabTitle(i), 0.5f);
             text(ctx, tabTitle(i), cx2 + (ww[i] - tw) / 2, segY + 8 * S, sel ? Theme.activeText() : Theme.txtDim(), 0.5f);
@@ -470,22 +467,12 @@ public class ClickGuiScreen extends Screen {
             mc2.translate(-(dx + dw / 2.0), -(dy + headerH / 2.0), 0.0);
 
             RenderUtil.roundedRect(ctx, dx + 1 * S, dy + 2 * S, dw, dh, 11 * S, Theme.shadow());
-            if (ea > 0.01f) RenderUtil.glow(ctx, dx, dy, dw, dh, 11 * S, Theme.accentRgb(), Math.max(1, Math.round(4 * ea)));
 
             int base = Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), ha);
             int onFill = withAlpha(Theme.accentRgb(), Theme.isDark() ? 0x4D : 0x40);
             int fill = Theme.colorLerp(base, onFill, ea);
             glass(ctx, dx, dy, dw, dh, 11 * S, fill, S);
             RenderUtil.roundedRect(ctx, dx + 8 * S, dy + 1 * S, dw - 16 * S, Math.max(1, S), 1 * S, Theme.border());
-
-            // contained hover glow following the cursor across the WHOLE card
-            // (header + expanded settings area), clipped to the card
-            if (gha > 0.01f) {
-                int hx = (int) Math.max(dx + 10 * S, Math.min(mx, dx + dw - 10 * S));
-                int hyc = (int) Math.max(dy + 10 * S, Math.min(my, dy + dh - 10 * S));
-                int glowCol = Theme.colorLerp(0xFFFFFF, Theme.accentRgb(), 0.35f);
-                RenderUtil.containedGlow(ctx, dx + 2 * S, dy + 2 * S, dw - 4 * S, dh - 4 * S, hx, hyc, 30 * S, glowCol, gha);
-            }
 
             if (pa > 0.01f) RenderUtil.roundedRect(ctx, dx, dy, dw, headerH, 11 * S, withAlpha(0xFFFFFF, Math.round(pa * 55)));
 
