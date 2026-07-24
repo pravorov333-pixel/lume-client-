@@ -73,10 +73,12 @@ public final class LumeTitleMenu {
     private static final int ACCT_W = 132;       // Account chip width (head + 2 lines of text)
     private static final int MARGIN = 10;
     private static final int GAP = 6;           // spacing between corner-cluster icons
-    private static final int RADIUS = TH / 2;   // true pill/stadium shape — was a mild 7px round,
-                                                 // bumped so the contour glow visibly reads as
-                                                 // hugging the button's actual rounded shape
-                                                 // instead of looking near-rectangular.
+    /** Moderate rounded-rect radius, matching the reference's actual button shape — NOT a full
+     *  stadium/pill (was briefly bumped to TH/2 in an earlier round to make the contour glow
+     *  read as hugging the shape, but the real cause of that complaint was the SDF quad-padding
+     *  bug, fixed since; the reference itself clearly shows comfortably-rounded rectangles, not
+     *  capsules, so this went back down once the actual bug was gone). */
+    private static final int RADIUS = 9;
     private static final int OPTLANG_W = 98, OPTLANG_H = 20, QUIT_W = 44, QUIT_H = 20;
     private static final int MAIN_BTN_H = 24;
     /** Singleplayer/Multiplayer width matches the Options+Language/Quit bar's total width
@@ -112,7 +114,7 @@ public final class LumeTitleMenu {
         int totalH = starSize + starGap + textH + textGap + MAIN_BTN_H + btnGap + MAIN_BTN_H + barGap + TH;
         int clusterY = height / 2 - totalH / 2;
 
-        RenderUtil.drawLogoSdf(ctx, width / 2, clusterY + starSize / 2, starSize / 2f);
+        RenderUtil.drawLogo(ctx, width / 2 - starSize / 2, clusterY, starSize);
         int textW = Wordmark.widthLegacy(tr, wordScale);
         Wordmark.drawLegacyVivid(ctx, tr, width / 2.0 - textW / 2.0, clusterY + starSize + starGap, wordScale);
 
@@ -158,7 +160,7 @@ public final class LumeTitleMenu {
         boolean hov = inside(mouseX, mouseY, x, y, MAIN_BTN_W, MAIN_BTN_H);
         float[] st = a(id);
         st[0] = approach(st[0], hov ? 1f : 0f, 8f, dt);
-        RenderUtil.premiumBg(ctx, x, y, MAIN_BTN_W, MAIN_BTN_H, MAIN_BTN_H / 2, st[0], Theme.winBg(), Theme.rim(), Theme.accentRgb());
+        RenderUtil.premiumBg(ctx, x, y, MAIN_BTN_W, MAIN_BTN_H, RADIUS, st[0], Theme.winBg(), Theme.rim(), Theme.accentRgb());
         int ly = y - RenderUtil.premiumLift(st[0]);
         RenderUtil.textBoldCentered(ctx, MinecraftClient.getInstance().textRenderer, label, x, ly, MAIN_BTN_W, MAIN_BTN_H, Theme.txt(), 0.5f);
         hits.add(new Object[]{id, x, y, MAIN_BTN_W, MAIN_BTN_H});
@@ -213,7 +215,7 @@ public final class LumeTitleMenu {
         RenderUtil.premiumBg(ctx, x, y, size, size, Math.round(size * 0.28f), st[0], Theme.winBg(), Theme.rim(), Theme.accentRgb());
         int ly = y - RenderUtil.premiumLift(st[0]);
         int cx = x + size / 2, cy = ly + size / 2;
-        float r = size * 0.32f;
+        float r = size * 0.38f;
         switch (id) {
             case "theme" -> {
                 if (Theme.isDark()) IconGlyphs.moon(ctx, cx, cy, r, Theme.txt(), Theme.winBg());
@@ -241,7 +243,7 @@ public final class LumeTitleMenu {
         olSt[0] = approach(olSt[0], olHov ? 1f : 0f, 8f, dt);
         RenderUtil.premiumBg(ctx, olX, olY, OPTLANG_W, OPTLANG_H, RADIUS, olSt[0], Theme.winBg(), Theme.rim(), Theme.accentRgb());
         int olLy = olY - RenderUtil.premiumLift(olSt[0]);
-        float gr = 6.5f;
+        float gr = 7.5f;
         IconGlyphs.gear(ctx, olX + OPTLANG_W / 4, olLy + OPTLANG_H / 2, gr, Theme.txt());
         IconGlyphs.globe(ctx, olX + OPTLANG_W * 3 / 4, olLy + OPTLANG_H / 2, gr, Theme.txt());
         RenderUtil.roundedRect(ctx, olX + OPTLANG_W / 2 - 1, olLy + 4, 1, OPTLANG_H - 8, 0, Theme.rim());
