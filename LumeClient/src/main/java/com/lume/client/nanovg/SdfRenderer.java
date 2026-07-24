@@ -63,7 +63,17 @@ public final class SdfRenderer {
     public static void box(int x, int y, int w, int h, float radiusPx,
                             int fillArgb, int outlineArgb, float outlineWidthPx,
                             int glowArgb, float glowSpreadPx) {
-        draw(x, y, w, h, w, h, 0f, radiusPx, fillArgb, outlineArgb, outlineWidthPx, glowArgb, glowSpreadPx);
+        // The drawn quad must extend PAST (x,y,w,h) by however far the outline/glow reach beyond
+        // the shape's own edge, or that overflow is simply never sampled — the shader math was
+        // always correct, but with no padding here the glow layer had nowhere to actually render
+        // (this was silently true for every premiumBg hover glow until now — the exact "highlight
+        // isn't visible" bug report). sizeW/sizeH (the SDF test box) stays the ORIGINAL w,h, so
+        // the visible fill/outline shape itself is completely unchanged for every existing caller
+        // that never uses glow — only the sampled area grows.
+        float pad = Math.max(outlineWidthPx * 0.5f, 0f) + Math.max(glowSpreadPx, 0f) + 2f;
+        int qx = Math.round(x - pad), qy = Math.round(y - pad);
+        int qw = Math.round(w + pad * 2f), qh = Math.round(h + pad * 2f);
+        draw(qx, qy, qw, qh, w, h, 0f, radiusPx, fillArgb, outlineArgb, outlineWidthPx, glowArgb, glowSpreadPx);
     }
 
     /**

@@ -107,7 +107,7 @@ public final class LumeTitleMenu {
         // path the ClickGUI header already used) instead of a baked PNG, for max quality and the
         // animated shimmer baked PNGs can't do.
         var tr = MinecraftClient.getInstance().textRenderer;
-        int starSize = 40, starGap = 10, textH = 20, textGap = 22, btnGap = 8, barGap = 12;
+        int starSize = 40, starGap = 10, textH = 20, textGap = 22, btnGap = 3, barGap = 6;
         float wordScale = 0.9f;
         int totalH = starSize + starGap + textH + textGap + MAIN_BTN_H + btnGap + MAIN_BTN_H + barGap + TH;
         int clusterY = height / 2 - totalH / 2;

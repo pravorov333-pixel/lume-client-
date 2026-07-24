@@ -407,11 +407,11 @@ public final class RenderUtil {
         if (com.lume.client.nanovg.SdfRenderer.ensureInit()) {
             net.minecraft.client.MinecraftClient mc = net.minecraft.client.MinecraftClient.getInstance();
             int S = (int) Math.max(1, mc.getWindow().getScaleFactor());
-            int glowA = Math.round(hoverAmt * 140f);
+            int glowA = Math.round(hoverAmt * 200f);
             int glow = (glowA << 24) | (glowRgb & 0xFFFFFF);
             ctx.draw(); // flush queued DrawContext content before this raw-GL write — see ClickGuiScreen's own SdfRenderer calls
             com.lume.client.nanovg.SdfRenderer.box(x * S, y * S, w * S, h * S, radius * S,
-                    fillArgb, outlineArgb, 1f * S, glow, (3f + hoverAmt * 6f) * S);
+                    fillArgb, outlineArgb, 1f * S, glow, (4f + hoverAmt * 8f) * S);
         } else {
             roundedRect(ctx, x, y, w, h, radius, fillArgb);
             if (outlineArgb != 0) strokeRoundedRect(ctx, x, y, w, h, radius, 1, outlineArgb);
