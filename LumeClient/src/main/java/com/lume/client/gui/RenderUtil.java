@@ -68,15 +68,7 @@ public final class RenderUtil {
      * glyph body — not the padded atlas cell — sits in the middle.
      */
     public static void textVCentered(DrawContext ctx, TextRenderer tr, String s, double x, double boxY, double boxH, int color, float scale) {
-        LumeFont.ensure();
-        double y;
-        if (LumeFont.ready) {
-            double ds = scale * (18f / LumeFont.FONT_PX);
-            y = boxY + boxH / 2.0 - LumeFont.opticalCenterPx() * ds;
-        } else {
-            y = boxY + boxH / 2.0 - 3.5 * scale; // vanilla glyphs are ~7px tall
-        }
-        text(ctx, tr, s, x, y, color, false, scale);
+        text(ctx, tr, s, x, vCenterY(s, boxY, boxH, scale, false), color, false, scale);
     }
 
     /** Draw text centred both horizontally and vertically inside the given box. */
@@ -85,10 +77,59 @@ public final class RenderUtil {
         textVCentered(ctx, tr, s, boxX + (boxW - w) / 2.0, boxY, boxH, color, scale);
     }
 
-    /** Faux-bold: redraws the string with tiny sub-pixel offsets to thicken the strokes —
-     *  there's no real Bold weight loaded for the body font (LumeFont only rasterises Medium),
-     *  so this fakes a bold look convincingly at HUD sizes without needing a second glyph atlas. */
+    /**
+     * Vertical-centring offset shared by {@code textVCentered}/{@code textBoldCentered} — split
+     * out because it MUST branch on {@link #hasCyrillic} the same way {@link #text}/{@link
+     * #textBold} do: a Cyrillic string doesn't actually render through LumeFont at all (it
+     * routes to the vanilla font at {@code scale*2f}, see {@link #text}), so centring it with
+     * LumeFont's own optical-centre metric put it visibly off-centre — the fix for the "text
+     * is buggy in the new catalogs" report, which is Cyrillic-heavy (server/event/profile text)
+     * where the old fallback path barely had any Cyrillic before.
+     */
+    private static double vCenterY(String s, double boxY, double boxH, float scale, boolean bold) {
+        if (hasCyrillic(s)) {
+            // vanilla font at scale*2f (see text()/textBold()'s Cyrillic branch) — half its
+            // ~7px cap height at that doubled scale, i.e. 2x the plain-vanilla-fallback constant
+            // below (bold uses MC's own synthetic-bold vanilla style, same metrics as regular).
+            return boxY + boxH / 2.0 - 7.0 * scale;
+        }
+        if (bold) {
+            LumeFontBold.ensure();
+            if (LumeFontBold.ready) {
+                double ds = scale * (18f / LumeFontBold.FONT_PX);
+                return boxY + boxH / 2.0 - LumeFontBold.opticalCenterPx() * ds;
+            }
+        }
+        LumeFont.ensure();
+        if (LumeFont.ready) {
+            double ds = scale * (18f / LumeFont.FONT_PX);
+            return boxY + boxH / 2.0 - LumeFont.opticalCenterPx() * ds;
+        }
+        return boxY + boxH / 2.0 - 3.5 * scale; // vanilla glyphs are ~7px tall
+    }
+
+    /** Draw text with the VANILLA font's own synthetic bold style (has Cyrillic, and MC's
+     *  built-in bold is a real per-glyph technique — not a redraw-offset hack). */
+    public static void vanillaTextBold(DrawContext ctx, TextRenderer tr, String s, double x, double y, int color, float scale) {
+        var m = ctx.getMatrices();
+        m.push();
+        m.translate(x, y, 0);
+        m.scale(scale, scale, 1f);
+        ctx.drawText(tr, Text.literal(s).setStyle(Style.EMPTY.withBold(true)), 0, 0, color, false);
+        m.pop();
+    }
+
+    /** Bold text — draws through a real bold glyph atlas ({@link LumeFontBold}, rasterised from
+     *  the bundled {@code montserrat-bold.ttf}) or the vanilla font's own synthetic-bold style
+     *  for Cyrillic, matching {@link #text}'s routing exactly. Falls back to the old sub-pixel
+     *  triple-draw trick only if the bold atlas failed to load on this GPU/JVM. */
     public static void textBold(DrawContext ctx, TextRenderer tr, String s, double x, double y, int color, float scale) {
+        if (hasCyrillic(s)) { vanillaTextBold(ctx, tr, s, x, y, color, scale * 2f); return; }
+        LumeFontBold.ensure();
+        if (LumeFontBold.ready) {
+            LumeFontBold.draw(ctx, s, x, y, color, scale * (18f / LumeFontBold.FONT_PX));
+            return;
+        }
         text(ctx, tr, s, x, y, color, false, scale);
         text(ctx, tr, s, x + 0.4, y, color, false, scale);
         text(ctx, tr, s, x, y + 0.35, color, false, scale);
@@ -96,16 +137,9 @@ public final class RenderUtil {
 
     /** Bold + centred both horizontally and vertically inside the given box. */
     public static void textBoldCentered(DrawContext ctx, TextRenderer tr, String s, double boxX, double boxY, double boxW, double boxH, int color, float scale) {
-        int w = width(tr, s, scale);
+        int w = widthBold(tr, s, scale);
         double x = boxX + (boxW - w) / 2.0;
-        LumeFont.ensure();
-        double y;
-        if (LumeFont.ready) {
-            double ds = scale * (18f / LumeFont.FONT_PX);
-            y = boxY + boxH / 2.0 - LumeFont.opticalCenterPx() * ds;
-        } else {
-            y = boxY + boxH / 2.0 - 3.5 * scale;
-        }
+        double y = vCenterY(s, boxY, boxH, scale, true);
         textBold(ctx, tr, s, x, y, color, scale);
     }
 
@@ -114,6 +148,19 @@ public final class RenderUtil {
         LumeFont.ensure();
         if (LumeFont.ready) {
             return Math.round(LumeFont.advance(s) * scale * (18f / LumeFont.FONT_PX));
+        }
+        return Math.round(tr.getWidth(t(s)) * scale);
+    }
+
+    /** {@link #width}, but measuring the bold face (LumeFontBold's advances differ slightly
+     *  from Medium's) — needed for accurate horizontal centring in {@link #textBoldCentered}. */
+    public static int widthBold(TextRenderer tr, String s, float scale) {
+        if (hasCyrillic(s)) {
+            return Math.round(tr.getWidth(Text.literal(s).setStyle(Style.EMPTY.withBold(true))) * scale * 2f);
+        }
+        LumeFontBold.ensure();
+        if (LumeFontBold.ready) {
+            return Math.round(LumeFontBold.advance(s) * scale * (18f / LumeFontBold.FONT_PX));
         }
         return Math.round(tr.getWidth(t(s)) * scale);
     }

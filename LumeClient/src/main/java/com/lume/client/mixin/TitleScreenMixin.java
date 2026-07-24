@@ -10,6 +10,7 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.TitleScreen;
+import net.minecraft.client.gui.widget.ClickableWidget;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -17,11 +18,17 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * Thin wiring layer: vanilla renders its OWN title screen (background, panorama, Singleplayer/
- * Multiplayer/Options/Language/Quit) completely untouched now — Lume only draws 4 small NanoVG
- * corner overlay buttons/panels on top (Account Manager / Settings / Fast Connect / Friends, see
- * {@link LumeTitleMenu}) and, only while a custom wallpaper is actually selected, swaps the
- * panorama for that image. Nothing here strips vanilla's own widgets any more.
+ * Thin wiring layer: while Custom Menu is on, every vanilla widget on the title screen (
+ * Singleplayer/Multiplayer/Realms banner/Options/Language/Accessibility/whatever else vanilla
+ * added) is hidden AND deactivated ({@code visible=false, active=false} on every child, set once
+ * in {@code init}'s TAIL) — Lume draws and hit-tests its own complete replacement composition
+ * instead (logo, Singleplayer/Multiplayer, corner buttons, bottom bar — see
+ * {@link LumeTitleMenu#render}), laid out to match the reference rather than vanilla's own
+ * spacing. Deactivating (not just hiding) vanilla's widgets matters: without it, an invisible
+ * vanilla button could still eat a click in whatever blank space it used to occupy, since Lume's
+ * own buttons live at different coordinates now. Vanilla's background/panorama is still used
+ * unless a wallpaper is selected — only the WIDGETS are replaced, per this same file's background
+ * injections below.
  *
  * <p>Ultra Performance draws its own 3 plain buttons (Friends/Fast Connect/Account Manager) via
  * the exact same {@code render TAIL} + {@code mouseClicked HEAD} injection pair already used for
@@ -34,6 +41,15 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  */
 @Mixin(TitleScreen.class)
 public class TitleScreenMixin {
+
+    @Inject(method = "init", at = @At("TAIL"), require = 0)
+    private void lume$hideVanillaWidgets(CallbackInfo ci) {
+        if (Config.ultra() || !CustomMenu.active()) return;
+        TitleScreen screen = (TitleScreen) (Object) this;
+        for (var el : screen.children()) {
+            if (el instanceof ClickableWidget w) { w.visible = false; w.active = false; }
+        }
+    }
 
     private static final int ULTRA_BTN_X = 4, ULTRA_BTN_W = 118, ULTRA_BTN_H = 20, ULTRA_BTN_GAP = 3;
 

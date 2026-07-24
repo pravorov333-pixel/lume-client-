@@ -9,17 +9,13 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.TitleScreen;
-import net.minecraft.client.util.DefaultSkinHelper;
-import net.minecraft.client.util.SkinTextures;
 import net.minecraft.text.Text;
 import org.lwjgl.glfw.GLFW;
 
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
 /**
  * Full-page Accounts manager (fills the whole screen, no floating bordered window — matches the
@@ -74,15 +70,22 @@ public class AccountManagerScreen extends Screen {
     private int sf() { return (int) Math.max(1, client.getWindow().getScaleFactor()); }
     private static int withAlpha(int rgb, int alpha) { return (alpha << 24) | (rgb & 0xFFFFFF); }
 
-    /** Same deterministic offline-mode UUID the launcher's own offline auth uses (see
-     *  {@code LumeLauncher/src/launcher.js}'s {@code offlineAuth} — md5("OfflinePlayer:"+name)),
-     *  so a saved nickname's head icon shows the SAME default Steve/Alex skin variant it would
-     *  actually get when you play as it. */
-    private static UUID offlineUuid(String name) {
-        return UUID.nameUUIDFromBytes(("OfflinePlayer:" + name).getBytes(StandardCharsets.UTF_8));
-    }
-
     private record Card(String name, boolean active, int x, int y) {}
+
+    /** Minimalist "face" in place of the real skin head, per the user's explicit ask — flat white
+     *  mouth + two white dot eyes on a black rounded-square background (a plain smiley, not a
+     *  skin render). Same footprint the skin icon used to occupy. */
+    private void drawFace(DrawContext ctx, int x, int y, int size) {
+        RenderUtil.roundedRect(ctx, x, y, size, size, Math.round(size * 0.22f), 0xFF000000);
+        int eyeR = Math.max(1, Math.round(size * 0.09f));
+        int eyeY = y + Math.round(size * 0.4f);
+        int eyeDX = Math.round(size * 0.24f);
+        RenderUtil.roundedRect(ctx, x + size / 2 - eyeDX - eyeR, eyeY - eyeR, eyeR * 2, eyeR * 2, eyeR, 0xFFFFFFFF);
+        RenderUtil.roundedRect(ctx, x + size / 2 + eyeDX - eyeR, eyeY - eyeR, eyeR * 2, eyeR * 2, eyeR, 0xFFFFFFFF);
+        int mouthW = Math.round(size * 0.4f), mouthH = Math.max(1, Math.round(size * 0.07f));
+        int mouthY = y + Math.round(size * 0.66f);
+        RenderUtil.roundedRect(ctx, x + size / 2 - mouthW / 2, mouthY, mouthW, mouthH, mouthH / 2, 0xFFFFFFFF);
+    }
 
     @Override
     public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
@@ -127,18 +130,13 @@ public class AccountManagerScreen extends Screen {
             for (Card c : cards) {
                 boolean hov = mouseX >= c.x() && mouseX <= c.x() + CARD_W && mouseY >= c.y() && mouseY <= c.y() + CARD_H;
                 float[] st = animFor("card:" + c.name());
-                st[0] = approach(st[0], hov ? 1f : 0f, 14f, dt);
+                st[0] = approach(st[0], hov ? 1f : 0f, 9f, dt);
                 int fill = c.active() ? withAlpha(Theme.accentRgb(), 0x33) : Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), st[0] * 0.5f);
                 RenderUtil.premiumBg(ctx, c.x(), c.y(), CARD_W, CARD_H, 6, st[0], fade(fill, p), fade(Theme.rim(), p), Theme.accentRgb());
                 int ly = c.y() - RenderUtil.premiumLift(st[0]);
 
-                var session = MinecraftClient.getInstance().getSession();
-                boolean isActiveSession = session != null && c.name().equals(session.getUsername());
-                SkinTextures skin = isActiveSession && MinecraftClient.getInstance().player != null
-                        ? MinecraftClient.getInstance().player.getSkinTextures()
-                        : DefaultSkinHelper.getSkinTextures(offlineUuid(c.name()));
                 int hs = CARD_H - 8;
-                net.minecraft.client.gui.PlayerSkinDrawer.draw(ctx, skin, c.x() + 4, ly + 4, hs);
+                drawFace(ctx, c.x() + 4, ly + 4, hs);
 
                 // Edit action (rename + server-bind) — rendered as a globe/planet glyph, same as
                 // the Language button in the main menu, per the user's explicit ask; still the

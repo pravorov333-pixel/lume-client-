@@ -7,6 +7,10 @@ import com.lume.client.module.modules.cosmetic.CustomMenu;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.TitleScreen;
+import net.minecraft.client.gui.screen.multiplayer.MultiplayerScreen;
+import net.minecraft.client.gui.screen.world.SelectWorldScreen;
+import net.minecraft.text.Text;
+import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -14,14 +18,19 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Overlay on top of the otherwise fully vanilla title screen: Account Manager / Theme / Colors /
- * Settings (top), Fast Connect / Friends (bottom corners), Options+Language / Quit (bottom
- * centre). Every button's BACKGROUND renders live through {@link RenderUtil#premiumBg} (raw-GL
+ * Complete replacement for the title screen's own widgets while Custom Menu is on — vanilla's
+ * Singleplayer/Multiplayer/Realms/Options/etc. buttons are all hidden AND deactivated (see
+ * {@code TitleScreenMixin}'s {@code init} injection), Lume draws and hit-tests everything itself
+ * instead: a centred logo lockup, Singleplayer/Multiplayer, an Options+Language/Quit bar directly
+ * under Multiplayer, and corner widgets (Account Manager / Theme / Colors / Settings top,
+ * Fast Connect / Friends bottom) — laid out to match the reference rather than vanilla's own
+ * spacing. Every button's BACKGROUND renders live through {@link RenderUtil#premiumBg} (raw-GL
  * SDF fill + contour-hugging glow + a slight lift on hover, see {@code SdfRenderer}) instead of
  * a baked PNG — crisp at any GUI scale, glow follows the button's actual rounded shape rather
  * than a rectangular halo. Icon glyphs (gear/globe/sun-moon/dots/×) are still small baked PNGs
- * ({@code MenuAssets}, now glyph-only/transparent-bg — see {@code tools/gen_menu.py}) blitted on
- * top of the live SDF background. No NanoVG anywhere in this class.
+ * ({@code MenuAssets}, glyph-only/transparent-bg — see {@code tools/gen_menu.py}), and the logo
+ * lockup itself is a baked PNG too (matches the reference's exact Montserrat styling — no
+ * in-game font renderer for that weight exists). No NanoVG anywhere in this class.
  */
 public final class LumeTitleMenu {
     private LumeTitleMenu() {}
@@ -30,9 +39,17 @@ public final class LumeTitleMenu {
     private static final Map<String, float[]> anim = new HashMap<>(); // {hover, press}
     private static final List<Object[]> hits = new ArrayList<>();     // {id, x, y, w, h, ...}
 
-    /** Which corner panel is open, or null. Only Settings still uses this inline dropdown —
-     *  Account/Fast Connect/Friends all open full screens now (see the click cases below). */
+    /** Which corner panel is open, or null. Account still opens a real full screen (needs the
+     *  room for a whole account grid) — Fast Connect/Friends/Settings are all compact anchored
+     *  dropdowns, matching how the reference shows them as small widgets, not pages. */
     private static String openPanel = null;
+
+    // Fast Connect / Friends panel state — see #renderFastConnectPanel / #renderFriendsPanel.
+    private static boolean fcFormOpen = false;
+    private static String fcName = "", fcAddr = "";
+    private static String frAddName = "";
+    /** Which text field currently has keyboard focus: "fc:name" / "fc:addr" / "fr:add" / null. */
+    private static String panelFocused = null;
 
     private static float[] a(String id) { return anim.computeIfAbsent(id, k -> new float[2]); }
 
@@ -52,7 +69,11 @@ public final class LumeTitleMenu {
     private static final int ACCT_W = 132;       // Account chip width (head + 2 lines of text)
     private static final int MARGIN = 10;
     private static final int GAP = 6;           // spacing between corner-cluster icons
-    private static final int RADIUS = 7;        // baked-in radius of PILL/ACCOUNT assets (see gen_menu.py)
+    private static final int RADIUS = TH / 2;   // true pill/stadium shape — was a mild 7px round,
+                                                 // bumped so the contour glow visibly reads as
+                                                 // hugging the button's actual rounded shape
+                                                 // instead of looking near-rectangular.
+    private static final int MAIN_BTN_W = 200, MAIN_BTN_H = 24;   // Singleplayer/Multiplayer
 
     public static void render(DrawContext ctx, TitleScreen screen, int mouseX, int mouseY) {
         if (!CustomMenu.active()) return;
@@ -72,6 +93,21 @@ public final class LumeTitleMenu {
         int fcX = MARGIN, fcY = height - MARGIN - TH;
         int frX = width - MARGIN - PILL_W, frY = height - MARGIN - TH;
 
+        // Central lockup — logo, Singleplayer, Multiplayer, then the Options+Language/Quit bar
+        // directly under Multiplayer — all clustered together (see class doc), matching the
+        // reference's "Full menu preview" composition instead of vanilla's own wide spacing.
+        int logoW = 200, logoH = Math.round(logoW * 100f / 240f);
+        int logoX = width / 2 - logoW / 2, logoY = 40;
+        MenuAssets.blit(ctx, MenuAssets.LOGO, logoX, logoY, logoW, logoH);
+
+        int spY = logoY + logoH + 16;
+        int mpY = spY + MAIN_BTN_H + 8;
+        int mainBtnX = width / 2 - MAIN_BTN_W / 2;
+        mainButton(ctx, "singleplayer", Text.translatable("menu.singleplayer").getString(), mainBtnX, spY, mouseX, mouseY, dt);
+        mainButton(ctx, "multiplayer", Text.translatable("menu.multiplayer").getString(), mainBtnX, mpY, mouseX, mouseY, dt);
+
+        renderBottomBar(ctx, width, mpY + MAIN_BTN_H + 10, mouseX, mouseY, dt);
+
         // Live SDF backgrounds + baked glyphs on top (see class doc).
         if (showAcct) renderAccountButton(ctx, MARGIN, MARGIN, mouseX, mouseY, dt);
         iconButton(ctx, "theme", MenuAssets.IC_THEME, themeX, gearY, TH, mouseX, mouseY, dt, false);
@@ -89,8 +125,6 @@ public final class LumeTitleMenu {
             hits.add(new Object[]{"friends", frX, frY, PILL_W, TH});
         }
 
-        renderBottomBar(ctx, width, height, mouseX, mouseY, dt);
-
         if ("settings".equals(openPanel)) {
             try {
                 renderSettingsPanel(ctx, mouseX, mouseY, gearX - (190 - TH), gearY + TH + 6, dt);
@@ -98,6 +132,22 @@ public final class LumeTitleMenu {
                 System.out.println("[Lume] LumeTitleMenu render failed: " + t);
             }
         }
+        if ("fastconnect".equals(openPanel)) renderFastConnectPanel(ctx, mouseX, mouseY, fcX, fcY - 6, dt);
+        if ("friends".equals(openPanel)) renderFriendsPanel(ctx, mouseX, mouseY, frX + PILL_W - 220, frY - 6, dt);
+    }
+
+    /** Singleplayer/Multiplayer — fully custom now (vanilla's own buttons are hidden, see
+     *  {@code TitleScreenMixin}): a true pill via {@link RenderUtil#premiumBg} + the vanilla
+     *  label text (translation-key-looked-up, so it's correct under any locale even though
+     *  nothing here is vanilla's own widget any more). */
+    private static void mainButton(DrawContext ctx, String id, String label, int x, int y, int mouseX, int mouseY, float dt) {
+        boolean hov = inside(mouseX, mouseY, x, y, MAIN_BTN_W, MAIN_BTN_H);
+        float[] st = a(id);
+        st[0] = approach(st[0], hov ? 1f : 0f, 8f, dt);
+        RenderUtil.premiumBg(ctx, x, y, MAIN_BTN_W, MAIN_BTN_H, MAIN_BTN_H / 2, st[0], Theme.winBg(), Theme.rim(), Theme.accentRgb());
+        int ly = y - RenderUtil.premiumLift(st[0]);
+        RenderUtil.textCentered(ctx, MinecraftClient.getInstance().textRenderer, label, x, ly, MAIN_BTN_W, MAIN_BTN_H, Theme.txt(), 0.5f);
+        hits.add(new Object[]{id, x, y, MAIN_BTN_W, MAIN_BTN_H});
     }
 
     /** Wide glass chip: live SDF background + real player head + nickname + license sub-label.
@@ -106,7 +156,7 @@ public final class LumeTitleMenu {
     private static void renderAccountButton(DrawContext ctx, int x, int y, int mouseX, int mouseY, float dt) {
         boolean hov = inside(mouseX, mouseY, x, y, ACCT_W, TH);
         float[] st = a("account");
-        st[0] = approach(st[0], hov ? 1f : 0f, 12f, dt);
+        st[0] = approach(st[0], hov ? 1f : 0f, 8f, dt);
         RenderUtil.premiumBg(ctx, x, y, ACCT_W, TH, RADIUS, st[0], Theme.winBg(), Theme.rim(), Theme.accentRgb());
         int ly = y - RenderUtil.premiumLift(st[0]);
 
@@ -144,7 +194,7 @@ public final class LumeTitleMenu {
         boolean open = id.equals(openPanel);
         boolean hov = inside(mouseX, mouseY, x, y, PILL_W, TH) || open;
         float[] st = a(id);
-        st[0] = approach(st[0], hov ? 1f : 0f, 12f, dt);
+        st[0] = approach(st[0], hov ? 1f : 0f, 8f, dt);
         RenderUtil.premiumBg(ctx, x, y, PILL_W, TH, RADIUS, st[0], Theme.winBg(), Theme.rim(), Theme.accentRgb());
         int ly = y - RenderUtil.premiumLift(st[0]);
         RenderUtil.textCentered(ctx, MinecraftClient.getInstance().textRenderer, label, x, ly, PILL_W, TH,
@@ -158,7 +208,7 @@ public final class LumeTitleMenu {
                                     int mouseX, int mouseY, float dt, boolean forceOn) {
         boolean hov = inside(mouseX, mouseY, x, y, size, size) || forceOn;
         float[] st = a(id);
-        st[0] = approach(st[0], hov ? 1f : 0f, 12f, dt);
+        st[0] = approach(st[0], hov ? 1f : 0f, 8f, dt);
         RenderUtil.premiumBg(ctx, x, y, size, size, Math.round(size * 0.28f), st[0], Theme.winBg(), Theme.rim(), Theme.accentRgb());
         int ly = y - RenderUtil.premiumLift(st[0]);
         int gs = Math.round(size * 0.5f);
@@ -172,8 +222,7 @@ public final class LumeTitleMenu {
 
     private static final int OPTLANG_W = 98, OPTLANG_H = 20, QUIT_W = 44, QUIT_H = 20;
 
-    private static void renderBottomBar(DrawContext ctx, int width, int height, int mouseX, int mouseY, float dt) {
-        int rowY = height - MARGIN - TH;
+    private static void renderBottomBar(DrawContext ctx, int width, int rowY, int mouseX, int mouseY, float dt) {
         int totalW = OPTLANG_W + GAP + QUIT_W;
         int barX = (width - totalW) / 2;
         int olX = barX, olY = rowY + (TH - OPTLANG_H) / 2;
@@ -181,7 +230,7 @@ public final class LumeTitleMenu {
 
         boolean olHov = inside(mouseX, mouseY, olX, olY, OPTLANG_W, OPTLANG_H);
         float[] olSt = a("optlang");
-        olSt[0] = approach(olSt[0], olHov ? 1f : 0f, 12f, dt);
+        olSt[0] = approach(olSt[0], olHov ? 1f : 0f, 8f, dt);
         RenderUtil.premiumBg(ctx, olX, olY, OPTLANG_W, OPTLANG_H, RADIUS, olSt[0], Theme.winBg(), Theme.rim(), Theme.accentRgb());
         int olLy = olY - RenderUtil.premiumLift(olSt[0]);
         int gs = 12;
@@ -193,7 +242,7 @@ public final class LumeTitleMenu {
 
         boolean qHov = inside(mouseX, mouseY, qX, qY, QUIT_W, QUIT_H);
         float[] qSt = a("quit");
-        qSt[0] = approach(qSt[0], qHov ? 1f : 0f, 12f, dt);
+        qSt[0] = approach(qSt[0], qHov ? 1f : 0f, 8f, dt);
         RenderUtil.premiumBg(ctx, qX, qY, QUIT_W, QUIT_H, RADIUS, qSt[0], Theme.winBg(), Theme.rim(), Theme.accentRgb());
         int qLy = qY - RenderUtil.premiumLift(qSt[0]);
         MenuAssets.blit(ctx, MenuAssets.IC_X, qX + (QUIT_W - gs) / 2, qLy + (QUIT_H - gs) / 2, gs, gs);
@@ -263,6 +312,109 @@ public final class LumeTitleMenu {
     }
 
     // ---------------------------------------------------------------------
+    // Fast Connect / Friends — compact anchored panels (NOT full screens, per the reference and
+    // "how it was with NanoVG + Custom Menu"), opened by clicking their corner pill, same
+    // panelChrome/close-on-outside-click convention as the Settings dropdown above. Same
+    // server-list/friend-list data (FastConnect.list, Friends.friendList) and add/connect/delete
+    // actions {@code FastConnectScreen}/{@code FriendsScreen} used, just laid out as a small
+    // widget instead of a page.
+
+    private static void renderFastConnectPanel(DrawContext ctx, int mouseX, int mouseY, int anchorX, int bottomY, float dt) {
+        List<FastConnect.Entry> list = FastConnect.list;
+        int pw = 220, rowH = 22, rowGap = 5, headerH = 22;
+        int rowsH = list.size() * (rowH + rowGap);
+        int formH = fcFormOpen ? (2 * 23 + 22 + rowGap) : (rowH + rowGap);
+        int ph = headerH + rowsH + formH + 8;
+        int px = Math.max(4, anchorX), py = bottomY - ph;
+
+        panelChrome(ctx, px, py, pw, ph, "Fast Connect");
+        var tr = MinecraftClient.getInstance().textRenderer;
+        int rowX = px + 10, rowW = pw - 20, ry = py + headerH;
+        for (int i = 0; i < list.size(); i++) {
+            FastConnect.Entry e = list.get(i);
+            int delW = 16, delX = rowX + rowW - delW - 2;
+            float[] rh = a("fcrow:" + i);
+            rh[0] = approach(rh[0], inside(mouseX, mouseY, rowX, ry, rowW, rowH) ? 1f : 0f, 10f, dt);
+            RenderUtil.roundedRect(ctx, rowX, ry, rowW, rowH, 6, Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), rh[0]));
+            RenderUtil.textVCentered(ctx, tr, e.name, rowX + 8, ry, rowH, Theme.txt(), 0.44f);
+            RenderUtil.textVCentered(ctx, tr, e.address, rowX + rowW - 44, ry, rowH, Theme.txtDim(), 0.36f);
+            RenderUtil.textCentered(ctx, tr, "✕", delX, ry, delW, rowH, Theme.txtDim(), 0.42f);
+            hits.add(new Object[]{"fcConnect", rowX, ry, rowW - delW - 4, rowH, i});
+            hits.add(new Object[]{"fcDelete", delX, ry, delW, rowH, i});
+            ry += rowH + rowGap;
+        }
+        if (!fcFormOpen) {
+            float[] ah = a("fcAddRow");
+            ah[0] = approach(ah[0], inside(mouseX, mouseY, rowX, ry, rowW, rowH) ? 1f : 0f, 10f, dt);
+            RenderUtil.roundedRect(ctx, rowX, ry, rowW, rowH, 6, Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), ah[0]));
+            RenderUtil.textCentered(ctx, tr, "+ " + com.lume.client.Lang.tUI("Add server"), rowX, ry, rowW, rowH, Theme.accent(), 0.44f);
+            hits.add(new Object[]{"fcOpenForm", rowX, ry, rowW, rowH});
+        } else {
+            panelField(ctx, tr, "fc:name", rowX, ry, rowW, 20, "server name", fcName);
+            ry += 23;
+            panelField(ctx, tr, "fc:addr", rowX, ry, rowW, 20, "ip:port", fcAddr);
+            ry += 25;
+            int halfW = (rowW - 6) / 2;
+            RenderUtil.roundedRect(ctx, rowX, ry, halfW, 22, 6, Theme.accent());
+            RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Add"), rowX, ry, halfW, 22, Theme.activeText(), 0.44f);
+            RenderUtil.roundedRect(ctx, rowX + halfW + 6, ry, halfW, 22, 6, Theme.glassRow());
+            RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Cancel"), rowX + halfW + 6, ry, halfW, 22, Theme.txt(), 0.44f);
+            hits.add(new Object[]{"fcSave", rowX, ry, halfW, 22});
+            hits.add(new Object[]{"fcCancel", rowX + halfW + 6, ry, halfW, 22});
+        }
+        hits.add(new Object[]{"panel", px, py, pw, ph});
+    }
+
+    private static void renderFriendsPanel(DrawContext ctx, int mouseX, int mouseY, int anchorX, int bottomY, float dt) {
+        List<String> friends = new ArrayList<>(com.lume.client.social.Friends.friendList);
+        friends.sort((a, b) -> Boolean.compare(com.lume.client.social.Friends.isOnline(b), com.lume.client.social.Friends.isOnline(a)));
+
+        int pw = 220, rowH = 22, rowGap = 5, headerH = 22, fieldH = 24;
+        int ph = headerH + friends.size() * (rowH + rowGap) + fieldH + 8;
+        int px = Math.max(4, anchorX), py = bottomY - ph;
+
+        panelChrome(ctx, px, py, pw, ph, "Friends");
+        var tr = MinecraftClient.getInstance().textRenderer;
+        int rowX = px + 10, rowW = pw - 20, ry = py + headerH;
+        for (String name : friends) {
+            boolean online = com.lume.client.social.Friends.isOnline(name);
+            int delW = 16, delX = rowX + rowW - delW - 2;
+            float[] rh = a("frrow:" + name);
+            rh[0] = approach(rh[0], inside(mouseX, mouseY, rowX, ry, rowW, rowH) ? 1f : 0f, 10f, dt);
+            RenderUtil.roundedRect(ctx, rowX, ry, rowW, rowH, 6, Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), rh[0]));
+            RenderUtil.roundedRect(ctx, rowX + 6, ry + rowH / 2 - 3, 5, 5, 3, online ? 0xFF6FCF7F : Theme.txtDim());
+            RenderUtil.textVCentered(ctx, tr, name, rowX + 16, ry, rowH, Theme.txt(), 0.44f);
+            RenderUtil.textCentered(ctx, tr, "✕", delX, ry, delW, rowH, Theme.txtDim(), 0.42f);
+            hits.add(new Object[]{"frConnect", rowX, ry, rowW - delW - 4, rowH, name});
+            hits.add(new Object[]{"frDelete", delX, ry, delW, rowH, name});
+            ry += rowH + rowGap;
+        }
+        boolean foc = "fr:add".equals(panelFocused);
+        int addW = 56, fieldW = rowW - addW - 6;
+        RenderUtil.roundedRect(ctx, rowX, ry, fieldW, fieldH, 6, foc ? Theme.glassHov() : Theme.glassRow());
+        if (foc) RenderUtil.roundedRect(ctx, rowX, ry + fieldH - 1, fieldW, 1, 1, Theme.accent());
+        String show = frAddName.isEmpty() && !foc ? com.lume.client.Lang.tUI("friend name") : frAddName + (foc ? "_" : "");
+        RenderUtil.textVCentered(ctx, tr, show, rowX + 6, ry, fieldH, frAddName.isEmpty() && !foc ? Theme.txtDim() : Theme.txt(), 0.42f);
+        int addX = rowX + fieldW + 6;
+        RenderUtil.roundedRect(ctx, addX, ry, addW, fieldH, 6, Theme.accent());
+        RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Add"), addX, ry, addW, fieldH, Theme.activeText(), 0.42f);
+        hits.add(new Object[]{"field:fr:add", rowX, ry, fieldW, fieldH});
+        hits.add(new Object[]{"frAdd", addX, ry, addW, fieldH});
+        hits.add(new Object[]{"panel", px, py, pw, ph});
+    }
+
+    private static void panelField(DrawContext ctx, net.minecraft.client.font.TextRenderer tr, String id,
+                                    int x, int y, int w, int h, String placeholder, String value) {
+        boolean foc = id.equals(panelFocused);
+        String show = value.isEmpty() && !foc ? com.lume.client.Lang.tUI(placeholder) : value + (foc ? "_" : "");
+        int color = value.isEmpty() && !foc ? Theme.txtDim() : Theme.txt();
+        RenderUtil.roundedRect(ctx, x, y, w, h, 5, foc ? Theme.glassHov() : Theme.glassRow());
+        if (foc) RenderUtil.roundedRect(ctx, x, y + h - 1, w, 1, 1, Theme.accent());
+        RenderUtil.textVCentered(ctx, tr, show, x + 6, y, h, color, 0.4f);
+        hits.add(new Object[]{"field:" + id, x, y, w, h});
+    }
+
+    // ---------------------------------------------------------------------
     // Input
 
     public static boolean mouseClicked(TitleScreen screen, double mouseX, double mouseY) {
@@ -275,9 +427,11 @@ public final class LumeTitleMenu {
             MinecraftClient mc = MinecraftClient.getInstance();
             switch (kind) {
                 case "account" -> { if (mc != null) mc.setScreen(new AccountManagerScreen(screen)); }
-                case "fastconnect" -> { if (mc != null) mc.setScreen(new FastConnectScreen(screen)); }
-                case "friends" -> { if (mc != null) mc.setScreen(new FriendsScreen(screen)); }
+                case "fastconnect" -> togglePanel("fastconnect");
+                case "friends" -> togglePanel("friends");
                 case "settings" -> togglePanel("settings");
+                case "singleplayer" -> { if (mc != null) mc.setScreen(new SelectWorldScreen(screen)); }
+                case "multiplayer" -> { if (mc != null) mc.setScreen(new MultiplayerScreen(screen)); }
                 case "theme" -> { Theme.toggle(); com.lume.client.gui.ThemeSync.save(); }
                 case "colors" -> { if (mc != null) mc.setScreen(new com.lume.client.gui.ColorsScreen(screen)); }
                 case "options" -> { if (mc != null) mc.setScreen(new net.minecraft.client.gui.screen.option.OptionsScreen(screen, mc.options)); }
@@ -292,22 +446,104 @@ public final class LumeTitleMenu {
                 case "accountToggle" -> { CustomMenu.toggleShowAccount(); Config.save(); }
                 case "fastConnectToggle" -> { CustomMenu.toggleShowFastConnect(); Config.save(); }
                 case "friendsToggle" -> { CustomMenu.toggleShowFriends(); Config.save(); }
+                case "fcOpenForm" -> { fcFormOpen = true; fcName = ""; fcAddr = ""; panelFocused = "fc:name"; }
+                case "fcCancel" -> { fcFormOpen = false; panelFocused = null; }
+                case "fcSave" -> { FastConnect.add(fcName, fcAddr); Config.save(); fcFormOpen = false; panelFocused = null; }
+                case "fcConnect" -> {
+                    int i = (int) h[5];
+                    if (i >= 0 && i < FastConnect.list.size()) {
+                        FastConnect.Entry e = FastConnect.list.get(i);
+                        var info = new net.minecraft.client.network.ServerInfo(e.name, e.address, net.minecraft.client.network.ServerInfo.ServerType.OTHER);
+                        net.minecraft.client.gui.screen.multiplayer.ConnectScreen.connect(screen, mc,
+                                net.minecraft.client.network.ServerAddress.parse(e.address), info, false, null);
+                    }
+                }
+                case "fcDelete" -> {
+                    int i = (int) h[5];
+                    if (i >= 0 && i < FastConnect.list.size()) { FastConnect.remove(FastConnect.list.get(i)); Config.save(); }
+                }
+                case "frConnect" -> {
+                    String n = (String) h[5];
+                    var st = com.lume.client.social.Friends.statusOf(n);
+                    if (st != null && st.online && st.server != null) com.lume.client.social.Friends.connectTo(st.server);
+                }
+                case "frDelete" -> com.lume.client.social.Friends.removeFriend((String) h[5]);
+                case "frAdd" -> { com.lume.client.social.Friends.addFriend(frAddName.trim()); frAddName = ""; }
+                case "field:fc:name" -> panelFocused = "fc:name";
+                case "field:fc:addr" -> panelFocused = "fc:addr";
+                case "field:fr:add" -> panelFocused = "fr:add";
                 default -> { }
             }
             return true;
         }
-        if (openPanel != null) openPanel = null;
+        if (openPanel != null) { openPanel = null; panelFocused = null; fcFormOpen = false; }
         return false;
     }
 
     private static void togglePanel(String id) {
         openPanel = id.equals(openPanel) ? null : id;
+        panelFocused = null;
+        if (!"fastconnect".equals(openPanel)) fcFormOpen = false;
     }
 
-    /** Settings' cycler rows never take text input — nothing left to type into on this screen
-     *  any more (Fast Connect/Friends/Account's own text fields all moved into their own
-     *  screens), but the signature stays for {@code ScreenMixin}'s existing call site. */
+    /** Fast Connect/Friends text fields have no real {@code charTyped} to hook (TitleScreen never
+     *  overrides it — see the old doc note this replaced), so characters are derived straight
+     *  from the key code instead: covers what server names/addresses/nicknames actually need
+     *  (letters, digits, {@code . - _ : /} and space). Not full Unicode input, but this is the
+     *  same constraint every previous round of this exact overlay has worked within. */
+    private static char charForKey(int keyCode, int modifiers) {
+        boolean shift = (modifiers & GLFW.GLFW_MOD_SHIFT) != 0;
+        if (keyCode >= GLFW.GLFW_KEY_A && keyCode <= GLFW.GLFW_KEY_Z) {
+            char c = (char) ('a' + (keyCode - GLFW.GLFW_KEY_A));
+            return shift ? Character.toUpperCase(c) : c;
+        }
+        if (keyCode >= GLFW.GLFW_KEY_0 && keyCode <= GLFW.GLFW_KEY_9) return (char) ('0' + (keyCode - GLFW.GLFW_KEY_0));
+        if (keyCode == GLFW.GLFW_KEY_PERIOD) return '.';
+        if (keyCode == GLFW.GLFW_KEY_MINUS) return shift ? '_' : '-';
+        if (keyCode == GLFW.GLFW_KEY_SPACE) return ' ';
+        if (keyCode == GLFW.GLFW_KEY_SEMICOLON) return shift ? ':' : ';';
+        if (keyCode == GLFW.GLFW_KEY_SLASH) return '/';
+        return 0;
+    }
+
+    private static String focusedValue() {
+        return switch (panelFocused) {
+            case "fc:name" -> fcName;
+            case "fc:addr" -> fcAddr;
+            case "fr:add" -> frAddName;
+            default -> "";
+        };
+    }
+
+    private static void setFocusedValue(String v) {
+        switch (panelFocused) {
+            case "fc:name" -> fcName = v;
+            case "fc:addr" -> fcAddr = v;
+            case "fr:add" -> frAddName = v;
+            default -> { }
+        }
+    }
+
+    /** Routes typed characters into whichever Fast Connect/Friends field has focus (see
+     *  {@link #charForKey}); Settings' cycler rows never take text input. */
     public static boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-        return false;
+        if (panelFocused == null) return false;
+        if (keyCode == GLFW.GLFW_KEY_ESCAPE) { panelFocused = null; return true; }
+        if (keyCode == GLFW.GLFW_KEY_BACKSPACE) {
+            String v = focusedValue();
+            if (!v.isEmpty()) setFocusedValue(v.substring(0, v.length() - 1));
+            return true;
+        }
+        if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER) {
+            switch (panelFocused) {
+                case "fc:name" -> panelFocused = "fc:addr";
+                case "fc:addr" -> { FastConnect.add(fcName, fcAddr); Config.save(); fcFormOpen = false; panelFocused = null; }
+                case "fr:add" -> { com.lume.client.social.Friends.addFriend(frAddName.trim()); frAddName = ""; }
+            }
+            return true;
+        }
+        char c = charForKey(keyCode, modifiers);
+        if (c != 0) setFocusedValue(focusedValue() + c);
+        return true;
     }
 }

@@ -55,7 +55,6 @@
     "SplashOverlayMixin",
     "SplashTextRendererMixin",
     "TextRendererMixin",
-    "TitleButtonMixin",
     "TitleScreenMixin",
     "WorldRendererMixin"
   ],

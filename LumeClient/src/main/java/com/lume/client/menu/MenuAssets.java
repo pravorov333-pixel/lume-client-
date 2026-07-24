@@ -37,6 +37,7 @@ public final class MenuAssets {
     private MenuAssets() {}
 
     public static final String LOGO = "logo";
+    public static final String WORDMARK = "wordmark";
     public static final String SINGLEPLAYER = "singleplayer";
     public static final String MULTIPLAYER = "multiplayer";
     public static final String OPTIONS_LANGUAGE = "box_options_language";

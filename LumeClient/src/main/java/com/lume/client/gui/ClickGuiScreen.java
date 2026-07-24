@@ -226,11 +226,44 @@ public class ClickGuiScreen extends Screen {
     private void text(DrawContext ctx, String s, int x, int y, int color, float vis) {
         RenderUtil.text(ctx, this.textRenderer, s, x, y, color, false, vis * scale);
     }
+    private void textBold(DrawContext ctx, String s, int x, int y, int color, float vis) {
+        RenderUtil.textBold(ctx, this.textRenderer, s, x, y, color, vis * scale);
+    }
     private int width(String s, float vis) { return RenderUtil.width(this.textRenderer, s, vis * scale); }
 
     private void glass(DrawContext ctx, int x, int y, int w, int h, int r, int fill, int rimW) {
         RenderUtil.roundedRect(ctx, x, y, w, h, r, Theme.rim());
         RenderUtil.roundedRect(ctx, x + rimW, y + rimW, w - 2 * rimW, h - 2 * rimW, Math.max(2, r - rimW), fill);
+    }
+
+    /** SDF version of {@link #glass} — fill + thin rim outline in one shader draw instead of two
+     *  stacked CPU rects, for crisp edges. Must be called from inside the window's own pushed
+     *  matrix (uses the same winOffX/winOffY/cx/cy/total every other SDF call in this render()
+     *  tree uses). */
+    private void sdfGlass(DrawContext ctx, int x, int y, int w, int h, int r, int fill, int S,
+                           double cx, double cy, float total) {
+        ctx.draw();
+        SdfRenderer.boxWindowLocal(winOffX * S, winOffY * S, cx, cy, total, x, y, w, h, r,
+                fill, Theme.rim(), Math.max(1f, S), 0, 0f);
+    }
+
+    /** Premium icon button background: SDF fill (matches ThemeIcons' own flat-square shape/colour
+     *  exactly, so the two layers merge seamlessly) + a contour-hugging glow, with a small upward
+     *  lift on hover (position only — no width/height stretch), then the actual glyph on top via
+     *  the existing {@link ThemeIcons} legacy helpers (moon/sun/dots), drawn at the same lifted y
+     *  so the icon visually moves with its button. */
+    private void drawPremiumIconBtn(DrawContext ctx, int x, int y, int w, int h, float hoverAmt, int S,
+                                     int winOffX, int winOffY, double cx, double cy, float total, boolean isTheme) {
+        int lift = Math.round(hoverAmt * 2f) * S;
+        int by = y - lift;
+        int bg = Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), hoverAmt);
+        int glowA = Math.round(hoverAmt * 140f);
+        int glow = (glowA << 24) | (Theme.accentRgb() & 0xFFFFFF);
+        ctx.draw();
+        SdfRenderer.boxWindowLocal(winOffX * S, winOffY * S, cx, cy, total, x, by, w, h, w / 3,
+                bg, 0, 0f, glow, (3f + hoverAmt * 6f) * S);
+        if (isTheme) ThemeIcons.drawThemeLegacy(ctx, x, by, w, bg);
+        else ThemeIcons.drawColorsLegacy(ctx, x, by, w, bg);
     }
 
     private float anim() {
@@ -247,7 +280,8 @@ public class ClickGuiScreen extends Screen {
                 if (m.getName().toLowerCase().contains(q)) out.add(m);
         } else if (selectedCat < CATS.length) {
             for (Module m : LumeClient.MODULES.getModules(CATS[selectedCat]))
-                if (!m.getName().equals("Server Helper") && !m.getName().equals("Free Look")) out.add(m);   // bind-only, no menu card
+                if (!m.getName().equals("Server Helper") && !m.getName().equals("Free Look")
+                        && !m.getName().equals("Discord Rich Presence")) out.add(m);   // bind-only / always-on, no menu card
         }
         return out;
     }
@@ -300,6 +334,13 @@ public class ClickGuiScreen extends Screen {
         int x = (sw - W) / 2, y = (sh - H) / 2;
         int r = 18 * S;
 
+        // Top nav bar (Menu / Events / Config / Friends) — mirrors renderNvgMain's own
+        // drawTopNavNvg call; "Menu" (this screen) is always the active tab here.
+        int activeTopTab = search.isEmpty() ? topSection : -1;
+        int[] navYH = NavBar.drawLegacy(ctx, x, y, W, S, activeTopTab, dt, topNavSegX, topNavSegW,
+                winOffX * S, winOffY * S, cx, cy, total);
+        topNavSegY = navYH[0]; topNavSegH = navYH[1];
+
         // Panel — pixel-perfect SDF rounded rect (raw GL, see SdfRenderer) instead of RenderUtil's
         // CPU-coverage approximation. Flat minimalist chrome: flat fill + thin rim, no glow/bloom.
         // ctx.draw() flushes everything queued so far (backdrop fill, HUD frames) before this raw
@@ -317,32 +358,38 @@ public class ClickGuiScreen extends Screen {
         // size/position argument in this whole render() tree, needs *S to match the 1/S the
         // outer mtx.scale(1f/S,...) divides everything back down by at the very end.
         RenderUtil.drawLogo(ctx, x + 16 * S, y + 12 * S, 22 * S);
-        Wordmark.drawLegacyCentered(ctx, MinecraftClient.getInstance().textRenderer,
-                x, W, y + 14 * S, 0.83f * S);
+        // Baked wordmark (see gen_menu.py's wordmark.png) instead of live vanilla-font text —
+        // matches the reference's exact Montserrat styling, same asset LumeTitleMenu's main-menu
+        // logo lockup uses, just the text-only half (this header keeps its own separate corner
+        // star mark above, unlike the main menu's combined star+text lockup).
+        int wmW = 130, wmH = wmW * 30 / 220;
+        com.lume.client.menu.MenuAssets.blit(ctx, com.lume.client.menu.MenuAssets.WORDMARK,
+                x + (W - wmW * S) / 2, y + 12 * S + (22 * S - wmH * S) / 2, wmW * S, wmH * S);
 
-        // Theme toggle (right) — animated hover + press pulse
-        int tbw = 56 * S, tbh = 22 * S, tbx = x + W - tbw - 20 * S, tby = y + 14 * S;
+        // Theme + Colors icon buttons (top-right) — same icon glyphs as the NanoVG header
+        // (ThemeIcons.drawThemeLegacy/drawColorsLegacy, already built for this), same layout
+        // LumeSubScreen's header uses so every catalog matches. Premium hover: small upward
+        // lift (no width/height stretch) + a contour-hugging glow via the SDF shader.
+        int tbw = 22 * S, tbh = 22 * S, tbx = x + W - tbw - 20 * S, tby = y + 14 * S;
         boolean tbHov = inside(mx, my, tbx, tby, tbw, tbh);
         float[] ta = animFor("_theme");
         ta[0] = approach(ta[0], tbHov ? 1f : 0f, 12f, dt);
-        ta[2] = Math.max(0f, ta[2] - dt * 5f);
-        var mt = ctx.getMatrices();
-        mt.push();
-        float tps = 1f - 0.07f * ta[2];
-        mt.translate(tbx + tbw / 2.0, tby + tbh / 2.0, 0.0);
-        mt.scale(tps, tps, 1f);
-        mt.translate(-(tbx + tbw / 2.0), -(tby + tbh / 2.0), 0.0);
-        glass(ctx, tbx, tby, tbw, tbh, 11 * S, Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), ta[0]), S);
-        String tl = Theme.isDark() ? "Dark" : "Light";
-        RenderUtil.textCentered(ctx, this.textRenderer, tl, tbx, tby, tbw, tbh, Theme.txt(), 0.5f * scale);
-        mt.pop();
+
+        int cbw = 22 * S, cbh = 22 * S, cbx = tbx - cbw - 6 * S, cby = tby;
+        boolean cbHov = inside(mx, my, cbx, cby, cbw, cbh);
+        float[] ca0 = animFor("_colors");
+        ca0[0] = approach(ca0[0], cbHov ? 1f : 0f, 12f, dt);
+
+        drawPremiumIconBtn(ctx, tbx, tby, tbw, tbh, ta[0], S, winOffX, winOffY, cx, cy, total, true);
+        drawPremiumIconBtn(ctx, cbx, cby, cbw, cbh, ca0[0], S, winOffX, winOffY, cx, cy, total, false);
         themeBtn = new int[]{ tbx, tby, tbw, tbh };
+        colorsBtn = new int[]{ cbx, cby, cbw, cbh };
 
         // Search (full width) — click to focus; vanilla font so any text renders
         int sx = x + 20 * S, sy = y + 46 * S, swid = W - 40 * S, shei = 26 * S;
         searchBox = new int[]{ sx, sy, swid, shei };
         boolean searchFocused = "search".equals(focusedField);
-        glass(ctx, sx, sy, swid, shei, 10 * S, searchFocused ? Theme.glassHov() : Theme.glassRow(), S);
+        sdfGlass(ctx, sx, sy, swid, shei, 10 * S, searchFocused ? Theme.glassHov() : Theme.glassRow(), S, cx, cy, total);
         if (searchFocused) RenderUtil.roundedRect(ctx, sx, sy + shei - Math.max(1, S), swid, Math.max(1, S), 1, Theme.accent());
         boolean empty = search.isEmpty() && !searchFocused;
         String shown = empty ? "Search modules…" : search + (searchFocused ? "_" : "");
@@ -359,7 +406,7 @@ public class ClickGuiScreen extends Screen {
         int[] ww = new int[tabs];
         for (int i = 0; i < tabs; i++) { ww[i] = width(tabTitle(i), 0.5f) + padSeg * 2; segTotal += ww[i]; }
         int barX = x + (W - segTotal) / 2;
-        glass(ctx, barX - 4 * S, segY - 3 * S, segTotal + 8 * S, segH + 6 * S, 13 * S, Theme.glassRow(), S);
+        sdfGlass(ctx, barX - 4 * S, segY - 3 * S, segTotal + 8 * S, segH + 6 * S, 13 * S, Theme.glassRow(), S, cx, cy, total);
         int cx2 = barX;
         for (int i = 0; i < tabs; i++) {
             segX[i] = cx2; segW[i] = ww[i];
@@ -372,7 +419,7 @@ public class ClickGuiScreen extends Screen {
                         Theme.winBg(), Theme.accent(), 1.5f * S, Theme.accent(), 6f * S);
             }
             int tw = width(tabTitle(i), 0.5f);
-            text(ctx, tabTitle(i), cx2 + (ww[i] - tw) / 2, segY + 8 * S, sel ? Theme.activeText() : Theme.txtDim(), 0.5f);
+            textBold(ctx, tabTitle(i), cx2 + (ww[i] - tw) / 2, segY + 8 * S, sel ? Theme.activeText() : Theme.txtDim(), 0.5f);
             cx2 += ww[i];
         }
 
@@ -469,32 +516,35 @@ public class ClickGuiScreen extends Screen {
             ca[1] = approach(ca[1], en ? 1f : 0f, 11f, dt);
             ca[2] = Math.max(0f, ca[2] - dt * 4.5f);
             ca[4] = approach(ca[4], cardHov ? 1f : 0f, 14f, dt);
-            float ha = ca[0], ea = ca[1], pa = ca[2], ex = ca[3], gha = ca[4];
+            float ha = ca[0], ea = ca[1], pa = ca[2], ex = ca[3];
 
-            int e = Math.round(ha * S * (1f - ex));   // hover lift (off while expanded)
-            int dx = rx - e, dy = cy0 - e, dw = cardW + 2 * e, dh = ch + 2 * e;
-
-            var mc2 = ctx.getMatrices();
-            mc2.push();
-            float ps = 1f - 0.06f * pa;                 // press pulse around the header
-            mc2.translate(dx + dw / 2.0, dy + headerH / 2.0, 0.0);
-            mc2.scale(ps, ps, 1f);
-            mc2.translate(-(dx + dw / 2.0), -(dy + headerH / 2.0), 0.0);
+            // Premium hover: position-only lift (no width/height stretch, per the "без
+            // растягиваний" ask) + an SDF background whose contour-hugging glow grows with
+            // hover — same lift/glow curve RenderUtil.premiumBg uses, inlined here since this
+            // file's coordinates are native px, not DrawContext-logical (calling premiumBg
+            // directly would double-apply the S factor).
+            int liftS = Math.round(ha * 2f) * S;
+            int dx = rx, dy = cy0 - liftS, dw = cardW, dh = ch;
 
             RenderUtil.roundedRect(ctx, dx + 1 * S, dy + 2 * S, dw, dh, 11 * S, Theme.shadow());
 
             int base = Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), ha);
             int onFill = withAlpha(Theme.accentRgb(), Theme.isDark() ? 0x4D : 0x40);
             int fill = Theme.colorLerp(base, onFill, ea);
-            glass(ctx, dx, dy, dw, dh, 11 * S, fill, S);
+            int glowA = Math.round(ha * 140f);
+            int glow = (glowA << 24) | (Theme.accentRgb() & 0xFFFFFF);
+            ctx.draw();
+            SdfRenderer.boxWindowLocal(winOffX * S, winOffY * S, cx, cy, total, dx, dy, dw, dh, 11 * S,
+                    fill, Theme.rim(), Math.max(1f, S), glow, (3f + ha * 6f) * S);
             RenderUtil.roundedRect(ctx, dx + 8 * S, dy + 1 * S, dw - 16 * S, Math.max(1, S), 1 * S, Theme.border());
 
             if (pa > 0.01f) RenderUtil.roundedRect(ctx, dx, dy, dw, headerH, 11 * S, withAlpha(0xFFFFFF, Math.round(pa * 55)));
 
-            // centred name (leave room on the right for the settings arrow)
+            // centred name (leave room on the right for the settings arrow) — bold, per the
+            // "шрифт потолще" ask (also thickens the Cyrillic vanilla-font fallback).
             int col2 = Theme.colorLerp(Theme.txt(), Theme.activeText(), ea);
             int nameRightPad = m.hasSettings() ? 20 * S : 0;
-            RenderUtil.textCentered(ctx, this.textRenderer, m.getName(), dx, dy, dw - nameRightPad, headerH, col2, 0.52f * scale);
+            RenderUtil.textBoldCentered(ctx, this.textRenderer, m.getName(), dx, dy, dw - nameRightPad, headerH, col2, 0.52f * scale);
 
             // on-indicator dot (top-right)
             if (ea > 0.02f) {
@@ -518,8 +568,6 @@ public class ClickGuiScreen extends Screen {
                 renderSettings(ctx, m, dx, cy0 + headerH, dw, S, mx, my, dt);
                 ctx.disableScissor();
             }
-
-            mc2.pop();
         }
         ctx.disableScissor();
 
@@ -527,10 +575,12 @@ public class ClickGuiScreen extends Screen {
         if (maxScroll > 0) {
             int sbW = 3 * S;
             int sbX = x + W - margin / 2 - sbW;
-            RenderUtil.roundedRect(ctx, sbX, gy, sbW, visH, sbW, Theme.glassRow());
+            ctx.draw();
+            SdfRenderer.boxWindowLocal(winOffX * S, winOffY * S, cx, cy, total, sbX, gy, sbW, visH, sbW, Theme.glassRow(), 0, 0f, 0, 0f);
             int thumbH = Math.max(14 * S, Math.round(visH * (visH / (float) contentH)));
             int thumbY = gy + Math.round((visH - thumbH) * (scroll / maxScroll));
-            RenderUtil.roundedRect(ctx, sbX, thumbY, sbW, thumbH, sbW, Theme.accent());
+            ctx.draw();
+            SdfRenderer.boxWindowLocal(winOffX * S, winOffY * S, cx, cy, total, sbX, thumbY, sbW, thumbH, sbW, Theme.accent(), 0, 0f, 0, 0f);
         }
 
         // Resize grip (bottom-right corner) — drag to scale the whole window

@@ -131,11 +131,30 @@ def build_set(theme,style):
     pal=PAL[theme]; key=f'{theme}_{style}'; outdir=os.path.join(OUT_ROOT,key); os.makedirs(outdir,exist_ok=True)
     ink=pal['ink']; inkc=(ink[0],ink[1],ink[2],255); bg=pal['bg']; holecol=(bg[0],bg[1],bg[2],255)
 
-    img=new(210,32); draw_glass_star(img,3,4,24,pal)
-    d=ImageDraw.Draw(img); f=font(20*SS); asc,desc=f.getmetrics(); ty=(32*SS-(asc+desc))//2
-    tx=int((3+24+7)*SS); d.text((tx,ty),'LUME',font=f,fill=inkc); lw=d.textbbox((0,0),'LUME',font=f)[2]; vx=tx+lw+6*SS
-    ww=d.textbbox((0,0),'VISUALS',font=f)[2]; g,m=hgrad_text('VISUALS',f,ty,pal['accent'],pal['mintlight'],ww+8*SS,32*SS)
-    img.paste(g,(int(vx),0),m); save(img,210,32,os.path.join(outdir,'logo.png'))
+    # Full lockup — star mark CENTRED on top, "LUME VISUALS" wordmark centred below it (per the
+    # reference: logo above the text, not side-by-side). Baked (not live vector text) so the
+    # in-game render matches the reference's exact Montserrat Bold styling — no bundled font
+    # renderer for this weight/style exists in-game.
+    LOGO_W, LOGO_H, STAR = 240, 100, 46
+    img=new(LOGO_W,LOGO_H)
+    draw_glass_star(img,(LOGO_W-STAR)/2,6,STAR,pal)
+    f=font(23*SS); d=ImageDraw.Draw(img)
+    lume_w=d.textbbox((0,0),'LUME ',font=f)[2]; vis_w=d.textbbox((0,0),'VISUALS',font=f)[2]
+    ty=int((STAR+22)*SS); tx0=int((LOGO_W*SS-(lume_w+vis_w))/2)
+    d.text((tx0,ty),'LUME ',font=f,fill=inkc)
+    g,m=hgrad_text('VISUALS',f,ty,pal['accent'],pal['mintlight'],vis_w+8*SS,LOGO_H*SS)
+    img.paste(g,(tx0+lume_w,0),m); save(img,LOGO_W,LOGO_H,os.path.join(outdir,'logo.png'))
+
+    # Text-only wordmark (no star) — for contexts that already draw their own separate corner
+    # mark (ClickGUI's header), just upgrading the FONT to match the reference.
+    WM_W, WM_H = 220, 30
+    img=new(WM_W,WM_H); f=font(21*SS); d=ImageDraw.Draw(img)
+    lume_w=d.textbbox((0,0),'LUME ',font=f)[2]; vis_w=d.textbbox((0,0),'VISUALS',font=f)[2]
+    asc,desc=f.getmetrics(); ty=(WM_H*SS-(asc+desc))//2
+    tx0=int((WM_W*SS-(lume_w+vis_w))/2)
+    d.text((tx0,ty),'LUME ',font=f,fill=inkc)
+    g,m=hgrad_text('VISUALS',f,ty,pal['accent'],pal['mintlight'],vis_w+8*SS,WM_H*SS)
+    img.paste(g,(tx0+lume_w,0),m); save(img,WM_W,WM_H,os.path.join(outdir,'wordmark.png'))
 
     for nm,lbl in [('singleplayer','Singleplayer'),('multiplayer','Multiplayer')]:
         img=new(200,20); draw_surface(img,200,20,6,style,theme,pal); label(img,lbl,200,20,11,inkc); save(img,200,20,os.path.join(outdir,nm+'.png'))
