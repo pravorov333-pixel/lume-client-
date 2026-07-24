@@ -22,15 +22,18 @@ import java.util.Map;
  * Singleplayer/Multiplayer/Realms/Options/etc. buttons are all hidden AND deactivated (see
  * {@code TitleScreenMixin}'s {@code init} injection), Lume draws and hit-tests everything itself
  * instead: a centred logo lockup, Singleplayer/Multiplayer, an Options+Language/Quit bar directly
- * under Multiplayer, and corner widgets (Account Manager / Theme / Colors / Settings top,
- * Fast Connect / Friends bottom) — laid out to match the reference rather than vanilla's own
- * spacing. Every button's BACKGROUND renders live through {@link RenderUtil#premiumBg} (raw-GL
- * SDF fill + contour-hugging glow + a slight lift on hover, see {@code SdfRenderer}) instead of
- * a baked PNG — crisp at any GUI scale, glow follows the button's actual rounded shape rather
- * than a rectangular halo. Icon glyphs (gear/globe/sun-moon/dots/×) are still small baked PNGs
- * ({@code MenuAssets}, glyph-only/transparent-bg — see {@code tools/gen_menu.py}), and the logo
- * lockup itself is a baked PNG too (matches the reference's exact Montserrat styling — no
- * in-game font renderer for that weight exists). No NanoVG anywhere in this class.
+ * under Multiplayer, corner icon widgets (Account Manager / Theme / Colors / Settings, top), and
+ * Fast Connect / Friends as ALWAYS-EXPANDED panels pinned to the bottom corners (not click-to-
+ * open — per the reference's "Menu widgets" gallery, they're persistent widgets showing their
+ * server/friend rows directly, same as everything else laid out to match the reference rather
+ * than vanilla's own spacing). Every button's BACKGROUND renders live through {@link
+ * RenderUtil#premiumBg} (raw-GL SDF fill + contour-hugging glow + a slight lift on hover, see
+ * {@code SdfRenderer}) instead of a baked PNG — crisp at any GUI scale, glow follows the button's
+ * actual rounded shape rather than a rectangular halo. Icon glyphs (gear/globe/sun-moon/dots/×)
+ * are still small baked PNGs ({@code MenuAssets}, glyph-only/transparent-bg — see {@code
+ * tools/gen_menu.py}), and the logo lockup itself is a baked PNG too (matches the reference's
+ * exact Montserrat styling — no in-game font renderer for that weight exists). No NanoVG
+ * anywhere in this class.
  */
 public final class LumeTitleMenu {
     private LumeTitleMenu() {}
@@ -39,9 +42,9 @@ public final class LumeTitleMenu {
     private static final Map<String, float[]> anim = new HashMap<>(); // {hover, press}
     private static final List<Object[]> hits = new ArrayList<>();     // {id, x, y, w, h, ...}
 
-    /** Which corner panel is open, or null. Account still opens a real full screen (needs the
-     *  room for a whole account grid) — Fast Connect/Friends/Settings are all compact anchored
-     *  dropdowns, matching how the reference shows them as small widgets, not pages. */
+    /** Which click-to-open corner panel is open, or null — only Settings uses this now. Account
+     *  opens a real full screen (needs the room for a whole account grid); Fast Connect/Friends
+     *  are always-expanded panels with no open/closed state at all (see {@link #render}). */
     private static String openPanel = null;
 
     // Fast Connect / Friends panel state — see #renderFastConnectPanel / #renderFriendsPanel.
@@ -65,7 +68,6 @@ public final class LumeTitleMenu {
     // Render
 
     private static final int TH = 28;          // Settings stays this square
-    private static final int PILL_W = 108;      // Fast Connect/Friends pill width
     private static final int ACCT_W = 132;       // Account chip width (head + 2 lines of text)
     private static final int MARGIN = 10;
     private static final int GAP = 6;           // spacing between corner-cluster icons
@@ -90,8 +92,6 @@ public final class LumeTitleMenu {
         int gearX = width - MARGIN - TH, gearY = MARGIN;
         int colorsX = gearX - GAP - TH;
         int themeX = colorsX - GAP - TH;
-        int fcX = MARGIN, fcY = height - MARGIN - TH;
-        int frX = width - MARGIN - PILL_W, frY = height - MARGIN - TH;
 
         // Central lockup — logo, Singleplayer, Multiplayer, then the Options+Language/Quit bar
         // directly under Multiplayer — all clustered together (see class doc), matching the
@@ -116,14 +116,12 @@ public final class LumeTitleMenu {
         hits.add(new Object[]{"colors", colorsX, gearY, TH, TH});
         iconButton(ctx, "settings", MenuAssets.IC_GEAR, gearX, gearY, TH, mouseX, mouseY, dt, "settings".equals(openPanel));
         hits.add(new Object[]{"settings", gearX, gearY, TH, TH});
-        if (CustomMenu.showFastConnect()) {
-            pillButton(ctx, "fastconnect", "Fast Connect", fcX, fcY, mouseX, mouseY, dt);
-            hits.add(new Object[]{"fastconnect", fcX, fcY, PILL_W, TH});
-        }
-        if (CustomMenu.showFriends()) {
-            pillButton(ctx, "friends", "Friends", frX, frY, mouseX, mouseY, dt);
-            hits.add(new Object[]{"friends", frX, frY, PILL_W, TH});
-        }
+
+        // Fast Connect / Friends — ALWAYS expanded on screen (not click-to-open), per the
+        // reference's "Menu widgets" gallery: bottom-left/bottom-right persistent panels, same
+        // panelChrome look as everything else.
+        if (CustomMenu.showFastConnect()) renderFastConnectPanel(ctx, mouseX, mouseY, MARGIN, height - MARGIN, dt);
+        if (CustomMenu.showFriends()) renderFriendsPanel(ctx, mouseX, mouseY, width - MARGIN - 220, height - MARGIN, dt);
 
         if ("settings".equals(openPanel)) {
             try {
@@ -132,8 +130,6 @@ public final class LumeTitleMenu {
                 System.out.println("[Lume] LumeTitleMenu render failed: " + t);
             }
         }
-        if ("fastconnect".equals(openPanel)) renderFastConnectPanel(ctx, mouseX, mouseY, fcX, fcY - 6, dt);
-        if ("friends".equals(openPanel)) renderFriendsPanel(ctx, mouseX, mouseY, frX + PILL_W - 220, frY - 6, dt);
     }
 
     /** Singleplayer/Multiplayer — fully custom now (vanilla's own buttons are hidden, see
@@ -186,19 +182,6 @@ public final class LumeTitleMenu {
         RenderUtil.textVCentered(ctx, tr, nick, textX, ly + TH / 2 - 7, 7, Theme.txt(), 0.43f);
         RenderUtil.textVCentered(ctx, tr, subLabel, textX, ly + TH / 2, 7, Theme.txtDim(), 0.33f);
         hits.add(new Object[]{"account", x, y, ACCT_W, TH});
-    }
-
-    /** Wide glass pill with a full text label (Fast Connect / Friends) — live SDF background,
-     *  same look/feel as {@link #renderAccountButton}. */
-    private static void pillButton(DrawContext ctx, String id, String label, int x, int y, int mouseX, int mouseY, float dt) {
-        boolean open = id.equals(openPanel);
-        boolean hov = inside(mouseX, mouseY, x, y, PILL_W, TH) || open;
-        float[] st = a(id);
-        st[0] = approach(st[0], hov ? 1f : 0f, 8f, dt);
-        RenderUtil.premiumBg(ctx, x, y, PILL_W, TH, RADIUS, st[0], Theme.winBg(), Theme.rim(), Theme.accentRgb());
-        int ly = y - RenderUtil.premiumLift(st[0]);
-        RenderUtil.textCentered(ctx, MinecraftClient.getInstance().textRenderer, label, x, ly, PILL_W, TH,
-                open ? Theme.accent() : Theme.txt(), 0.5f);
     }
 
     /** Square icon button: live SDF background + a small baked glyph (gear/sun-moon/dots — glyph-
@@ -312,12 +295,12 @@ public final class LumeTitleMenu {
     }
 
     // ---------------------------------------------------------------------
-    // Fast Connect / Friends — compact anchored panels (NOT full screens, per the reference and
-    // "how it was with NanoVG + Custom Menu"), opened by clicking their corner pill, same
-    // panelChrome/close-on-outside-click convention as the Settings dropdown above. Same
-    // server-list/friend-list data (FastConnect.list, Friends.friendList) and add/connect/delete
-    // actions {@code FastConnectScreen}/{@code FriendsScreen} used, just laid out as a small
-    // widget instead of a page.
+    // Fast Connect / Friends — ALWAYS-EXPANDED panels pinned to the bottom corners (not a
+    // click-to-open dropdown — the user explicitly wants these visible on screen at all times,
+    // matching the reference's "Menu widgets" gallery), same panelChrome look as the Settings
+    // dropdown. Same server-list/friend-list data (FastConnect.list, Friends.friendList) and
+    // add/connect/delete actions {@code FastConnectScreen}/{@code FriendsScreen} used, just laid
+    // out as a persistent widget instead of a page or a dropdown.
 
     private static void renderFastConnectPanel(DrawContext ctx, int mouseX, int mouseY, int anchorX, int bottomY, float dt) {
         List<FastConnect.Entry> list = FastConnect.list;
@@ -427,8 +410,6 @@ public final class LumeTitleMenu {
             MinecraftClient mc = MinecraftClient.getInstance();
             switch (kind) {
                 case "account" -> { if (mc != null) mc.setScreen(new AccountManagerScreen(screen)); }
-                case "fastconnect" -> togglePanel("fastconnect");
-                case "friends" -> togglePanel("friends");
                 case "settings" -> togglePanel("settings");
                 case "singleplayer" -> { if (mc != null) mc.setScreen(new SelectWorldScreen(screen)); }
                 case "multiplayer" -> { if (mc != null) mc.setScreen(new MultiplayerScreen(screen)); }
@@ -476,14 +457,13 @@ public final class LumeTitleMenu {
             }
             return true;
         }
-        if (openPanel != null) { openPanel = null; panelFocused = null; fcFormOpen = false; }
+        if (openPanel != null) { openPanel = null; panelFocused = null; }
         return false;
     }
 
     private static void togglePanel(String id) {
         openPanel = id.equals(openPanel) ? null : id;
         panelFocused = null;
-        if (!"fastconnect".equals(openPanel)) fcFormOpen = false;
     }
 
     /** Fast Connect/Friends text fields have no real {@code charTyped} to hook (TitleScreen never
