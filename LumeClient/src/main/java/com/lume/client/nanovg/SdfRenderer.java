@@ -36,7 +36,7 @@ public final class SdfRenderer {
     private static boolean initialized = false;
 
     private static int program;
-    private static int quadSizeLoc, sizeLoc, angleLoc, radiusLoc, fillLoc, outlineLoc, outlineWidthLoc, glowLoc, glowSpreadLoc;
+    private static int quadSizeLoc, sizeLoc, angleLoc, radiusLoc, shapeLoc, fillLoc, outlineLoc, outlineWidthLoc, glowLoc, glowSpreadLoc;
     private static int quadVao, quadVbo;
 
     /** Forces {@link #init()} to run now (if it hasn't already) and reports whether the shader
@@ -73,7 +73,7 @@ public final class SdfRenderer {
         float pad = Math.max(outlineWidthPx * 0.5f, 0f) + Math.max(glowSpreadPx, 0f) + 2f;
         int qx = Math.round(x - pad), qy = Math.round(y - pad);
         int qw = Math.round(w + pad * 2f), qh = Math.round(h + pad * 2f);
-        draw(qx, qy, qw, qh, w, h, 0f, radiusPx, fillArgb, outlineArgb, outlineWidthPx, glowArgb, glowSpreadPx);
+        draw(qx, qy, qw, qh, w, h, 0f, radiusPx, fillArgb, outlineArgb, outlineWidthPx, glowArgb, glowSpreadPx, 0f);
     }
 
     /**
@@ -98,7 +98,7 @@ public final class SdfRenderer {
         float bx = hw * ca + hh * sa, by = hw * sa + hh * ca;
         int qx = Math.round(cx - bx), qy = Math.round(cy - by);
         int qw = Math.round(bx * 2f), qh = Math.round(by * 2f);
-        draw(qx, qy, qw, qh, w, h, angleRad, radiusPx, fillArgb, outlineArgb, outlineWidthPx, glowArgb, glowSpreadPx);
+        draw(qx, qy, qw, qh, w, h, angleRad, radiusPx, fillArgb, outlineArgb, outlineWidthPx, glowArgb, glowSpreadPx, 0f);
     }
 
     /** Filled rounded rect only — shorthand for {@link #box} with no outline/glow. */
@@ -111,13 +111,34 @@ public final class SdfRenderer {
      *  primitive here (icons compose around a shared centre point). */
     public static void circle(int cx, int cy, float r, int fillArgb) {
         int d = Math.round(r * 2f);
-        draw(cx - d / 2, cy - d / 2, d, d, d, d, 0f, r, fillArgb, 0, 0f, 0, 0f);
+        draw(cx - d / 2, cy - d / 2, d, d, d, d, 0f, r, fillArgb, 0, 0f, 0, 0f, 0f);
     }
 
     /** Ring (circle outline only) — for gear/globe icon bodies. */
     public static void ring(int cx, int cy, float r, float thicknessPx, int outlineArgb) {
         int d = Math.round(r * 2f);
-        draw(cx - d / 2, cy - d / 2, d, d, d, d, 0f, r, 0, outlineArgb, thicknessPx, 0, 0f);
+        draw(cx - d / 2, cy - d / 2, d, d, d, d, 0f, r, 0, outlineArgb, thicknessPx, 0, 0f, 0f);
+    }
+
+    /**
+     * The Lume "glass star" sparkle mark, drawn as a genuine SDF shape (was: CPU scanline
+     * polygon fill in {@code RenderUtil.drawLogo}) — a 4-point concave sparkle approximated via
+     * a superellipse/astroid-style implicit distance {@code |x/r|^k + |y/r|^k = 1} (k<1 pinches
+     * the sides inward between the 4 axis-aligned tips, giving the sparkle's characteristic
+     * concave curve — not a true Euclidean distance to the original quadratic-bezier outline
+     * {@code RenderUtil.sparkleOutline} traces, but close enough for anti-aliased fill/outline/
+     * glow at icon size). Flat fill only (no gradient) — the vector version's accent gradient
+     * isn't reproduced here.
+     *
+     * @param cx,cy   framebuffer px, centre
+     * @param r       tip-to-centre radius, framebuffer px
+     */
+    public static void star(int cx, int cy, float r, int fillArgb, int outlineArgb, float outlineWidthPx,
+                             int glowArgb, float glowSpreadPx) {
+        float pad = Math.max(outlineWidthPx * 0.5f, 0f) + Math.max(glowSpreadPx, 0f) + r * 0.08f + 2f;
+        int d = Math.round((r + pad) * 2f);
+        int sz = Math.round(r * 2f);
+        draw(cx - d / 2, cy - d / 2, d, d, sz, sz, 0f, 0f, fillArgb, outlineArgb, outlineWidthPx, glowArgb, glowSpreadPx, 1f);
     }
 
     /** Outline (+ optional glow), no fill — the "invisible button, visible only by its glowing
@@ -149,7 +170,7 @@ public final class SdfRenderer {
      *  that quad is padded to the rotated bounding box). */
     private static void draw(int qx, int qy, int qw, int qh, int sizeW, int sizeH, float angleRad, float radiusPx,
                               int fillArgb, int outlineArgb, float outlineWidthPx,
-                              int glowArgb, float glowSpreadPx) {
+                              int glowArgb, float glowSpreadPx, float shape) {
         if (disabled || qw <= 0 || qh <= 0) return;
         try {
             if (!initialized && !init()) { disabled = true; return; }
@@ -179,6 +200,7 @@ public final class SdfRenderer {
                 GL20.glUniform2f(sizeLoc, sizeW, sizeH);
                 GL20.glUniform1f(angleLoc, angleRad);
                 GL20.glUniform1f(radiusLoc, Math.min(radiusPx, Math.min(sizeW, sizeH) * 0.5f));
+                GL20.glUniform1f(shapeLoc, shape);
                 setColor(fillLoc, fillArgb);
                 setColor(outlineLoc, outlineArgb);
                 GL20.glUniform1f(outlineWidthLoc, Math.max(0f, outlineWidthPx));
@@ -226,6 +248,7 @@ public final class SdfRenderer {
             sizeLoc = GL20.glGetUniformLocation(program, "uSize");
             angleLoc = GL20.glGetUniformLocation(program, "uAngle");
             radiusLoc = GL20.glGetUniformLocation(program, "uRadius");
+            shapeLoc = GL20.glGetUniformLocation(program, "uShape");
             fillLoc = GL20.glGetUniformLocation(program, "uFill");
             outlineLoc = GL20.glGetUniformLocation(program, "uOutline");
             outlineWidthLoc = GL20.glGetUniformLocation(program, "uOutlineWidth");
@@ -341,6 +364,7 @@ public final class SdfRenderer {
             uniform vec2 uSize;
             uniform float uAngle;
             uniform float uRadius;
+            uniform float uShape; // 0 = rounded rect, 1 = 4-point sparkle
             uniform vec4 uFill;
             uniform vec4 uOutline;
             uniform float uOutlineWidth;
@@ -352,12 +376,23 @@ public final class SdfRenderer {
                 return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
             }
 
+            // Pseudo-distance to a 4-point concave sparkle (astroid-like superellipse,
+            // |x/r|^k + |y/r|^k = 1, k<1 pinches the sides in between the 4 axis tips) — see
+            // SdfRenderer.star's doc for why this is an approximation, not a true SDF to the
+            // original quadratic-bezier outline.
+            float sdSparkle(vec2 p, float r) {
+                vec2 q = abs(p) / max(r, 0.0001);
+                float k = 0.42;
+                float v = pow(q.x, k) + pow(q.y, k);
+                return (v - 1.0) * r;
+            }
+
             void main() {
                 vec2 halfSize = uSize * 0.5;
                 vec2 p = (vUv - 0.5) * uQuadSize;
                 float ca = cos(uAngle), sa = sin(uAngle);
                 vec2 pl = vec2(ca * p.x + sa * p.y, -sa * p.x + ca * p.y);
-                float d = sdRoundRect(pl, halfSize, uRadius);
+                float d = uShape > 0.5 ? sdSparkle(pl, uSize.x * 0.5) : sdRoundRect(pl, halfSize, uRadius);
 
                 // Outline is CENTERED on the d=0 boundary (straddles [-halfOutline, +halfOutline]),
                 // the conventional stroke convention (matches SVG/Skia) — keeps the visible bounding

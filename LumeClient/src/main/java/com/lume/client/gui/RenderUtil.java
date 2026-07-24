@@ -143,6 +143,54 @@ public final class RenderUtil {
         textBold(ctx, tr, s, x, y, color, scale);
     }
 
+    // ---- SDF text path -----------------------------------------------------------------
+    // Routes through com.lume.client.nanovg.SdfTextRenderer — a real per-glyph Signed Distance
+    // Field font atlas (genuinely crisp at any scale, not a plain alpha-blended texture atlas
+    // like LumeFont/LumeFontBold above), built for ClickGuiScreen's own pan/zoom window space.
+    // Its drawWindowLocal formula collapses to a straight logical->framebuffer conversion when
+    // given an IDENTITY window-local transform (offX=0,offY=0,cx=0,cy=0,total=1), which is what
+    // lets a non-windowed overlay like LumeTitleMenu reuse it correctly without touching that
+    // file. Falls back to textBold/text (LumeFontBold/LumeFont) if the SDF text shader failed to
+    // init on this GPU — same defensive fallback chain every raw-GL helper here has.
+
+    public static void sdfText(DrawContext ctx, TextRenderer tr, String s, double x, double y, int color, float scale, boolean bold) {
+        if (com.lume.client.nanovg.SdfTextRenderer.ensureInit()) {
+            int S = (int) Math.max(1, net.minecraft.client.MinecraftClient.getInstance().getWindow().getScaleFactor());
+            ctx.draw();
+            float drawScale = scale * (18f / com.lume.client.nanovg.SdfTextRenderer.FONT_PX) * S;
+            com.lume.client.nanovg.SdfTextRenderer.drawWindowLocal(0, 0, 0, 0, 1f, x * S, y * S, drawScale, s, color, bold);
+        } else if (bold) {
+            textBold(ctx, tr, s, x, y, color, scale);
+        } else {
+            text(ctx, tr, s, x, y, color, false, scale);
+        }
+    }
+
+    public static int sdfWidth(TextRenderer tr, String s, float scale, boolean bold) {
+        if (com.lume.client.nanovg.SdfTextRenderer.ensureInit()) {
+            float adv = com.lume.client.nanovg.SdfTextRenderer.advance(s, bold);
+            return Math.round(adv * scale * (18f / com.lume.client.nanovg.SdfTextRenderer.FONT_PX));
+        }
+        return bold ? widthBold(tr, s, scale) : width(tr, s, scale);
+    }
+
+    private static double sdfVCenterY(String s, double boxY, double boxH, float scale, boolean bold) {
+        if (com.lume.client.nanovg.SdfTextRenderer.ensureInit()) {
+            double ds = scale * (18f / com.lume.client.nanovg.SdfTextRenderer.FONT_PX);
+            return boxY + boxH / 2.0 - com.lume.client.nanovg.SdfTextRenderer.opticalCenterPx(bold) * ds;
+        }
+        return vCenterY(s, boxY, boxH, scale, bold);
+    }
+
+    public static void sdfTextVCentered(DrawContext ctx, TextRenderer tr, String s, double x, double boxY, double boxH, int color, float scale, boolean bold) {
+        sdfText(ctx, tr, s, x, sdfVCenterY(s, boxY, boxH, scale, bold), color, scale, bold);
+    }
+
+    public static void sdfTextCentered(DrawContext ctx, TextRenderer tr, String s, double boxX, double boxY, double boxW, double boxH, int color, float scale, boolean bold) {
+        int w = sdfWidth(tr, s, scale, bold);
+        sdfTextVCentered(ctx, tr, s, boxX + (boxW - w) / 2.0, boxY, boxH, color, scale, bold);
+    }
+
     public static int width(TextRenderer tr, String s, float scale) {
         if (hasCyrillic(s)) return Math.round(tr.getWidth(s) * scale * 2f);
         LumeFont.ensure();
@@ -243,6 +291,28 @@ public final class RenderUtil {
      * icon's size. Used by the "Menu Logo" HUD watermark and the (effectively unreachable)
      * pre-NanoVG ClickGUI fallback.
      */
+    /** Live SDF version of the glass-star mark (see {@code SdfRenderer.star}) — genuinely
+     *  GPU-rasterised at any scale, not a CPU scanline polygon fill like {@link #drawLogo}. Flat
+     *  accent fill + a thin light outline (approximates the vector version's white stroke; the
+     *  gradient nuance isn't reproduced). Falls back to {@link #drawLogo} if the shader failed to
+     *  init on this GPU — same defensive pattern every raw-GL helper here uses.
+     *
+     * @param cx,cy  DrawContext logical px, CENTRE (not top-left — {@link #drawLogo} is top-left,
+     *               this one isn't, since {@code SdfRenderer.star} is centre-based like every
+     *               other icon primitive)
+     * @param r      tip-to-centre radius, logical px
+     */
+    public static void drawLogoSdf(DrawContext ctx, int cx, int cy, float r) {
+        if (com.lume.client.nanovg.SdfRenderer.ensureInit()) {
+            int S = (int) Math.max(1, net.minecraft.client.MinecraftClient.getInstance().getWindow().getScaleFactor());
+            ctx.draw();
+            com.lume.client.nanovg.SdfRenderer.star(Math.round(cx * S), Math.round(cy * S), r * S,
+                    Theme.accent(), 0xB0FFFFFF, 1.4f * S, 0, 0f);
+        } else {
+            drawLogo(ctx, Math.round(cx - r), Math.round(cy - r), Math.round(r * 2f));
+        }
+    }
+
     public static void drawLogo(DrawContext ctx, int x, int y, int s) {
         float u = s / 100f;
         // Follows the current accent (see NanoVgRenderer.logoMark, same relationship) instead

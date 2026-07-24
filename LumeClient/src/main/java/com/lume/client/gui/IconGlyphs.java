@@ -31,14 +31,14 @@ public final class IconGlyphs {
         ctx.draw();
         int fcx = Math.round(cx * S), fcy = Math.round(cy * S);
         float fr = r * S;
-        float ringR = fr * 0.62f, hubR = fr * 0.24f, toothLen = fr * 0.34f, toothW = fr * 0.22f;
-        SdfRenderer.ring(fcx, fcy, ringR, fr * 0.16f, col);
+        float ringR = fr * 0.58f, hubR = fr * 0.17f, toothLen = fr * 0.36f, toothW = fr * 0.15f;
+        SdfRenderer.ring(fcx, fcy, ringR, Math.max(1f, fr * 0.12f), col);
         SdfRenderer.circle(fcx, fcy, hubR, col);
-        int teeth = 6;
+        int teeth = 8;
         for (int i = 0; i < teeth; i++) {
             float ang = (float) (i * (2 * Math.PI / teeth));
-            float tx = fcx + (float) Math.cos(ang) * (ringR + toothLen * 0.4f);
-            float ty = fcy + (float) Math.sin(ang) * (ringR + toothLen * 0.4f);
+            float tx = fcx + (float) Math.cos(ang) * (ringR + toothLen * 0.42f);
+            float ty = fcy + (float) Math.sin(ang) * (ringR + toothLen * 0.42f);
             SdfRenderer.boxRotated(Math.round(tx), Math.round(ty), Math.round(toothLen), Math.round(toothW),
                     toothW * 0.4f, ang, col, 0, 0f, 0, 0f);
         }
@@ -50,12 +50,12 @@ public final class IconGlyphs {
         ctx.draw();
         int fcx = Math.round(cx * S), fcy = Math.round(cy * S);
         float fr = r * S;
-        SdfRenderer.ring(fcx, fcy, fr, Math.max(1f, fr * 0.16f), col);
-        SdfRenderer.box(Math.round(fcx - fr), Math.round(fcy - fr * 0.08f), Math.round(fr * 2), Math.max(1, Math.round(fr * 0.16f)),
-                fr * 0.08f, col, 0, 0f, 0, 0f);
-        float mw = fr * 0.5f;
-        SdfRenderer.box(Math.round(fcx - mw * 0.13f), Math.round(fcy - fr), Math.max(1, Math.round(mw * 0.26f)), Math.round(fr * 2),
-                mw * 0.13f, col, 0, 0f, 0, 0f);
+        SdfRenderer.ring(fcx, fcy, fr, Math.max(1f, fr * 0.12f), col);
+        SdfRenderer.box(Math.round(fcx - fr), Math.round(fcy - fr * 0.06f), Math.round(fr * 2), Math.max(1, Math.round(fr * 0.12f)),
+                fr * 0.06f, col, 0, 0f, 0, 0f);
+        float mw = fr * 0.46f;
+        SdfRenderer.box(Math.round(fcx - mw * 0.1f), Math.round(fcy - fr), Math.max(1, Math.round(mw * 0.2f)), Math.round(fr * 2),
+                mw * 0.1f, col, 0, 0f, 0, 0f);
     }
 
     /** Quit: two rotated bars crossing at ±45°. */
@@ -99,7 +99,8 @@ public final class IconGlyphs {
         SdfRenderer.circle(Math.round(fcx + fr * 0.55f), Math.round(fcy - fr * 0.35f), fr * 0.92f, bgCol);
     }
 
-    /** Customize Colors icon: 4 small dots in a diamond. */
+    /** Customize Colors icon: 4 small dots in a diamond — kept as an alternate, {@link #brush} is
+     *  what's actually wired up now (matches the reference: a paintbrush, not dots). */
     public static void dots(DrawContext ctx, int cx, int cy, float r, int col) {
         int S = scale();
         ctx.draw();
@@ -110,5 +111,27 @@ public final class IconGlyphs {
         for (int[] o : offs) {
             SdfRenderer.circle(Math.round(fcx + o[0] * d), Math.round(fcy + o[1] * d), dotR, col);
         }
+    }
+
+    /** Customize Colors icon: a diagonal paintbrush — thin handle, a short wide ferrule band near
+     *  the bristle end, and a rounded bristle tip. Per explicit request ("кистью"). */
+    public static void brush(DrawContext ctx, int cx, int cy, float r, int col) {
+        int S = scale();
+        ctx.draw();
+        int fcx = Math.round(cx * S), fcy = Math.round(cy * S);
+        float fr = r * S;
+        float ang = (float) Math.toRadians(-42);
+        float dx = (float) Math.cos(ang), dy = (float) Math.sin(ang);
+
+        float handleLen = fr * 1.7f, handleW = fr * 0.15f;
+        SdfRenderer.boxRotated(fcx, fcy, Math.round(handleLen), Math.max(1, Math.round(handleW)),
+                handleW * 0.5f, ang, col, 0, 0f, 0, 0f);
+
+        float ferruleOff = handleLen * 0.28f;
+        int fx = Math.round(fcx - dx * ferruleOff), fy = Math.round(fcy - dy * ferruleOff);
+        SdfRenderer.boxRotated(fx, fy, Math.round(fr * 0.6f), Math.round(fr * 0.34f), fr * 0.1f, ang, col, 0, 0f, 0, 0f);
+
+        int bx = Math.round(fcx - dx * handleLen * 0.52f), by = Math.round(fcy - dy * handleLen * 0.52f);
+        SdfRenderer.circle(bx, by, fr * 0.22f, col);
     }
 }
