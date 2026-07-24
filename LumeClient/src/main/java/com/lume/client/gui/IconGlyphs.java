@@ -25,37 +25,45 @@ public final class IconGlyphs {
         return (int) Math.max(1, MinecraftClient.getInstance().getWindow().getScaleFactor());
     }
 
-    /** Settings gear: ring + hub + 6 teeth (short rotated bars poking out past the ring). */
+    /** Settings gear: ring + hub + 6 CHUNKY teeth (short, wide — thin ones disappear at the
+     *  ~13-18px on-screen size these actually render at, see class doc's size-legibility note). */
     public static void gear(DrawContext ctx, int cx, int cy, float r, int col) {
         int S = scale();
         ctx.draw();
         int fcx = Math.round(cx * S), fcy = Math.round(cy * S);
         float fr = r * S;
-        float ringR = fr * 0.58f, hubR = fr * 0.17f, toothLen = fr * 0.36f, toothW = fr * 0.15f;
-        SdfRenderer.ring(fcx, fcy, ringR, Math.max(1f, fr * 0.12f), col);
+        float ringR = fr * 0.52f, hubR = fr * 0.22f, toothLen = fr * 0.4f, toothW = fr * 0.24f;
+        SdfRenderer.ring(fcx, fcy, ringR, Math.max(1.4f, fr * 0.18f), col);
         SdfRenderer.circle(fcx, fcy, hubR, col);
-        int teeth = 8;
+        int teeth = 6;
         for (int i = 0; i < teeth; i++) {
             float ang = (float) (i * (2 * Math.PI / teeth));
-            float tx = fcx + (float) Math.cos(ang) * (ringR + toothLen * 0.42f);
-            float ty = fcy + (float) Math.sin(ang) * (ringR + toothLen * 0.42f);
+            float tx = fcx + (float) Math.cos(ang) * (ringR + toothLen * 0.38f);
+            float ty = fcy + (float) Math.sin(ang) * (ringR + toothLen * 0.38f);
             SdfRenderer.boxRotated(Math.round(tx), Math.round(ty), Math.round(toothLen), Math.round(toothW),
                     toothW * 0.4f, ang, col, 0, 0f, 0, 0f);
         }
     }
 
-    /** Language/globe: ring + a horizontal "equator" bar + a narrow vertical "meridian" bar. */
+    /** Language/globe: ring + two short horizontal "latitude" bars (no vertical meridian — a
+     *  full-height vertical bar reads as a crosshair/target at small size, not a globe, since a
+     *  straight line can't fake a curved meridian; two off-centre horizontal bars read as "lined
+     *  sphere" without that misread). */
     public static void globe(DrawContext ctx, int cx, int cy, float r, int col) {
         int S = scale();
         ctx.draw();
         int fcx = Math.round(cx * S), fcy = Math.round(cy * S);
         float fr = r * S;
-        SdfRenderer.ring(fcx, fcy, fr, Math.max(1f, fr * 0.12f), col);
-        SdfRenderer.box(Math.round(fcx - fr), Math.round(fcy - fr * 0.06f), Math.round(fr * 2), Math.max(1, Math.round(fr * 0.12f)),
-                fr * 0.06f, col, 0, 0f, 0, 0f);
-        float mw = fr * 0.46f;
-        SdfRenderer.box(Math.round(fcx - mw * 0.1f), Math.round(fcy - fr), Math.max(1, Math.round(mw * 0.2f)), Math.round(fr * 2),
-                mw * 0.1f, col, 0, 0f, 0, 0f);
+        float ringT = Math.max(1.4f, fr * 0.16f);
+        SdfRenderer.ring(fcx, fcy, fr, ringT, col);
+        float barT = Math.max(1.2f, fr * 0.14f);
+        SdfRenderer.box(Math.round(fcx - fr * 0.8f), Math.round(fcy - fr * 0.05f), Math.round(fr * 1.6f), Math.round(barT),
+                barT * 0.5f, col, 0, 0f, 0, 0f);
+        float w2 = fr * 1.1f;
+        SdfRenderer.box(Math.round(fcx - w2 * 0.5f), Math.round(fcy - fr * 0.42f), Math.round(w2), Math.round(barT),
+                barT * 0.5f, col, 0, 0f, 0, 0f);
+        SdfRenderer.box(Math.round(fcx - w2 * 0.5f), Math.round(fcy + fr * 0.32f), Math.round(w2), Math.round(barT),
+                barT * 0.5f, col, 0, 0f, 0, 0f);
     }
 
     /** Quit: two rotated bars crossing at ±45°. */
@@ -69,19 +77,20 @@ public final class IconGlyphs {
         SdfRenderer.boxRotated(fcx, fcy, len, w, w * 0.4f, (float) (-Math.PI / 4), col, 0, 0f, 0, 0f);
     }
 
-    /** Light-theme icon: filled hub + 8 short radiating rays. */
+    /** Light-theme icon: filled hub + 6 short CHUNKY radiating rays (was 8 thin — same
+     *  small-size-legibility fix as {@link #gear}). */
     public static void sun(DrawContext ctx, int cx, int cy, float r, int col) {
         int S = scale();
         ctx.draw();
         int fcx = Math.round(cx * S), fcy = Math.round(cy * S);
         float fr = r * S;
-        float hubR = fr * 0.42f, rayLen = fr * 0.34f, rayW = fr * 0.16f;
+        float hubR = fr * 0.4f, rayLen = fr * 0.4f, rayW = fr * 0.2f;
         SdfRenderer.circle(fcx, fcy, hubR, col);
-        int rays = 8;
+        int rays = 6;
         for (int i = 0; i < rays; i++) {
             float ang = (float) (i * (2 * Math.PI / rays));
-            float rx = fcx + (float) Math.cos(ang) * (hubR + rayLen * 0.5f + fr * 0.08f);
-            float ry = fcy + (float) Math.sin(ang) * (hubR + rayLen * 0.5f + fr * 0.08f);
+            float rx = fcx + (float) Math.cos(ang) * (hubR + rayLen * 0.5f + fr * 0.1f);
+            float ry = fcy + (float) Math.sin(ang) * (hubR + rayLen * 0.5f + fr * 0.1f);
             SdfRenderer.boxRotated(Math.round(rx), Math.round(ry), Math.round(rayLen), Math.round(rayW),
                     rayW * 0.5f, ang, col, 0, 0f, 0, 0f);
         }
@@ -113,8 +122,9 @@ public final class IconGlyphs {
         }
     }
 
-    /** Customize Colors icon: a diagonal paintbrush — thin handle, a short wide ferrule band near
-     *  the bristle end, and a rounded bristle tip. Per explicit request ("кистью"). */
+    /** Customize Colors icon: a diagonal paintbrush — THICKER handle (a thin one all but
+     *  disappears at the ~13-18px on-screen size these icons actually render at), a short wide
+     *  ferrule band near the bristle end, and a rounded bristle tip. Per explicit "кистью" ask. */
     public static void brush(DrawContext ctx, int cx, int cy, float r, int col) {
         int S = scale();
         ctx.draw();
@@ -123,15 +133,15 @@ public final class IconGlyphs {
         float ang = (float) Math.toRadians(-42);
         float dx = (float) Math.cos(ang), dy = (float) Math.sin(ang);
 
-        float handleLen = fr * 1.7f, handleW = fr * 0.15f;
-        SdfRenderer.boxRotated(fcx, fcy, Math.round(handleLen), Math.max(1, Math.round(handleW)),
+        float handleLen = fr * 1.5f, handleW = fr * 0.26f;
+        SdfRenderer.boxRotated(fcx, fcy, Math.round(handleLen), Math.max(2, Math.round(handleW)),
                 handleW * 0.5f, ang, col, 0, 0f, 0, 0f);
 
-        float ferruleOff = handleLen * 0.28f;
+        float ferruleOff = handleLen * 0.26f;
         int fx = Math.round(fcx - dx * ferruleOff), fy = Math.round(fcy - dy * ferruleOff);
-        SdfRenderer.boxRotated(fx, fy, Math.round(fr * 0.6f), Math.round(fr * 0.34f), fr * 0.1f, ang, col, 0, 0f, 0, 0f);
+        SdfRenderer.boxRotated(fx, fy, Math.round(fr * 0.7f), Math.round(fr * 0.44f), fr * 0.14f, ang, col, 0, 0f, 0, 0f);
 
-        int bx = Math.round(fcx - dx * handleLen * 0.52f), by = Math.round(fcy - dy * handleLen * 0.52f);
-        SdfRenderer.circle(bx, by, fr * 0.22f, col);
+        int bx = Math.round(fcx - dx * handleLen * 0.5f), by = Math.round(fcy - dy * handleLen * 0.5f);
+        SdfRenderer.circle(bx, by, fr * 0.28f, col);
     }
 }
