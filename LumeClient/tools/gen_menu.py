@@ -90,6 +90,20 @@ def ic_dots(d,cx,cy,r,col):
     w=max(2,int(r*0.22)); rr=r*0.28
     for (x,y) in [(cx+r*0.55,cy-r*0.75),(cx+r*0.95,cy+r*0.05),(cx-r*0.85,cy-r*0.1),(cx-r*0.35,cy+r*0.85)]:
         d.ellipse([x-rr,y-rr,x+rr,y+rr],outline=col,width=w)
+def ic_brush(d,cx,cy,r,col):
+    # Tapered polygon (thin handle -> wide spade-shaped bristle tip), not a fixed-width line —
+    # a uniform-width diagonal bar reads as a wand/lollipop, not a brush (checked against a
+    # standalone render before wiring this in). Profile is (t, half-width) along the handle-
+    # >bristle axis, t in [-1,1].
+    ang=math.radians(-40); dx,dy=math.cos(ang),math.sin(ang); px,py=-dy,dx
+    profile=[(-0.95,0.07),(-0.05,0.09),(0.05,0.30),(0.30,0.34),(0.55,0.20),(0.78,0.0)]
+    left=[]; right=[]
+    for t,hw in profile:
+        bx,by=cx+dx*r*t,cy+dy*r*t
+        left.append((bx+px*r*hw,by+py*r*hw)); right.append((bx-px*r*hw,by-py*r*hw))
+    d.polygon(left+right[::-1],fill=col)
+    hx,hy=cx+dx*r*-0.95,cy+dy*r*-0.95; hr=r*0.07
+    d.ellipse([hx-hr,hy-hr,hx+hr,hy+hr],fill=col)
 
 # ---- glass star ----
 ST_T=[(50,18),(82,50),(50,82),(18,50)]; ST_C=[(58,42),(58,58),(42,58),(42,42)]
@@ -170,7 +184,7 @@ def build_set(theme,style):
     def icon_btn(nm,drawer):
         img=new(24,24); drawer(img); save(img,24,24,os.path.join(outdir,nm+'.png'))
     icon_btn('ic_theme', lambda im:(ic_sun(ImageDraw.Draw(im),12*SS,12*SS,5*SS,inkc) if theme=='light' else ic_moon(im,12*SS,12*SS,5*SS,inkc)))
-    icon_btn('ic_colors',lambda im: ic_dots(ImageDraw.Draw(im),12*SS,12*SS,6*SS,inkc))
+    icon_btn('ic_colors',lambda im: ic_brush(ImageDraw.Draw(im),12*SS,12*SS,7*SS,inkc))
     icon_btn('ic_gear',  lambda im: ic_gear(im,12*SS,12*SS,4.2*SS,inkc,holecol))
     icon_btn('ic_globe', lambda im: ic_globe(ImageDraw.Draw(im),12*SS,12*SS,7*SS,inkc))
     icon_btn('ic_x',     lambda im: ic_x(ImageDraw.Draw(im),12*SS,12*SS,7*SS,inkc))

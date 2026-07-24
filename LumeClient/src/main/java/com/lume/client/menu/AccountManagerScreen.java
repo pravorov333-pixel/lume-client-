@@ -126,7 +126,7 @@ public class AccountManagerScreen extends Screen {
                 // Edit action (rename + server-bind) — rendered as a globe/planet glyph, same as
                 // the Language button in the main menu, per the user's explicit ask; still the
                 // same "edit" action underneath.
-                com.lume.client.gui.IconGlyphs.globe(ctx, c.x() + CARD_W - 28, ly + CARD_H / 2, 6f, Theme.txtDim());
+                MenuAssets.blit(ctx, MenuAssets.IC_GLOBE, c.x() + CARD_W - 34, ly + CARD_H / 2 - 6, 12, 12);
                 drawCardText(ctx, tr, c, p, ly);
             }
 

@@ -1,7 +1,6 @@
 package com.lume.client.menu;
 
 import com.lume.client.Config;
-import com.lume.client.gui.IconGlyphs;
 import com.lume.client.gui.RenderUtil;
 import com.lume.client.gui.Theme;
 import com.lume.client.module.modules.cosmetic.CustomMenu;
@@ -31,11 +30,11 @@ import java.util.Map;
  * than vanilla's own spacing). Every button's BACKGROUND renders live through {@link
  * RenderUtil#premiumBg} (raw-GL SDF fill + contour-hugging glow on hover, see {@code
  * SdfRenderer}) instead of a baked PNG — crisp at any GUI scale, glow follows the button's actual
- * rounded shape rather than a rectangular halo. Icon glyphs (gear/globe/×/sun-moon/dots) are ALSO
- * live now ({@link IconGlyphs} — circles/rings/rotated bars via the same SDF shader, replacing
- * the earlier baked PNGs), and the logo lockup is a live star ({@link RenderUtil#drawLogo}) +
- * shimmering bold-font wordmark ({@link Wordmark#drawLegacyVivid}) instead of a baked PNG too.
- * No NanoVG anywhere in this class.
+ * rounded shape rather than a rectangular halo. Icon GLYPHS (gear/globe/×/sun-moon/brush) are
+ * baked PNGs again ({@code MenuAssets}/{@code gen_menu.py}'s PIL-drawn icons — a live SDF-geometry
+ * attempt didn't read well at the ~13-18px these actually render at; real curves do). The logo
+ * lockup is a live star ({@link RenderUtil#drawLogo}) + shimmering bold-font wordmark ({@link
+ * Wordmark#drawLegacyVivid}) instead of a baked PNG. No NanoVG anywhere in this class.
  */
 public final class LumeTitleMenu {
     private LumeTitleMenu() {}
@@ -204,9 +203,11 @@ public final class LumeTitleMenu {
     }
 
     /** Square icon button: live SDF background + a live SDF glyph (gear/sun-moon/dots — see
-     *  {@link IconGlyphs}, replaces the old baked PNGs) centred on top. {@code forceOn} keeps the
-     *  hover state lit while its panel is open. Dispatches on {@code id} directly ("theme" /
-     *  "colors" / "settings" — the only 3 callers this method has). */
+     *  baked PNG glyph, see {@code MenuAssets}/{@code gen_menu.py}) centred on top — background
+     *  stays live SDF, only the glyph itself is baked (real PIL curves read better at the
+     *  ~13-18px these actually render at than the live SDF-geometry attempt did). {@code forceOn}
+     *  keeps the hover state lit while its panel is open. Dispatches on {@code id} directly
+     *  ("theme" / "colors" / "settings" — the only 3 callers this method has). */
     private static void iconButton(DrawContext ctx, String id, int x, int y, int size,
                                     int mouseX, int mouseY, float dt, boolean forceOn) {
         boolean hov = inside(mouseX, mouseY, x, y, size, size) || forceOn;
@@ -214,16 +215,18 @@ public final class LumeTitleMenu {
         st[0] = approach(st[0], hov ? 1f : 0f, 8f, dt);
         RenderUtil.premiumBg(ctx, x, y, size, size, Math.round(size * 0.28f), st[0], Theme.winBg(), Theme.rim(), Theme.accentRgb());
         int ly = y - RenderUtil.premiumLift(st[0]);
-        int cx = x + size / 2, cy = ly + size / 2;
-        float r = size * 0.38f;
-        switch (id) {
-            case "theme" -> {
-                if (Theme.isDark()) IconGlyphs.moon(ctx, cx, cy, r, Theme.txt(), Theme.winBg());
-                else IconGlyphs.sun(ctx, cx, cy, r, Theme.txt());
-            }
-            case "colors" -> IconGlyphs.brush(ctx, cx, cy, r, Theme.txt());
-            case "settings" -> IconGlyphs.gear(ctx, cx, cy, r, Theme.txt());
-            default -> { }
+        // MenuAssets.blit already resolves the current theme×style set internally (see
+        // MenuAssets.currentKey()) — ic_theme.png IS the sun for light / moon for dark within
+        // that set, no separate branch needed here.
+        String glyph = switch (id) {
+            case "theme" -> MenuAssets.IC_THEME;
+            case "colors" -> MenuAssets.IC_COLORS;
+            case "settings" -> MenuAssets.IC_GEAR;
+            default -> null;
+        };
+        if (glyph != null) {
+            int gs = Math.round(size * 0.72f);
+            MenuAssets.blit(ctx, glyph, x + (size - gs) / 2, ly + (size - gs) / 2, gs, gs);
         }
     }
 
@@ -243,9 +246,9 @@ public final class LumeTitleMenu {
         olSt[0] = approach(olSt[0], olHov ? 1f : 0f, 8f, dt);
         RenderUtil.premiumBg(ctx, olX, olY, OPTLANG_W, OPTLANG_H, RADIUS, olSt[0], Theme.winBg(), Theme.rim(), Theme.accentRgb());
         int olLy = olY - RenderUtil.premiumLift(olSt[0]);
-        float gr = 7.5f;
-        IconGlyphs.gear(ctx, olX + OPTLANG_W / 4, olLy + OPTLANG_H / 2, gr, Theme.txt());
-        IconGlyphs.globe(ctx, olX + OPTLANG_W * 3 / 4, olLy + OPTLANG_H / 2, gr, Theme.txt());
+        int gs = 14;
+        MenuAssets.blit(ctx, MenuAssets.IC_GEAR, olX + OPTLANG_W / 4 - gs / 2, olLy + (OPTLANG_H - gs) / 2, gs, gs);
+        MenuAssets.blit(ctx, MenuAssets.IC_GLOBE, olX + OPTLANG_W * 3 / 4 - gs / 2, olLy + (OPTLANG_H - gs) / 2, gs, gs);
         RenderUtil.roundedRect(ctx, olX + OPTLANG_W / 2 - 1, olLy + 4, 1, OPTLANG_H - 8, 0, Theme.rim());
         hits.add(new Object[]{"options", olX, olY, OPTLANG_W / 2, OPTLANG_H});
         hits.add(new Object[]{"language", olX + OPTLANG_W / 2, olY, OPTLANG_W - OPTLANG_W / 2, OPTLANG_H});
@@ -255,7 +258,7 @@ public final class LumeTitleMenu {
         qSt[0] = approach(qSt[0], qHov ? 1f : 0f, 8f, dt);
         RenderUtil.premiumBg(ctx, qX, qY, QUIT_W, QUIT_H, RADIUS, qSt[0], Theme.winBg(), Theme.rim(), Theme.accentRgb());
         int qLy = qY - RenderUtil.premiumLift(qSt[0]);
-        IconGlyphs.x(ctx, qX + QUIT_W / 2, qLy + QUIT_H / 2, gr, Theme.txt());
+        MenuAssets.blit(ctx, MenuAssets.IC_X, qX + (QUIT_W - gs) / 2, qLy + (QUIT_H - gs) / 2, gs, gs);
         hits.add(new Object[]{"quit", qX, qY, QUIT_W, QUIT_H});
     }
 

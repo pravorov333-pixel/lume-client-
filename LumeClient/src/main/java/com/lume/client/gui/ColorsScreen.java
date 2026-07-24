@@ -31,7 +31,32 @@ public class ColorsScreen extends Screen {
     private final float[] mockCardHover = new float[4];
     private float mockPlayHover = 0f;
 
-    private static final int WIN_W = 300, WIN_H = 572;
+    private static final int WIN_W = 300;
+
+    /** Was a fixed 572 (sized for the worst case — Full Glass's extra Premium Glass sliders
+     *  section) even when that section isn't shown, wasting ~90px in the common case and
+     *  overflowing shorter screens/windows. Computed per-frame instead, mirroring drawWindow's
+     *  own yy accumulation EXACTLY (same constants, unmodified — this only changes whether the
+     *  Full Glass block's space is included, not the other row sizes, to avoid any risk of the
+     *  window ending up shorter than what actually gets drawn into it). Kept as a separate
+     *  pure-arithmetic method rather than measured by actually drawing, since drawWindow draws
+     *  as it goes and can't cheaply separate a measure-only pass without a bigger restructure. */
+    private int computeWinH() {
+        int yy = 50;                          // header (title + subtitle)
+        yy += 22 + 8;                          // Light/Dark segmented row
+        yy += 22 + 8;                          // Launcher/In-Game Menu segmented row
+        yy += 114 + 12;                        // preview box
+        yy += (26 + 4) * 3;                    // 3 colour rows
+        yy += 10;
+        yy += 16;                              // "Styles" label
+        yy += 22 + 12;                         // style buttons row
+        if (Theme.getGlassStyle() == 1) yy += 16 + 28 + 6 + 28 + 10;  // Premium Glass block
+        yy += 16;                              // "Interface" label
+        yy += 28 + 10;                         // Menu Size slider
+        yy += 24;                              // Reset button
+        yy += 16;                              // bottom padding
+        return yy;
+    }
 
     // Window drag — static (like ClickGuiScreen's own winOffX/winOffY) so the position
     // survives closing/reopening Customize Colors within the same session, in GUI px.
@@ -43,6 +68,7 @@ public class ColorsScreen extends Screen {
 
     private int[] closeRect;
     private int[] resetRect;
+    private int[] closeBtnRect;
     private int[][] modeRects = new int[2][];
     private int[][] previewTabRects = new int[2][];
     private int[][] swatchRects = new int[3][];     // 0 = bg, 1 = accent, 2 = button text
@@ -96,7 +122,7 @@ public class ColorsScreen extends Screen {
         float dt = Math.min(0.05f, (now - lastFrame) / 1000f);
         lastFrame = now;
         int S = sf();
-        int W = WIN_W, H = WIN_H;
+        int W = WIN_W, H = computeWinH();
         int x = (width - W) / 2 + offX, y = (height - H) / 2 + offY;
         winX = x; winY = y; winW = W; winH = H;
         float p = openAnim();
@@ -210,13 +236,24 @@ public class ColorsScreen extends Screen {
         yy = drawMenuSizeSlider(ctx, tr, x + pad, yy, cw, ClickGuiScreen.getWinScale(), p);
         yy += 10;
 
-        // Reset to Defaults — clears custom colours/style for BOTH modes back to the
-        // built-in look, not just the one currently being edited.
-        boolean resetHov = inside(mx, my, x + pad, yy, cw, 24);
-        RenderUtil.roundedRect(ctx, x + pad, yy, cw, 24, 8, fade(resetHov ? Theme.glassHov() : Theme.glassRow(), p));
-        RenderUtil.strokeRoundedRect(ctx, x + pad, yy, cw, 24, 8, 1, fade(Theme.rim(), p));
-        RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Reset to Defaults"), x, yy, W, 24, fade(Theme.txtDim(), p), 0.47f);
-        resetRect = new int[]{ x + pad, yy, cw, 24 };
+        // Reset to Defaults (left half) + a prominent Close button (right half) — the small ×
+        // in the top-right corner already closes the window, but it's small/easy to miss; this
+        // is the same explicit bottom exit button every other screen in this client has (see
+        // AccountManagerScreen/FastConnectScreen's "Home").
+        int rGap = 8, rHalfW = (cw - rGap) / 2;
+        boolean resetHov = inside(mx, my, x + pad, yy, rHalfW, 24);
+        RenderUtil.roundedRect(ctx, x + pad, yy, rHalfW, 24, 8, fade(resetHov ? Theme.glassHov() : Theme.glassRow(), p));
+        RenderUtil.strokeRoundedRect(ctx, x + pad, yy, rHalfW, 24, 8, 1, fade(Theme.rim(), p));
+        RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Reset to Defaults"), x + pad, yy, rHalfW, 24, fade(Theme.txtDim(), p), 0.42f);
+        resetRect = new int[]{ x + pad, yy, rHalfW, 24 };
+
+        int closeBtnX = x + pad + rHalfW + rGap;
+        boolean closeBtnHov = inside(mx, my, closeBtnX, yy, rHalfW, 24);
+        RenderUtil.roundedRect(ctx, closeBtnX, yy, rHalfW, 24, 8, fade(closeBtnHov ? Theme.accent() : Theme.glassRow(), p));
+        RenderUtil.strokeRoundedRect(ctx, closeBtnX, yy, rHalfW, 24, 8, 1, fade(Theme.rim(), p));
+        RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Close"), closeBtnX, yy, rHalfW, 24,
+                fade(closeBtnHov ? Theme.activeText() : Theme.txt(), p), 0.42f);
+        closeBtnRect = new int[]{ closeBtnX, yy, rHalfW, 24 };
 
         // Colour picker popover — floats above everything else, anchored under whichever
         // swatch opened it.
@@ -505,6 +542,7 @@ public class ColorsScreen extends Screen {
 
         if (inside(mx, my, closeRect)) { close(); return true; }
         if (inside(mx, my, resetRect)) { Theme.resetToDefaults(); ThemeSync.save(); return true; }
+        if (inside(mx, my, closeBtnRect)) { close(); return true; }
         for (int i = 0; i < 2; i++) {
             if (inside(mx, my, modeRects[i])) { editingDark = i == 1; Theme.setDark(editingDark); ThemeSync.save(); return true; }
         }
