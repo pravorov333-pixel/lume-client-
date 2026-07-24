@@ -15,6 +15,10 @@ import java.nio.IntBuffer;
  * Pixel-perfect rounded-rect fill + outline + glow, computed per-fragment on the GPU via a
  * Signed Distance Field (SDF) instead of {@code RenderUtil}'s CPU per-scanline coverage
  * approximation — genuinely sub-pixel smooth at any GUI scale, not just anti-aliased-looking.
+ * Also supports ROTATION ({@link #boxRotated}) for icon glyphs built out of rotated bars
+ * (gear teeth, an X, sun rays) — the quad drawn on screen is padded to the rotated shape's
+ * bounding box, then the fragment shader rotates the SAMPLE point back into the box's own
+ * unrotated local space before running the same SDF test {@link #box} uses.
  *
  * <p>Entirely raw GL (own shader/VAO/VBO), same defensive pattern as {@link GlassRenderer}
  * (first failure disables it permanently, saves/restores every bit of GL state it touches) —
@@ -32,19 +36,9 @@ public final class SdfRenderer {
     private static boolean initialized = false;
 
     private static int program;
-    private static int sizeLoc, radiusLoc, fillLoc, outlineLoc, outlineWidthLoc, glowLoc, glowSpreadLoc;
+    private static int quadSizeLoc, sizeLoc, angleLoc, radiusLoc, fillLoc, outlineLoc, outlineWidthLoc, glowLoc, glowSpreadLoc;
     private static int quadVao, quadVbo;
 
-    /**
-     * Draws one rounded rect: solid {@code fillArgb} inside, an optional {@code outlineArgb}
-     * ring of {@code outlineWidthPx} at the edge, and an optional soft {@code glowArgb} falloff
-     * of {@code glowSpreadPx} beyond the outline — any of the three layers is skipped by passing
-     * alpha 0 (fill) / width 0 (outline) / spread 0 (glow). All three are masked so they never
-     * double-blend where they overlap (fill wins over outline wins over glow).
-     *
-     * @param x,y,w,h    framebuffer px, top-left origin
-     * @param radiusPx   corner radius, framebuffer px
-     */
     /** Forces {@link #init()} to run now (if it hasn't already) and reports whether the shader
      *  is usable — lets a caller decide up front whether to draw the SDF background or fall back
      *  to a plain {@code RenderUtil} rect, instead of finding out only after {@link #box} silently
@@ -56,63 +50,64 @@ public final class SdfRenderer {
         return initialized && !disabled;
     }
 
+    /**
+     * Draws one rounded rect: solid {@code fillArgb} inside, an optional {@code outlineArgb}
+     * ring of {@code outlineWidthPx} at the edge, and an optional soft {@code glowArgb} falloff
+     * of {@code glowSpreadPx} beyond the outline — any of the three layers is skipped by passing
+     * alpha 0 (fill) / width 0 (outline) / spread 0 (glow). All three are masked so they never
+     * double-blend where they overlap (fill wins over outline wins over glow).
+     *
+     * @param x,y,w,h    framebuffer px, top-left origin
+     * @param radiusPx   corner radius, framebuffer px
+     */
     public static void box(int x, int y, int w, int h, float radiusPx,
                             int fillArgb, int outlineArgb, float outlineWidthPx,
                             int glowArgb, float glowSpreadPx) {
-        if (disabled || w <= 0 || h <= 0) return;
-        try {
-            if (!initialized && !init()) { disabled = true; return; }
-            MinecraftClient mc = MinecraftClient.getInstance();
-            int fbW = mc.getWindow().getFramebufferWidth();
-            int fbH = mc.getWindow().getFramebufferHeight();
-            if (x + w <= 0 || y + h <= 0 || x >= fbW || y >= fbH) return;   // fully off-screen
+        draw(x, y, w, h, w, h, 0f, radiusPx, fillArgb, outlineArgb, outlineWidthPx, glowArgb, glowSpreadPx);
+    }
 
-            int prevProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
-            int prevVao = GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING);
-            int prevAbuf = GL11.glGetInteger(GL15.GL_ARRAY_BUFFER_BINDING);
-            boolean prevBlend = GL11.glIsEnabled(GL11.GL_BLEND);
-            boolean prevDepth = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
-            int prevBlendSrcRgb = GL11.glGetInteger(GL14.GL_BLEND_SRC_RGB);
-            int prevBlendDstRgb = GL11.glGetInteger(GL14.GL_BLEND_DST_RGB);
-            int prevBlendSrcAlpha = GL11.glGetInteger(GL14.GL_BLEND_SRC_ALPHA);
-            int prevBlendDstAlpha = GL11.glGetInteger(GL14.GL_BLEND_DST_ALPHA);
-
-            try {
-                GL11.glDisable(GL11.GL_DEPTH_TEST);
-                GL11.glEnable(GL11.GL_BLEND);
-                GL14.glBlendFuncSeparate(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ONE_MINUS_SRC_ALPHA);
-
-                GL20.glUseProgram(program);
-                GL30.glBindVertexArray(quadVao);
-                GL20.glUniform2f(sizeLoc, w, h);
-                GL20.glUniform1f(radiusLoc, Math.min(radiusPx, Math.min(w, h) * 0.5f));
-                setColor(fillLoc, fillArgb);
-                setColor(outlineLoc, outlineArgb);
-                GL20.glUniform1f(outlineWidthLoc, Math.max(0f, outlineWidthPx));
-                setColor(glowLoc, glowArgb);
-                GL20.glUniform1f(glowSpreadLoc, Math.max(0f, glowSpreadPx));
-
-                float ndcX0 = (2f * x / fbW) - 1f, ndcX1 = (2f * (x + w) / fbW) - 1f;
-                float ndcY0 = 1f - (2f * (y + h) / fbH), ndcY1 = 1f - (2f * y / fbH);
-                setQuad(ndcX0, ndcY0, ndcX1, ndcY1);
-                GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 6);
-            } finally {
-                GL14.glBlendFuncSeparate(prevBlendSrcRgb, prevBlendDstRgb, prevBlendSrcAlpha, prevBlendDstAlpha);
-                if (prevBlend) GL11.glEnable(GL11.GL_BLEND); else GL11.glDisable(GL11.GL_BLEND);
-                if (prevDepth) GL11.glEnable(GL11.GL_DEPTH_TEST); else GL11.glDisable(GL11.GL_DEPTH_TEST);
-                GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, prevAbuf);
-                GL30.glBindVertexArray(prevVao);
-                GL20.glUseProgram(prevProgram);
-            }
-        } catch (Throwable t) {
-            disabled = true;
-            System.out.println("[Lume] SdfRenderer disabled after error: " + t);
-        }
+    /**
+     * Rotated rounded rect, centred at {@code (cx,cy)} — for icon glyphs (gear teeth, an X, sun
+     * rays) built out of rotated bars. The quad actually drawn on screen is padded to the
+     * rotated shape's own bounding box (computed here); the shader rotates the sample point back
+     * into the box's unrotated local frame before the same SDF test {@link #box} uses, so the
+     * box itself reads as genuinely rotated, not just its content.
+     *
+     * @param cx,cy      framebuffer px, box CENTRE (not top-left — rotation needs a centre)
+     * @param w,h        the box's own (unrotated) size, framebuffer px
+     * @param angleRad   rotation, radians
+     */
+    public static void boxRotated(int cx, int cy, int w, int h, float radiusPx, float angleRad,
+                                   int fillArgb, int outlineArgb, float outlineWidthPx,
+                                   int glowArgb, float glowSpreadPx) {
+        float pad = Math.max(outlineWidthPx * 0.5f, 0f) + Math.max(glowSpreadPx, 0f) + 2f;
+        float hw = w * 0.5f + pad, hh = h * 0.5f + pad;
+        float ca = Math.abs((float) Math.cos(angleRad)), sa = Math.abs((float) Math.sin(angleRad));
+        // Half-extents of the rotated box's own axis-aligned bounding box, so the quad we
+        // actually draw always fully covers the rotated shape regardless of angle.
+        float bx = hw * ca + hh * sa, by = hw * sa + hh * ca;
+        int qx = Math.round(cx - bx), qy = Math.round(cy - by);
+        int qw = Math.round(bx * 2f), qh = Math.round(by * 2f);
+        draw(qx, qy, qw, qh, w, h, angleRad, radiusPx, fillArgb, outlineArgb, outlineWidthPx, glowArgb, glowSpreadPx);
     }
 
     /** Filled rounded rect only — shorthand for {@link #box} with no outline/glow. */
     public static void fill(int x, int y, int w, int h, float radiusPx, int fillArgb) {
         box(x, y, w, h, radiusPx, fillArgb, 0, 0f, 0, 0f);
+    }
+
+    /** Filled CIRCLE — shorthand for {@link #boxRotated} with a square box and radius covering
+     *  the whole thing; angle is irrelevant for a circle, kept 0. Centre-based, like every icon
+     *  primitive here (icons compose around a shared centre point). */
+    public static void circle(int cx, int cy, float r, int fillArgb) {
+        int d = Math.round(r * 2f);
+        draw(cx - d / 2, cy - d / 2, d, d, d, d, 0f, r, fillArgb, 0, 0f, 0, 0f);
+    }
+
+    /** Ring (circle outline only) — for gear/globe icon bodies. */
+    public static void ring(int cx, int cy, float r, float thicknessPx, int outlineArgb) {
+        int d = Math.round(r * 2f);
+        draw(cx - d / 2, cy - d / 2, d, d, d, d, 0f, r, 0, outlineArgb, thicknessPx, 0, 0f);
     }
 
     /** Outline (+ optional glow), no fill — the "invisible button, visible only by its glowing
@@ -138,6 +133,66 @@ public final class SdfRenderer {
                 r * total, fillArgb, outlineArgb, outlineWidthPx * total, glowArgb, glowSpreadPx * total);
     }
 
+    /** Shared draw core — {@code qx,qy,qw,qh} is the actual quad drawn on screen (top-left,
+     *  framebuffer px); {@code sizeW,sizeH} is the logical box size the SDF test runs against
+     *  (equal to qw,qh for {@link #box}, smaller than the quad for {@link #boxRotated} since
+     *  that quad is padded to the rotated bounding box). */
+    private static void draw(int qx, int qy, int qw, int qh, int sizeW, int sizeH, float angleRad, float radiusPx,
+                              int fillArgb, int outlineArgb, float outlineWidthPx,
+                              int glowArgb, float glowSpreadPx) {
+        if (disabled || qw <= 0 || qh <= 0) return;
+        try {
+            if (!initialized && !init()) { disabled = true; return; }
+            MinecraftClient mc = MinecraftClient.getInstance();
+            int fbW = mc.getWindow().getFramebufferWidth();
+            int fbH = mc.getWindow().getFramebufferHeight();
+            if (qx + qw <= 0 || qy + qh <= 0 || qx >= fbW || qy >= fbH) return;   // fully off-screen
+
+            int prevProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
+            int prevVao = GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING);
+            int prevAbuf = GL11.glGetInteger(GL15.GL_ARRAY_BUFFER_BINDING);
+            boolean prevBlend = GL11.glIsEnabled(GL11.GL_BLEND);
+            boolean prevDepth = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
+            int prevBlendSrcRgb = GL11.glGetInteger(GL14.GL_BLEND_SRC_RGB);
+            int prevBlendDstRgb = GL11.glGetInteger(GL14.GL_BLEND_DST_RGB);
+            int prevBlendSrcAlpha = GL11.glGetInteger(GL14.GL_BLEND_SRC_ALPHA);
+            int prevBlendDstAlpha = GL11.glGetInteger(GL14.GL_BLEND_DST_ALPHA);
+
+            try {
+                GL11.glDisable(GL11.GL_DEPTH_TEST);
+                GL11.glEnable(GL11.GL_BLEND);
+                GL14.glBlendFuncSeparate(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ONE_MINUS_SRC_ALPHA);
+
+                GL20.glUseProgram(program);
+                GL30.glBindVertexArray(quadVao);
+                GL20.glUniform2f(quadSizeLoc, qw, qh);
+                GL20.glUniform2f(sizeLoc, sizeW, sizeH);
+                GL20.glUniform1f(angleLoc, angleRad);
+                GL20.glUniform1f(radiusLoc, Math.min(radiusPx, Math.min(sizeW, sizeH) * 0.5f));
+                setColor(fillLoc, fillArgb);
+                setColor(outlineLoc, outlineArgb);
+                GL20.glUniform1f(outlineWidthLoc, Math.max(0f, outlineWidthPx));
+                setColor(glowLoc, glowArgb);
+                GL20.glUniform1f(glowSpreadLoc, Math.max(0f, glowSpreadPx));
+
+                float ndcX0 = (2f * qx / fbW) - 1f, ndcX1 = (2f * (qx + qw) / fbW) - 1f;
+                float ndcY0 = 1f - (2f * (qy + qh) / fbH), ndcY1 = 1f - (2f * qy / fbH);
+                setQuad(ndcX0, ndcY0, ndcX1, ndcY1);
+                GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 6);
+            } finally {
+                GL14.glBlendFuncSeparate(prevBlendSrcRgb, prevBlendDstRgb, prevBlendSrcAlpha, prevBlendDstAlpha);
+                if (prevBlend) GL11.glEnable(GL11.GL_BLEND); else GL11.glDisable(GL11.GL_BLEND);
+                if (prevDepth) GL11.glEnable(GL11.GL_DEPTH_TEST); else GL11.glDisable(GL11.GL_DEPTH_TEST);
+                GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, prevAbuf);
+                GL30.glBindVertexArray(prevVao);
+                GL20.glUseProgram(prevProgram);
+            }
+        } catch (Throwable t) {
+            disabled = true;
+            System.out.println("[Lume] SdfRenderer disabled after error: " + t);
+        }
+    }
+
     private static void setColor(int loc, int argb) {
         float a = ((argb >>> 24) & 0xFF) / 255f;
         float r = ((argb >> 16) & 0xFF) / 255f;
@@ -157,7 +212,9 @@ public final class SdfRenderer {
         try {
             program = link(VERT_SRC, FRAG_SRC);
             if (program == 0) return false;
+            quadSizeLoc = GL20.glGetUniformLocation(program, "uQuadSize");
             sizeLoc = GL20.glGetUniformLocation(program, "uSize");
+            angleLoc = GL20.glGetUniformLocation(program, "uAngle");
             radiusLoc = GL20.glGetUniformLocation(program, "uRadius");
             fillLoc = GL20.glGetUniformLocation(program, "uFill");
             outlineLoc = GL20.glGetUniformLocation(program, "uOutline");
@@ -260,12 +317,19 @@ public final class SdfRenderer {
     /** Same sdRoundRect distance function GlassRenderer's composite shader already uses (proven
      *  to compile/link/render correctly on this project's actual GL setup) — layers fill (d<=0),
      *  outline band (0..outlineWidth), then glow falloff (outlineWidth..+glowSpread), each masked
-     *  by (1-prevLayerAlpha) so overlapping bands don't double-blend. */
+     *  by (1-prevLayerAlpha) so overlapping bands don't double-blend. {@code uQuadSize} is the
+     *  ACTUAL drawn quad's px size (may exceed {@code uSize} when rotated/padded, see {@link
+     *  #boxRotated}); the sample point is measured in that quad space, then rotated by
+     *  {@code -uAngle} into the box's own unrotated local frame before the SDF test runs against
+     *  {@code uSize} — so {@code uAngle=0} (every {@link #box} call) is identical to the
+     *  original unrotated shader, just with an extra no-op rotation. */
     private static final String FRAG_SRC = """
             #version 150
             in vec2 vUv;
             out vec4 fragColor;
+            uniform vec2 uQuadSize;
             uniform vec2 uSize;
+            uniform float uAngle;
             uniform float uRadius;
             uniform vec4 uFill;
             uniform vec4 uOutline;
@@ -280,8 +344,10 @@ public final class SdfRenderer {
 
             void main() {
                 vec2 halfSize = uSize * 0.5;
-                vec2 p = (vUv - 0.5) * uSize;
-                float d = sdRoundRect(p, halfSize, uRadius);
+                vec2 p = (vUv - 0.5) * uQuadSize;
+                float ca = cos(uAngle), sa = sin(uAngle);
+                vec2 pl = vec2(ca * p.x + sa * p.y, -sa * p.x + ca * p.y);
+                float d = sdRoundRect(pl, halfSize, uRadius);
 
                 // Outline is CENTERED on the d=0 boundary (straddles [-halfOutline, +halfOutline]),
                 // the conventional stroke convention (matches SVG/Skia) — keeps the visible bounding

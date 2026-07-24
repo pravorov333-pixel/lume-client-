@@ -136,8 +136,7 @@ public class ColorsScreen extends Screen {
         TextRenderer tr = MinecraftClient.getInstance().textRenderer;
         int r = 16;
         RenderUtil.glow(ctx, x, y, W, H, r, 0x000000, 3);
-        RenderUtil.roundedRect(ctx, x, y, W, H, r, fade(Theme.winTop(), p));
-        RenderUtil.strokeRoundedRect(ctx, x, y, W, H, r, 1, fade(Theme.rim(), p));
+        RenderUtil.panelBg(ctx, x, y, W, H, r, fade(Theme.winTop(), p), fade(Theme.rim(), p));
 
         int pad = 14;
         RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Customize Colors"), x, y + 14, W, 16, fade(Theme.txt(), p), 0.7f);
@@ -361,8 +360,7 @@ public class ColorsScreen extends Screen {
         int px = anchor[0] + anchor[2] - pw, py = anchor[1] + anchor[2] + 6;
 
         RenderUtil.glow(ctx, px, py, pw, ph, 12, 0x000000, 2);
-        RenderUtil.roundedRect(ctx, px, py, pw, ph, 12, fade(Theme.winTop(), p));
-        RenderUtil.strokeRoundedRect(ctx, px, py, pw, ph, 12, 1, fade(Theme.rim(), p));
+        RenderUtil.panelBg(ctx, px, py, pw, ph, 12, fade(Theme.winTop(), p), fade(Theme.rim(), p));
 
         int svX = px + pad, svY = py + pad;
         int hueRgb = 0xFF000000 | hsvToRgb(pickerHue, 1f, 1f);

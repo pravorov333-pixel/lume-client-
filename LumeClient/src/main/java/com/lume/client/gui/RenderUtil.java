@@ -372,29 +372,45 @@ public final class RenderUtil {
         roundedRectRaw(ctx, x, y, w, h, r, color);
     }
 
+    /** Minimalist "face" glyph — black rounded-square background, two white dot eyes, one flat
+     *  white mouth line. Used in place of a real skin-head render anywhere an account avatar is
+     *  shown (Account Manager cards, the main-menu Account chip). Shared here so both callers
+     *  stay pixel-identical instead of drifting into two hand-tuned copies. */
+    public static void drawFace(DrawContext ctx, int x, int y, int size) {
+        roundedRect(ctx, x, y, size, size, Math.round(size * 0.22f), 0xFF000000);
+        int eyeR = Math.max(1, Math.round(size * 0.09f));
+        int eyeY = y + Math.round(size * 0.4f);
+        int eyeDX = Math.round(size * 0.24f);
+        roundedRect(ctx, x + size / 2 - eyeDX - eyeR, eyeY - eyeR, eyeR * 2, eyeR * 2, eyeR, 0xFFFFFFFF);
+        roundedRect(ctx, x + size / 2 + eyeDX - eyeR, eyeY - eyeR, eyeR * 2, eyeR * 2, eyeR, 0xFFFFFFFF);
+        int mouthW = Math.round(size * 0.4f), mouthH = Math.max(1, Math.round(size * 0.07f));
+        int mouthY = y + Math.round(size * 0.66f);
+        roundedRect(ctx, x + size / 2 - mouthW / 2, mouthY, mouthW, mouthH, mouthH / 2, 0xFFFFFFFF);
+    }
+
     /**
      * Premium interactive background: pixel-perfect SDF fill (see {@link
      * com.lume.client.nanovg.SdfRenderer}) with a soft glow that hugs the button's actual rounded
-     * CONTOUR (not a rectangular halo) and a slight lift on hover — replaces the older baked-PNG
-     * glass look for main-menu buttons, per the reference's premium hover feel. Falls back to a
-     * flat {@link #roundedRect} (no lift/contour-glow, since {@link #glow} is rectangular) if the
-     * shader failed to init on this GPU — same defensive fallback every raw-GL helper here uses.
+     * CONTOUR (not a rectangular halo) on hover — replaces the older baked-PNG glass look for
+     * main-menu buttons. No lift any more (removed per explicit request — highlight only, still
+     * contour-shaped). Falls back to a flat {@link #roundedRect} (no contour-glow, since {@link
+     * #glow} is rectangular) if the shader failed to init on this GPU — same defensive fallback
+     * every raw-GL helper here uses.
      *
      * @param x,y,w,h    DrawContext logical px (top-left), NOT framebuffer px — converted
      *                   internally via the window scale factor, same convention every other
      *                   caller in this file already uses.
-     * @param hoverAmt   0..1 eased hover amount — drives both the lift (px) and the glow alpha.
+     * @param hoverAmt   0..1 eased hover amount — drives the glow alpha/spread.
      */
     public static void premiumBg(DrawContext ctx, int x, int y, int w, int h, int radius,
                                   float hoverAmt, int fillArgb, int outlineArgb, int glowRgb) {
         if (com.lume.client.nanovg.SdfRenderer.ensureInit()) {
             net.minecraft.client.MinecraftClient mc = net.minecraft.client.MinecraftClient.getInstance();
             int S = (int) Math.max(1, mc.getWindow().getScaleFactor());
-            int lift = Math.round(hoverAmt * 2f);
             int glowA = Math.round(hoverAmt * 140f);
             int glow = (glowA << 24) | (glowRgb & 0xFFFFFF);
             ctx.draw(); // flush queued DrawContext content before this raw-GL write — see ClickGuiScreen's own SdfRenderer calls
-            com.lume.client.nanovg.SdfRenderer.box(x * S, (y - lift) * S, w * S, h * S, radius * S,
+            com.lume.client.nanovg.SdfRenderer.box(x * S, y * S, w * S, h * S, radius * S,
                     fillArgb, outlineArgb, 1f * S, glow, (3f + hoverAmt * 6f) * S);
         } else {
             roundedRect(ctx, x, y, w, h, radius, fillArgb);
@@ -403,12 +419,30 @@ public final class RenderUtil {
         }
     }
 
-    /** Same lift as {@link #premiumBg} (for positioning content drawn on TOP of the background,
-     *  e.g. an icon/label) — in whole px, so callers can offset their own text/icon draw calls to
-     *  move together with the background instead of the label staying still while the button
-     *  lifts out from under it. */
+    /** No-op now (lift removed from {@link #premiumBg} per explicit request — highlight only) —
+     *  kept so every existing "content drawn on top of a premiumBg" call site doesn't need to
+     *  change, it just always offsets by 0. */
     public static int premiumLift(float hoverAmt) {
-        return Math.round(hoverAmt * 2f);
+        return 0;
+    }
+
+    /** Static panel background — SDF fill + outline (see {@link #premiumBg}), no hover/glow
+     *  layer (panels aren't interactive buttons). The point of switching this off the old CPU
+     *  {@link #roundedRect}/{@link #strokeRoundedRect} pair: the SDF outline is mathematically
+     *  the SAME thickness all the way around, including the corners, whereas the CPU per-scanline
+     *  coverage approximation those two used could read as uneven right at the curve. Falls back
+     *  to the old CPU pair if the shader failed to init on this GPU. */
+    public static void panelBg(DrawContext ctx, int x, int y, int w, int h, int radius, int fillArgb, int outlineArgb) {
+        if (com.lume.client.nanovg.SdfRenderer.ensureInit()) {
+            net.minecraft.client.MinecraftClient mc = net.minecraft.client.MinecraftClient.getInstance();
+            int S = (int) Math.max(1, mc.getWindow().getScaleFactor());
+            ctx.draw();
+            com.lume.client.nanovg.SdfRenderer.box(x * S, y * S, w * S, h * S, radius * S,
+                    fillArgb, outlineArgb, 1f * S, 0, 0f);
+        } else {
+            roundedRect(ctx, x, y, w, h, radius, fillArgb);
+            if (outlineArgb != 0) strokeRoundedRect(ctx, x, y, w, h, radius, 1, outlineArgb);
+        }
     }
 
     /** Anti-aliased rounded-rect OUTLINE of a given thickness — the NanoVG-removal equivalent of

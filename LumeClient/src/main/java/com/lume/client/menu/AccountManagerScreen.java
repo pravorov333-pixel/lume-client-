@@ -72,21 +72,6 @@ public class AccountManagerScreen extends Screen {
 
     private record Card(String name, boolean active, int x, int y) {}
 
-    /** Minimalist "face" in place of the real skin head, per the user's explicit ask — flat white
-     *  mouth + two white dot eyes on a black rounded-square background (a plain smiley, not a
-     *  skin render). Same footprint the skin icon used to occupy. */
-    private void drawFace(DrawContext ctx, int x, int y, int size) {
-        RenderUtil.roundedRect(ctx, x, y, size, size, Math.round(size * 0.22f), 0xFF000000);
-        int eyeR = Math.max(1, Math.round(size * 0.09f));
-        int eyeY = y + Math.round(size * 0.4f);
-        int eyeDX = Math.round(size * 0.24f);
-        RenderUtil.roundedRect(ctx, x + size / 2 - eyeDX - eyeR, eyeY - eyeR, eyeR * 2, eyeR * 2, eyeR, 0xFFFFFFFF);
-        RenderUtil.roundedRect(ctx, x + size / 2 + eyeDX - eyeR, eyeY - eyeR, eyeR * 2, eyeR * 2, eyeR, 0xFFFFFFFF);
-        int mouthW = Math.round(size * 0.4f), mouthH = Math.max(1, Math.round(size * 0.07f));
-        int mouthY = y + Math.round(size * 0.66f);
-        RenderUtil.roundedRect(ctx, x + size / 2 - mouthW / 2, mouthY, mouthW, mouthH, mouthH / 2, 0xFFFFFFFF);
-    }
-
     @Override
     public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
         // Plain background (vanilla panorama/dirt) + Background Dim, filling the WHOLE screen —
@@ -136,12 +121,12 @@ public class AccountManagerScreen extends Screen {
                 int ly = c.y() - RenderUtil.premiumLift(st[0]);
 
                 int hs = CARD_H - 8;
-                drawFace(ctx, c.x() + 4, ly + 4, hs);
+                RenderUtil.drawFace(ctx, c.x() + 4, ly + 4, hs);
 
                 // Edit action (rename + server-bind) — rendered as a globe/planet glyph, same as
                 // the Language button in the main menu, per the user's explicit ask; still the
                 // same "edit" action underneath.
-                MenuAssets.blit(ctx, MenuAssets.IC_GLOBE, c.x() + CARD_W - 34, ly + CARD_H / 2 - 6, 12, 12);
+                com.lume.client.gui.IconGlyphs.globe(ctx, c.x() + CARD_W - 28, ly + CARD_H / 2, 6f, Theme.txtDim());
                 drawCardText(ctx, tr, c, p, ly);
             }
 
