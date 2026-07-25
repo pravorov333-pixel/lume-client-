@@ -11,7 +11,6 @@ import com.lume.client.fthw.TelegramEvents;
 import com.lume.client.nanovg.NanoVgRenderer;
 import com.lume.client.module.Module;
 import com.lume.client.module.modules.cosmetic.CustomCrosshair;
-import com.lume.client.module.modules.fthw.ServerHelper;
 import com.lume.client.module.modules.render.CustomHand;
 import com.lume.client.module.modules.qol.Waypoints;
 import com.lume.client.module.modules.visual.BlockInfo;
@@ -126,14 +125,11 @@ public final class HudRenderer {
         if (on("Potion HUD")) transform(ctx, "Potion HUD", sizeOf("Potion HUD"), nsw, 6 * S, S, () -> renderPotions(ctx, mc, tr, S));
         if (on("Keystrokes")) transform(ctx, "Keystrokes", sizeOf("Keystrokes"), 12 * S, nsh, S, () -> renderKeystrokes(ctx, mc, tr, S));
         if (on("Custom Crosshair")) renderCrosshair(ctx, mc, S);
-        if (on("Server Helper")) {
-            ServerHelper shm = (ServerHelper) LumeClient.MODULES.getByName("Server Helper");
-            if (shm == null || shm.showServer.value) transform(ctx, "FT Events", sizeOf("FT Events"), 6 * S, 150 * S, S, () -> renderServerHelper(ctx, mc, tr, S));
-            // Anarchy Event HUD panel disabled for now (user request) — event info lives in the Events tab instead.
-            if (shm == null || shm.itemHelper.value) transform(ctx, "Item Helper", sizeOf("Item Helper"), nsw / 2.0, nsh, S, () -> renderItemHelper(ctx, mc, tr, S));
-            if (shm == null || shm.effects.value) transform(ctx, "Effects", sizeOf("Effects"), 6 * S, nsh / 2.0, S, () -> renderEffects(ctx, mc, tr, S));
-            if (shm == null || shm.quickCmds.value) transform(ctx, "Quick Commands", sizeOf("Quick Commands"), nsw, nsh / 2.0, S, () -> renderQuickBar(ctx, mc, tr, S));
-        }
+        if (on("Events HUD")) transform(ctx, "FT Events", sizeOf("FT Events"), 6 * S, 150 * S, S, () -> renderServerHelper(ctx, mc, tr, S));
+        if (on("Item Helper")) transform(ctx, "Item Helper", sizeOf("Item Helper"), nsw / 2.0, nsh, S, () -> renderItemHelper(ctx, mc, tr, S));
+        if (on("Self Effects")) transform(ctx, "Effects", sizeOf("Effects"), 6 * S, nsh / 2.0, S, () -> renderEffects(ctx, mc, tr, S));
+        if (on("Quick Commands HUD")) transform(ctx, "Quick Commands", sizeOf("Quick Commands"), nsw, nsh / 2.0, S, () -> renderQuickBar(ctx, mc, tr, S));
+        if (on("Anarchy Event Alert")) transform(ctx, "Anarchy Event Alert", sizeOf("Anarchy Event Alert"), nsw / 2.0, 6 * S, S, () -> renderAnarchyEventHud(ctx, tr, S, nsw));
         Notifications.render(ctx, tr, S, nsw);
         if (on("Module List")) transform(ctx, "Module List", sizeOf("Module List"), nsw, 6 * S, S, () -> renderArrayList(ctx, mc, tr, S));
         if (on("Crit Helper")) transform(ctx, "Crit Helper", sizeOf("Crit Helper"), nsw / 2.0, nsh / 2.0 + 16 * S, S, () -> renderShiftIndicator(ctx, mc, tr, S));
@@ -323,14 +319,16 @@ public final class HudRenderer {
         NanoVgRenderer.ensureInit();
         if (!NanoVgRenderer.ready()) return;
         ctx.draw();   // flush DrawContext's own queued geometry (e.g. the Target HUD panel's text) before raw-GL NanoVG draws
+        NvgTextQueue.begin(0, 0, 0, 0, 1f);   // HUD draws in real screen coords already, no window pan/zoom to undo
         NanoVgRenderer.frame(vg -> {
             if (hearts) drawHpHearts(vg, nx, ny, S, ratioMain);
             else drawHpBar(vg, nx, ny, S, ratioMain, ratioGhost);
             if (showText) {
                 float ty = ny - (hearts ? 17 : 13) * S;
-                NanoVgRenderer.text(vg, nx, ty, 9 * S, 0xFFFFFFFF, NanoVgRenderer.ALIGN_CENTER_MIDDLE, hpStr);
+                NvgTextQueue.text(nx, ty, 9 * S, 0xFFFFFFFF, NanoVgRenderer.ALIGN_CENTER_MIDDLE, hpStr);
             }
         });
+        NvgTextQueue.flush(ctx);
     }
 
     /** Flat DrawContext fallback for {@link #renderTargetHpPin} (Ultra Performance) — same
@@ -887,7 +885,9 @@ public final class HudRenderer {
                 NanoVgRenderer.ensureInit();
                 if (NanoVgRenderer.ready()) {
                     ctx.draw();   // flush DrawContext's own queued geometry before raw-GL NanoVG draws
+                    NvgTextQueue.begin(0, 0, 0, 0, 1f);   // pins are already at real screen coords
                     NanoVgRenderer.frame(vg -> { for (PinJob p : pins) drawPin(vg, p, S); });
+                    NvgTextQueue.flush(ctx);
                 }
             }
         }
@@ -932,8 +932,8 @@ public final class HudRenderer {
         NanoVgRenderer.triangle(vg, p.nx() - tailW / 2f, bodyBottom, p.nx() + tailW / 2f, bodyBottom, p.nx(), p.ny(), Theme.winBg());
         NanoVgRenderer.roundedRect(vg, bodyX, bodyTop, bodyW, bodyH, 7 * sc, Theme.winBg());
         NanoVgRenderer.strokeRoundedRect(vg, bodyX + 0.5f * S, bodyTop + 0.5f * S, bodyW - S, bodyH - S, 7 * sc, S, p.color());
-        NanoVgRenderer.text(vg, p.nx(), bodyTop + padY + lineH / 2f, fName, p.color(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, p.name());
-        NanoVgRenderer.text(vg, p.nx(), bodyTop + padY + lineH + lineH / 2f, fSub, p.subColor(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, p.sub());
+        NvgTextQueue.text(p.nx(), bodyTop + padY + lineH / 2f, fName, p.color(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, p.name());
+        NvgTextQueue.text(p.nx(), bodyTop + padY + lineH + lineH / 2f, fSub, p.subColor(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, p.sub());
     }
 
     /** A small triangle pinned to the screen edge, pointing toward an off-screen waypoint. */
@@ -965,8 +965,9 @@ public final class HudRenderer {
      * on, and only that anarchy — shows NOTHING until {@link CurrentAnarchy} can
      * read a number off the scoreboard (i.e. you're actually on a recognised
      * anarchy, not just connected to the server's hub/lobby), and even then only
-     * if there's an event for that specific anarchy number. Gated by the
-     * "Server Helper" module + its eventsHud sub-toggle (see call site).
+     * if there's an event for that specific anarchy number. Gated by the standalone
+     * "Anarchy Event Alert" module (see call site) — was disabled behind a stale flag before,
+     * now a direct toggle, per the user's explicit "показывать когда ивент на твоей анке" ask.
      */
     private static void renderAnarchyEventHud(DrawContext ctx, TextRenderer tr, int S, int nsw) {
         String current = CurrentAnarchy.get();

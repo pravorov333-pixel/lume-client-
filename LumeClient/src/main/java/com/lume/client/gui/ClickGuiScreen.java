@@ -4,18 +4,16 @@ import com.lume.client.LumeClient;
 import com.lume.client.module.Category;
 import com.lume.client.module.Module;
 import com.lume.client.fthw.EventManager;
-import com.lume.client.fthw.ItemRule;
-import com.lume.client.fthw.ItemRules;
 import com.lume.client.nanovg.GlassRenderer;
 import com.lume.client.nanovg.NanoVgRenderer;
 import com.lume.client.nanovg.SdfRenderer;
+import com.lume.client.nanovg.SdfTextRenderer;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.TitleScreen;
 import net.minecraft.client.gui.screen.multiplayer.ConnectScreen;
 import net.minecraft.client.network.ServerAddress;
 import net.minecraft.client.network.ServerInfo;
 import com.lume.client.module.modules.cosmetic.CustomCrosshair;
-import com.lume.client.module.modules.fthw.ServerHelper;
 import com.lume.client.module.modules.qol.Waypoints;
 import com.lume.client.module.setting.BoolSetting;
 import com.lume.client.module.setting.ColorSetting;
@@ -48,7 +46,7 @@ public class ClickGuiScreen extends Screen {
     private static final int WIN_W = 520;
     private static final int WIN_H = 356;
     private static final int GRID_TOP = 118;
-    private static final int CARD_H = 38;
+    private static final int CARD_H = 48;   // grown from 38 to fit the always-visible description sub-line
     private static final int CARD_GAP = 8;
 
     // Category.values() clones its backing array on every call — this screen calls it ~30+
@@ -152,7 +150,6 @@ public class ClickGuiScreen extends Screen {
     private int serverContentH = 0;
 
     private boolean isBindsTab()   { return search.isEmpty() && selectedCat == CATS.length; }
-    private boolean isServerTab()  { return search.isEmpty() && selectedCat == CATS.length + 1; }
     private boolean isEventsTab()  { return search.isEmpty() && topSection == 1; }
     private boolean isConfigTab()  { return search.isEmpty() && topSection == 2; }
     private boolean isFriendsTab() { return search.isEmpty() && topSection == 3; }
@@ -205,8 +202,10 @@ public class ClickGuiScreen extends Screen {
         String tag;   // free-form payload for kinds that don't map to a Setting (e.g. "My Sounds" filename)
     }
 
-    /** Frame-rate independent easing toward a target. */
+    /** Frame-rate independent easing toward a target. Max Performance snaps straight to the
+     *  target instead — no button/tab/scroll animation, see Config#ultra(). */
     private static float approach(float cur, float target, float rate, float dt) {
+        if (com.lume.client.Config.ultra()) return target;
         return cur + (target - cur) * Math.min(1f, rate * dt);
     }
 
@@ -230,6 +229,31 @@ public class ClickGuiScreen extends Screen {
         RenderUtil.textBold(ctx, this.textRenderer, s, x, y, color, vis * scale);
     }
     private int width(String s, float vis) { return RenderUtil.width(this.textRenderer, s, vis * scale); }
+
+    // ---- Real per-glyph SDF text (com.lume.client.nanovg.SdfTextRenderer) — see LumeSubScreen's
+    // twin helpers for the full explanation. Needs the caller's own cx/cy/total (the window
+    // pan/zoom transform state), passed explicitly since this class doesn't share LumeSubScreen's
+    // `total` field.
+
+    private float sdfWidth(String s, float vis, boolean bold) {
+        return SdfTextRenderer.advance(s, bold) * (vis * scale) * (18f / SdfTextRenderer.FONT_PX);
+    }
+
+    private void sdfText(String s, double x, double y, float vis, int color, boolean bold, double cx, double cy, float total) {
+        float drawScale = (vis * scale) * (18f / SdfTextRenderer.FONT_PX);
+        SdfTextRenderer.drawWindowLocal(winOffX * this.scale, winOffY * this.scale, cx, cy, total, x, y, drawScale, s, color, bold);
+    }
+
+    private void sdfTextVCentered(String s, double x, double boxY, double boxH, float vis, int color, boolean bold, double cx, double cy, float total) {
+        float drawScale = (vis * scale) * (18f / SdfTextRenderer.FONT_PX);
+        double y = boxY + boxH / 2.0 - SdfTextRenderer.opticalCenterPx(bold) * drawScale;
+        sdfText(s, x, y, vis, color, bold, cx, cy, total);
+    }
+
+    private void sdfTextCentered(String s, double boxX, double boxY, double boxW, double boxH, float vis, int color, boolean bold, double cx, double cy, float total) {
+        float w = sdfWidth(s, vis, bold);
+        sdfTextVCentered(s, boxX + (boxW - w) / 2.0, boxY, boxH, vis, color, bold, cx, cy, total);
+    }
 
     private void glass(DrawContext ctx, int x, int y, int w, int h, int r, int fill, int rimW) {
         RenderUtil.roundedRect(ctx, x, y, w, h, r, Theme.rim());
@@ -358,13 +382,10 @@ public class ClickGuiScreen extends Screen {
         // size/position argument in this whole render() tree, needs *S to match the 1/S the
         // outer mtx.scale(1f/S,...) divides everything back down by at the very end.
         RenderUtil.drawLogo(ctx, x + 16 * S, y + 12 * S, 22 * S);
-        // Baked wordmark (see gen_menu.py's wordmark.png) instead of live vanilla-font text —
-        // matches the reference's exact Montserrat styling, same asset LumeTitleMenu's main-menu
-        // logo lockup uses, just the text-only half (this header keeps its own separate corner
-        // star mark above, unlike the main menu's combined star+text lockup).
-        int wmW = 130, wmH = wmW * 30 / 220;
-        com.lume.client.menu.MenuAssets.blit(ctx, com.lume.client.menu.MenuAssets.WORDMARK,
-                x + (W - wmW * S) / 2, y + 12 * S + (22 * S - wmH * S) / 2, wmW * S, wmH * S);
+        // Live wordmark (bold + accent shimmer, same call LumeSubScreen's own header uses) —
+        // was a baked PNG blit with fixed baked-in colours, which is why it didn't follow
+        // Customize Colors and looked visibly different from every other window's wordmark.
+        Wordmark.drawLegacyCentered(ctx, this.textRenderer, x, W, y + 14 * S, 0.83f * S);
 
         // Theme + Colors icon buttons (top-right) — same icon glyphs as the NanoVG header
         // (ThemeIcons.drawThemeLegacy/drawColorsLegacy, already built for this), same layout
@@ -396,7 +417,7 @@ public class ClickGuiScreen extends Screen {
         RenderUtil.vanillaText(ctx, this.textRenderer, shown, sx + 12 * S, sy + (shei - 8 * S) / 2.0, empty ? Theme.txtDim() : Theme.txt(), S);
 
         // Category segmented pill (categories + Binds + Server)
-        int tabs = CATS.length + 2;
+        int tabs = CATS.length + 1;
         segX = new int[tabs];
         segW = new int[tabs];
         segH = 26 * S;
@@ -418,8 +439,7 @@ public class ClickGuiScreen extends Screen {
                 SdfRenderer.boxWindowLocal(winOffX * S, winOffY * S, cx, cy, total, cx2, segY, ww[i], segH, 12 * S,
                         Theme.winBg(), Theme.accent(), 1.5f * S, Theme.accent(), 6f * S);
             }
-            int tw = width(tabTitle(i), 0.5f);
-            textBold(ctx, tabTitle(i), cx2 + (ww[i] - tw) / 2, segY + 8 * S, sel ? Theme.activeText() : Theme.txtDim(), 0.5f);
+            sdfTextCentered(tabTitle(i), cx2, segY, ww[i], segH, 0.5f, sel ? Theme.activeText() : Theme.txtDim(), true, cx, cy, total);
             cx2 += ww[i];
         }
 
@@ -436,19 +456,6 @@ public class ClickGuiScreen extends Screen {
             renderBindPopupIfPending(ctx, cx, cy, total, S, mouseX, mouseY, dt);
             return;
         }
-        if (isServerTab()) {
-            renderServer(ctx, x, y, W, H, S, mx, my, dt);
-            int gripX2 = x + W - 14 * S, gripY2 = y + H - 14 * S;
-            boolean gripHov2 = inside(mx, my, gripX2, gripY2, 14 * S, 14 * S);
-            for (int i = 0; i < 3; i++) {
-                int o = (3 - i) * 3 * S;
-                RenderUtil.roundedRect(ctx, x + W - o - 2 * S, y + H - 5 * S, o, 2 * S, S, gripHov2 ? Theme.accent() : Theme.txtDim());
-            }
-            mtx.pop();
-            renderBindPopupIfPending(ctx, cx, cy, total, S, mouseX, mouseY, dt);
-            return;
-        }
-
         // Module cards grid (2 columns, scrollable, cards expand to show settings)
         List<Module> mods = modules();
         int margin = 20 * S, gap = CARD_GAP * S;
@@ -471,16 +478,18 @@ public class ClickGuiScreen extends Screen {
             int panelH = mm.hasSettings() ? panelHeight(mm, S) : 0;
             cardH[i] = headerH + Math.round(an[3] * panelH);
         }
-        int rowsN = (n + 1) / 2;
-        int[] rowTop = new int[rowsN];
-        int contentH = 0;
-        for (int rr = 0, cum = 0; rr < rowsN; rr++) {
-            int hgt = cardH[rr * 2];
-            if (rr * 2 + 1 < n) hgt = Math.max(hgt, cardH[rr * 2 + 1]);
-            rowTop[rr] = cum;
-            cum += hgt + CARD_GAP * S;
-            contentH = cum - CARD_GAP * S;
+        // Independent per-column masonry (matches renderNvgMain's own masonry, ClickGuiScreen.java
+        // ~line 649) — each card's expand animation only pushes cards further down in its OWN
+        // column; the "row partner" in the other column never moves ("открытия кнопок сдвигают
+        // только свой ряд" — the old shared-row-height version pushed both columns together for
+        // every row below the expanded card). Two independent running cursors instead.
+        int[] cardTop = new int[n];
+        int colA = 0, colB = 0;
+        for (int i = 0; i < n; i++) {
+            if (i % 2 == 0) { cardTop[i] = colA; colA += cardH[i] + CARD_GAP * S; }
+            else { cardTop[i] = colB; colB += cardH[i] + CARD_GAP * S; }
         }
+        int contentH = Math.max(0, Math.max(colA, colB) - CARD_GAP * S);
 
         int maxScroll = Math.max(0, contentH - visH);
         scrollTarget = Math.max(0f, Math.min(scrollTarget, maxScroll));
@@ -495,9 +504,9 @@ public class ClickGuiScreen extends Screen {
         winScissor(ctx, x, clipTop, x + W, clipBot);
         for (int i = 0; i < n; i++) {
             Module m = mods.get(i);
-            int col = i % 2, row = i / 2;
+            int col = i % 2;
             int rx = col == 0 ? gx0 : gx1;
-            int cy0 = gy + rowTop[row] - scrollI;   // card top
+            int cy0 = gy + cardTop[i] - scrollI;   // card top
             int ch = cardH[i];
 
             float[] ca = animFor(m.getName());
@@ -522,11 +531,14 @@ public class ClickGuiScreen extends Screen {
             // растягиваний" ask) + an SDF background whose contour-hugging glow grows with
             // hover — same lift/glow curve RenderUtil.premiumBg uses, inlined here since this
             // file's coordinates are native px, not DrawContext-logical (calling premiumBg
-            // directly would double-apply the S factor).
-            int liftS = Math.round(ha * 2f) * S;
+            // directly would double-apply the S factor). Lift specifically eases IN (slow start,
+            // accelerating) via ha*ha on top of ha's own exponential rise — glow/fill still use
+            // plain `ha` so only the lift's motion feel changed, not the highlight timing. 0.8x
+            // the previous lift distance (1.6 vs 2 px).
+            int liftS = Math.round(ha * ha * 1.6f) * S;
             int dx = rx, dy = cy0 - liftS, dw = cardW, dh = ch;
 
-            RenderUtil.roundedRect(ctx, dx + 1 * S, dy + 2 * S, dw, dh, 11 * S, Theme.shadow());
+            if (!com.lume.client.Config.ultra()) RenderUtil.roundedRect(ctx, dx + 1 * S, dy + 2 * S, dw, dh, 11 * S, Theme.shadow());
 
             int base = Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), ha);
             int onFill = withAlpha(Theme.accentRgb(), Theme.isDark() ? 0x4D : 0x40);
@@ -540,11 +552,12 @@ public class ClickGuiScreen extends Screen {
 
             if (pa > 0.01f) RenderUtil.roundedRect(ctx, dx, dy, dw, headerH, 11 * S, withAlpha(0xFFFFFF, Math.round(pa * 55)));
 
-            // centred name (leave room on the right for the settings arrow) — bold, per the
-            // "шрифт потолще" ask (also thickens the Cyrillic vanilla-font fallback).
+            // centred name (leave room on the right for the settings arrow) — bold, real SDF
+            // glyphs (crisp at any GUI scale, and Cyrillic no longer needs a separate fallback
+            // path since the SDF atlas rasterises it directly).
             int col2 = Theme.colorLerp(Theme.txt(), Theme.activeText(), ea);
             int nameRightPad = m.hasSettings() ? 20 * S : 0;
-            RenderUtil.textBoldCentered(ctx, this.textRenderer, m.getName(), dx, dy, dw - nameRightPad, headerH, col2, 0.52f * scale);
+            sdfTextCentered(m.getName(), dx, dy, dw - nameRightPad, headerH, 0.52f, col2, true, cx, cy, total);
 
             // on-indicator dot (top-right)
             if (ea > 0.02f) {
@@ -622,7 +635,7 @@ public class ClickGuiScreen extends Screen {
         final int mxF = mx, myF = my;
 
         // layout/anim that needs to persist to hit-testing is computed here (outside the lambda)
-        final boolean fCards = !isBindsTab() && !isServerTab();
+        final boolean fCards = !isBindsTab();
         List<Module> mods = fCards ? modules() : new ArrayList<>();
         int margin = 20 * S, gap = CARD_GAP * S;
         int cardW = (W - margin * 2 - gap) / 2;
@@ -672,11 +685,12 @@ public class ClickGuiScreen extends Screen {
         // panel, sampled BEFORE the panel exists (raw GL, must happen outside any NanoVG
         // frame). The translucent gradient fill drawn just below then tints it, same as
         // it always tinted whatever was there before.
-        if (Theme.getGlassStyle() == 1) {
+        if (Theme.getGlassStyle() == 1 && !com.lume.client.Config.ultra()) {
             GlassRenderer.panel(panelSx, panelSy, panelSw, panelSh, panelSr, Theme.getGlassBlur(), Theme.getGlassDistort());
         }
 
         ctx.draw();   // flush DrawContext's own queued geometry (HudRenderer.render() etc.) before raw-GL NanoVG draws
+        NvgTextQueue.begin(winOffX * S, winOffY * S, cx, cy, total);
         NanoVgRenderer.frame(vg -> {
             NanoVgRenderer.translate(vg, winOffX * S, winOffY * S);
             NanoVgRenderer.translate(vg, (float) cx, (float) cy);
@@ -729,10 +743,10 @@ public class ClickGuiScreen extends Screen {
             if (searchFocused) NanoVgRenderer.roundedRect(vg, sx + 4 * S, sy + shei - 2 * S, swid - 8 * S, Math.max(1, S), S, Theme.accent());
             boolean empty = search.isEmpty() && !searchFocused;
             String shown = empty ? "Поиск модулей…" : search + (searchFocused ? "|" : "");
-            NanoVgRenderer.text(vg, sx + 12 * S, sy + shei / 2f, 11 * S, empty ? Theme.txtDim() : Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, shown);
+            NvgTextQueue.text(sx + 12 * S, sy + shei / 2f, 11 * S, empty ? Theme.txtDim() : Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, shown);
 
             // category tabs (auto-shrink to always fit the window width)
-            int tabs = CATS.length + 2;
+            int tabs = CATS.length + 1;
             segX = new int[tabs]; segW = new int[tabs];
             segH = 26 * S; segY = y + 82 * S;
             float tFont = 10 * S; int padSeg = 10 * S;
@@ -760,7 +774,7 @@ public class ClickGuiScreen extends Screen {
             }
             for (int i = 0; i < tabs; i++) {
                 boolean sel = i == selectedCat && search.isEmpty();
-                NanoVgRenderer.text(vg, segX[i] + segW[i] / 2f, segY + segH / 2f, tFont, sel ? Theme.activeText() : Theme.txtDim(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, tabTitle(i));
+                NvgTextQueue.text(segX[i] + segW[i] / 2f, segY + segH / 2f, tFont, sel ? Theme.activeText() : Theme.txtDim(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, tabTitle(i));
             }
 
             if (fCards) {
@@ -790,21 +804,42 @@ public class ClickGuiScreen extends Screen {
                 float ha = ca[0], ea = ca[1], ex = ca[3];
                 boolean isExp = ex > 0.01f && m.hasSettings();
 
-                int e = isExp ? 0 : Math.round(ha * 2 * S);     // no hover lift while expanded
-                int dx = rx - e, dy = cy0 - e, dw = cardW + 2 * e, dh = ch + 2 * e;
+                // Real lift (Y-offset), not the old symmetric grow — eases in via ha*ha
+                // (accelerating throughout, no deceleration bump at the end), same curve the
+                // dead DrawContext-fallback path already proved out.
+                int lift = isExp ? 0 : Math.round(ha * ha * 1.6f * S);
+                int dx = rx, dy = cy0 - lift, dw = cardW, dh = ch;
                 if (m.getName().equals("HUD")) hudCardRect = new int[]{ dx, dy, dw, dh };
 
                 NanoVgRenderer.shadow(vg, dx, dy + S, dw, dh, 11 * S, 8 * S, 0x55000000);
-                if (ea > 0.01f) NanoVgRenderer.bloom(vg, dx, dy, dw, dh, 11 * S, (13 + 8 * ea) * S, Theme.accentRgb(), Math.round(0x88 * ea));
                 int base = Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), ha);
-                int onFill = withAlpha(Theme.accentRgb(), Theme.isDark() ? 0x4D : 0x40);
+                // Stronger on/off contrast (was 0x4D/0x40 — easy to miss): on-state fill alpha
+                // bumped, off-state stays the plain neutral base.
+                int onFill = withAlpha(Theme.accentRgb(), Theme.isDark() ? 0x73 : 0x66);
                 int fill = Theme.colorLerp(base, onFill, ea);
                 NanoVgRenderer.roundedRect(vg, dx, dy, dw, dh, 11 * S, fill);
-                NanoVgRenderer.strokeRoundedRect(vg, dx + 0.5f * S, dy + 0.5f * S, dw - S, dh - S, 11 * S, S, withAlpha(0xFFFFFF, Math.round(0x30 + 0x40 * ha)));
+                // Outline is now the ONLY highlight (no bloom/glow anywhere on the card): it
+                // brightens on hover and tints toward the accent colour when the module is on,
+                // so contour alone carries both signals.
+                int rimRgb = Theme.colorLerp(0xFFFFFFFF, Theme.accentRgb() | 0xFF000000, ea) & 0xFFFFFF;
+                int rimA = Math.min(255, Math.round(0x30 + 0x40 * ha + 0x50 * ea));
+                NanoVgRenderer.strokeRoundedRect(vg, dx + 0.5f * S, dy + 0.5f * S, dw - S, dh - S, 11 * S, S, withAlpha(rimRgb, rimA));
 
                 int nameCol = Theme.colorLerp(Theme.txt(), Theme.activeText(), ea);
                 int namePad = m.hasSettings() ? 20 * S : 0;
-                NanoVgRenderer.text(vg, dx + (dw - namePad) / 2f, dy + headerH / 2f, 12 * S, nameCol, NanoVgRenderer.ALIGN_CENTER_MIDDLE, m.getName());
+                float nameY = dy + headerH * 0.36f, descY = dy + headerH * 0.74f;
+                NvgTextQueue.text(dx + (dw - namePad) / 2f, nameY, 10.5f * S, nameCol, NanoVgRenderer.ALIGN_CENTER_MIDDLE, m.getName());
+                String desc = m.getDescription();
+                if (desc != null && !desc.isEmpty()) {
+                    float descSize = 8f * S;
+                    float maxDescW = dw - namePad - 16 * S;
+                    String descShown = desc;
+                    if (NanoVgRenderer.textWidth(vg, descSize, descShown) > maxDescW) {
+                        while (descShown.length() > 1 && NanoVgRenderer.textWidth(vg, descSize, descShown + "…") > maxDescW) descShown = descShown.substring(0, descShown.length() - 1);
+                        descShown = descShown + "…";
+                    }
+                    NvgTextQueue.text(dx + (dw - namePad) / 2f, descY, descSize, Theme.txtDim(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, descShown);
+                }
                 if (ea > 0.02f) NanoVgRenderer.circle(vg, dx + dw - 11 * S, dy + 9 * S, Math.max(1.5f, 2.5f * S * ea), withAlpha(Theme.accentRgb(), Math.round(255 * ea)));
 
                 CHit chit = new CHit();
@@ -838,7 +873,7 @@ public class ClickGuiScreen extends Screen {
                 int red = 0xFFE05656;
                 NanoVgRenderer.roundedRect(vg, wx, wy, wpw, wph, 8 * S, withAlpha(0xFF1A1010, Math.round(alpha * 0.9f)));
                 NanoVgRenderer.strokeRoundedRect(vg, wx + 0.5f * S, wy + 0.5f * S, wpw - S, wph - S, 8 * S, S, withAlpha(red, alpha));
-                NanoVgRenderer.text(vg, wx + wpw / 2f, wy + wph / 2f, 9.5f * S, withAlpha(red, alpha), NanoVgRenderer.ALIGN_CENTER_MIDDLE, warnText);
+                NvgTextQueue.text(wx + wpw / 2f, wy + wph / 2f, 9.5f * S, withAlpha(red, alpha), NanoVgRenderer.ALIGN_CENTER_MIDDLE, warnText);
             }
 
             // scrollbar
@@ -852,8 +887,6 @@ public class ClickGuiScreen extends Screen {
             }
             } else if (isBindsTab()) {
                 drawBindsNvg(vg, x, y, W, H, S, mxF, myF, dt, gy, clipTop, clipBot, fVisH, margin);
-            } else if (isServerTab()) {
-                drawServerNvg(vg, x, y, W, H, S, mxF, myF, dt, gy, clipTop, clipBot, fVisH, margin);
             }
 
             // resize grip
@@ -863,6 +896,7 @@ public class ClickGuiScreen extends Screen {
                 NanoVgRenderer.roundedRect(vg, x + W - o - 2 * S, y + H - 5 * S, o, 2 * S, S, gripHov ? Theme.accent() : Theme.txtDim());
             }
         });
+        NvgTextQueue.flush(ctx);   // real GL state is restored once frame()'s lambda returns — safe to draw DrawContext text now
 
         // Blur-dissolve open transition — replaces the old scale-up-from-96% pop (which
         // visibly changed the window's size). Blur strength ramps 1→0 as p goes 0→1 over
@@ -1561,134 +1595,6 @@ public class ClickGuiScreen extends Screen {
         }
     }
 
-    // ---- NanoVG Server tab (FT/HW helper) ---------------------------------
-    private void nvgPill(long vg, boolean on, int px, int py, int pw, int ph, int S) {
-        NanoVgRenderer.roundedRect(vg, px, py, pw, ph, ph / 2f, on ? Theme.accent() : Theme.pillOff());
-        int kd = ph - 4 * S, kx = on ? px + pw - kd - 2 * S : px + 2 * S;
-        NanoVgRenderer.roundedRect(vg, kx, py + 2 * S, kd, kd, kd / 2f, 0xFFFFFFFF);
-    }
-
-    private void drawServerNvg(long vg, int x, int y, int W, int H, int S, int mx, int my, float dt,
-                               int gy, int clipTop, int clipBot, int visH, int margin) {
-        int sx = x + margin, w = W - margin * 2;
-        com.lume.client.fthw.ServerType st = com.lume.client.fthw.ServerType.current();
-        boolean supported = st != com.lume.client.fthw.ServerType.UNKNOWN;
-        ServerHelper sh = (ServerHelper) LumeClient.MODULES.getByName("Server Helper");
-        boolean on = sh != null && sh.isEnabled();
-
-        if (!supported) {
-            // fast-connect button (you're not on FunTime)
-            NanoVgRenderer.text(vg, sx + 2 * S, gy + 6 * S, 11 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, "Не на сервере. Быстрый вход:");
-            int bh = 32 * S, by = gy + 20 * S;
-            NanoVgRenderer.shadow(vg, sx, by, w, bh, 11 * S, 12 * S, withAlpha(Theme.accentRgb(), 0x55));
-            NanoVgRenderer.gradientRoundedRect(vg, sx, by, w, bh, 11 * S, Theme.accent(), Theme.accent2());
-            NanoVgRenderer.text(vg, sx + w / 2f, by + bh / 2f, 13 * S, Theme.activeText(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, "▶  FunTime");
-            serverHits.add(new Object[]{ "connect:funtime", sx, by, w, bh, null });
-            return;
-        }
-
-        int maxScroll = Math.max(0, serverContentH - visH);
-        scrollTarget = Math.max(0f, Math.min(scrollTarget, maxScroll));
-        scroll = approach(scroll, scrollTarget, 16f, dt);
-        if (Math.abs(scroll - scrollTarget) < 0.5f) scroll = scrollTarget;
-        int scrollI = Math.round(scroll);
-
-        NanoVgRenderer.save(vg);
-        NanoVgRenderer.scissor(vg, x, clipTop, W, visH);
-        int cur = 0;
-
-        { // master enable toggle
-            int ry = gy + cur - scrollI;
-            NanoVgRenderer.text(vg, sx + 2 * S, ry + 11 * S, 11 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, "Включить хелпер");
-            int pw = 40 * S, ph = 18 * S, px = sx + w - pw, py = ry;
-            nvgPill(vg, on, px, py, pw, ph, S);
-            serverHits.add(new Object[]{ "master", px, py, pw, ph, null });
-            cur += 26 * S;
-        }
-
-        if (on) {
-            NanoVgRenderer.text(vg, sx + 2 * S, gy + cur - scrollI + 7 * S, 11 * S, 0xFF6FCF7F, NanoVgRenderer.ALIGN_MIDDLE, "Сервер: " + st.display() + "  ·  Активно");
-            cur += 16 * S;
-            NanoVgRenderer.text(vg, sx + 2 * S, gy + cur - scrollI + 6 * S, 10 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, "Функции (клик по чипу = бинд клавиши):");
-            cur += 14 * S;
-            BoolSetting[] subs = { sh.itemHelper, sh.effects, sh.eventsHud, sh.showServer };
-            for (BoolSetting bs : subs) {
-                int ry = gy + cur - scrollI, rh = 17 * S;
-                if (ry + rh >= clipTop && ry <= clipBot) {
-                    NanoVgRenderer.text(vg, sx + 6 * S, ry + rh / 2f, 10 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, bs.name);
-                    int pw = 30 * S, ph = 14 * S, px = sx + w - pw, py = ry + S;
-                    nvgPill(vg, bs.value, px, py, pw, ph, S);
-                    serverHits.add(new Object[]{ "subToggle", px, py, pw, ph, bs });
-                    if (com.lume.client.fthw.HelperBinds.bound.contains(bs)) {
-                        boolean cap = bs == bindingSetting;
-                        String kd = cap ? "клавиша…" : keyDisplay(bs.key);
-                        int chipW = (int) NanoVgRenderer.textWidth(vg, 9 * S, kd) + 12 * S, chipX = px - chipW - 8 * S;
-                        NanoVgRenderer.roundedRect(vg, chipX, py, chipW, ph, ph / 2f, cap ? withAlpha(Theme.accentRgb(), 0x66) : Theme.pillOff());
-                        NanoVgRenderer.text(vg, chipX + chipW / 2f, py + ph / 2f, 9 * S, cap ? Theme.activeText() : Theme.accent(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, kd);
-                        serverHits.add(new Object[]{ "subBind", chipX, py, chipW, ph, bs });
-                    }
-                }
-                cur += rh;
-            }
-            cur += 8 * S;
-            int rye = gy + cur - scrollI;
-            if (rye + 12 * S >= clipTop && rye <= clipBot)
-                NanoVgRenderer.text(vg, sx + 2 * S, rye + 6 * S, 10 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, "Расписание ивентов (учится по чату):");
-            cur += 14 * S;
-            for (com.lume.client.fthw.EventRule r : EventManager.rules) {
-                int ry = gy + cur - scrollI;
-                if (ry + 12 * S >= clipTop && ry <= clipBot) {
-                    int left = -1;
-                    for (EventManager.Active a : EventManager.active) if (a.rule == r) { left = a.secondsLeft(); break; }
-                    int col; String line;
-                    if (left >= 0) { col = 0xFF6FCF7F; line = left > 0 ? "● " + r.name + " — идёт, " + left + "с" : "● " + r.name + " — идёт"; }
-                    else {
-                        long eta = r.etaSec(), ago = r.agoSec();
-                        if (eta > 0) { col = 0xFFE8C15A; line = "◷ " + r.name + " — ≈ через " + fmtDur(eta); }
-                        else if (ago >= 0) { col = Theme.txtDim(); line = "○ " + r.name + " — был " + fmtDur(ago) + " назад"; }
-                        else { col = Theme.txtDim(); line = "○ " + r.name + " — ещё не видел"; }
-                    }
-                    NanoVgRenderer.text(vg, sx + 6 * S, ry + 6 * S, 10 * S, col, NanoVgRenderer.ALIGN_MIDDLE, line);
-                }
-                cur += 13 * S;
-            }
-
-            // quick commands — bind a key + ▶ send
-            cur += 6 * S;
-            int ryq = gy + cur - scrollI;
-            if (ryq + 12 * S >= clipTop && ryq <= clipBot)
-                NanoVgRenderer.text(vg, sx + 2 * S, ryq + 6 * S, 10 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, "Быстрые команды (бинд клавиши · ▶ отправить):");
-            cur += 14 * S;
-            for (com.lume.client.fthw.QuickCommands.Cmd c : com.lume.client.fthw.QuickCommands.list) {
-                int ry = gy + cur - scrollI, rh = 16 * S;
-                if (ry + rh >= clipTop && ry <= clipBot) {
-                    NanoVgRenderer.text(vg, sx + 6 * S, ry + rh / 2f, 10 * S, Theme.txt(), NanoVgRenderer.ALIGN_MIDDLE, c.label + "  " + c.command);
-                    int sbw = 22 * S, sbx = sx + w - sbw, sby = ry + S, sbh = 14 * S;
-                    NanoVgRenderer.roundedRect(vg, sbx, sby, sbw, sbh, sbh / 2f, Theme.accent());
-                    NanoVgRenderer.triangle(vg, sbx + sbw / 2f - 2 * S, sby + sbh / 2f - 3 * S, sbx + sbw / 2f - 2 * S, sby + sbh / 2f + 3 * S, sbx + sbw / 2f + 4 * S, sby + sbh / 2f, 0xFFFFFFFF);
-                    serverHits.add(new Object[]{ "qcmdSend", sbx, sby, sbw, sbh, c });
-                    boolean cap = c == bindingQuickCmd;
-                    String kd = cap ? "клавиша…" : keyDisplay(c.key);
-                    int chipW = (int) NanoVgRenderer.textWidth(vg, 9 * S, kd) + 12 * S, chipX = sbx - chipW - 6 * S, chipY = ry + S;
-                    NanoVgRenderer.roundedRect(vg, chipX, chipY, chipW, 14 * S, 7 * S, cap ? withAlpha(Theme.accentRgb(), 0x66) : Theme.pillOff());
-                    NanoVgRenderer.text(vg, chipX + chipW / 2f, chipY + 7 * S, 9 * S, cap ? Theme.activeText() : Theme.accent(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, kd);
-                    serverHits.add(new Object[]{ "qcmdBind", chipX, chipY, chipW, 14 * S, c });
-                }
-                cur += 16 * S;
-            }
-        }
-
-        NanoVgRenderer.restore(vg);
-        serverContentH = cur;
-        if (maxScroll > 0) {
-            int sbW = 3 * S, sbX = x + W - margin / 2 - sbW;
-            NanoVgRenderer.roundedRect(vg, sbX, gy, sbW, visH, sbW / 2f, Theme.glassRow());
-            int thumbH = Math.max(14 * S, Math.round(visH * (visH / (float) serverContentH)));
-            int thumbY = gy + Math.round((visH - thumbH) * (scroll / maxScroll));
-            NanoVgRenderer.roundedRect(vg, sbX, thumbY, sbW, thumbH, sbW / 2f, Theme.accent());
-        }
-    }
-
     // ---- NanoVG Events tab ------------------------------------------------
     private void drawEventsNvg(long vg, int x, int y, int W, int H, int S, int gy, int clipTop, int clipBot, int visH, int margin, float dt) {
         int sx = x + margin, w = W - margin * 2, rowH = 30 * S, gapr = 6 * S;
@@ -1888,151 +1794,6 @@ public class ClickGuiScreen extends Screen {
         }
     }
 
-    // ---- Server tab (FT/HW helper) ----------------------------------------
-
-    /** Small toggle pill used across the Server tab. */
-    private void serverPill(DrawContext ctx, boolean on, int px, int py, int pw, int ph, int S) {
-        RenderUtil.roundedRect(ctx, px, py, pw, ph, ph / 2, on ? Theme.accent() : Theme.pillOff());
-        int kd = ph - 4 * S, kx = on ? px + pw - kd - 2 * S : px + 2 * S;
-        RenderUtil.roundedRect(ctx, kx, py + 2 * S, kd, kd, kd / 2, 0xFFFFFFFF);
-    }
-
-    private void renderServer(DrawContext ctx, int x, int y, int W, int H, int S, int mx, int my, float dt) {
-        int margin = 20 * S, gy = y + GRID_TOP * S;
-        int clipTop = gy - 2 * S, clipBot = y + H - 12 * S, visH = clipBot - gy;
-        lastClipTop = clipTop; lastClipBot = clipBot;
-        int sx = x + margin, w = W - margin * 2;
-        serverHits.clear();
-
-        com.lume.client.fthw.ServerType st = com.lume.client.fthw.ServerType.current();
-        boolean supported = st != com.lume.client.fthw.ServerType.UNKNOWN;
-        ServerHelper sh = (ServerHelper) LumeClient.MODULES.getByName("Server Helper");
-        boolean on = sh != null && sh.isEnabled();
-
-        if (!supported) {
-            serverToggle = new int[]{0, 0, 0, 0};
-            RenderUtil.vanillaText(ctx, this.textRenderer, "Клиент поддерживает только FunTime.", sx + 2 * S, gy, Theme.txtDim(), S);
-            return;
-        }
-
-        // scroll bookkeeping (content height measured last frame)
-        int maxScroll = Math.max(0, serverContentH - visH);
-        scrollTarget = Math.max(0f, Math.min(scrollTarget, maxScroll));
-        scroll = approach(scroll, scrollTarget, 16f, dt);
-        if (Math.abs(scroll - scrollTarget) < 0.5f) scroll = scrollTarget;
-        int scrollI = Math.round(scroll);
-
-        winScissor(ctx, x, clipTop, x + W, clipBot);
-        int cur = 0;
-
-        // master enable toggle
-        {
-            int ry = gy + cur - scrollI;
-            RenderUtil.vanillaText(ctx, this.textRenderer, "Включить хелпер", sx + 2 * S, ry + 6 * S, Theme.txt(), S);
-            int pw = 40 * S, ph = 18 * S, px = sx + w - pw, py = ry;
-            serverPill(ctx, on, px, py, pw, ph, S);
-            serverToggle = new int[]{ px, py, pw, ph };
-            serverHits.add(new Object[]{ "master", px, py, pw, ph, null });
-            cur += 26 * S;
-        }
-
-        if (on) {
-            RenderUtil.vanillaText(ctx, this.textRenderer, "Сервер: " + st.display() + "  ·  Активно", sx + 2 * S, gy + cur - scrollI, 0xFF6FCF7F, S);
-            cur += 16 * S;
-
-            // sub-functions (toggle + optional keybind chip)
-            RenderUtil.vanillaText(ctx, this.textRenderer, "Функции (клик по чипу = бинд клавиши):", sx + 2 * S, gy + cur - scrollI, Theme.txtDim(), S);
-            cur += 14 * S;
-            BoolSetting[] subs = { sh.itemHelper, sh.effects, sh.eventsHud, sh.showServer };
-            for (BoolSetting bs : subs) {
-                int ry = gy + cur - scrollI, rh = 17 * S;
-                if (ry + rh >= clipTop && ry <= clipBot) {
-                    RenderUtil.vanillaText(ctx, this.textRenderer, bs.name, sx + 6 * S, ry + 4 * S, Theme.txt(), S);
-                    int pw = 30 * S, ph = 14 * S, px = sx + w - pw, py = ry + S;
-                    serverPill(ctx, bs.value, px, py, pw, ph, S);
-                    serverHits.add(new Object[]{ "subToggle", px, py, pw, ph, bs });
-                    if (com.lume.client.fthw.HelperBinds.bound.contains(bs)) {
-                        boolean cap = bs == bindingSetting;
-                        String kd = cap ? "клавиша…" : keyDisplay(bs.key);
-                        int kw = RenderUtil.vanillaWidth(this.textRenderer, kd, S);
-                        int chipW = kw + 12 * S, chipX = px - chipW - 8 * S;
-                        RenderUtil.roundedRect(ctx, chipX, py, chipW, ph, ph / 2, cap ? withAlpha(Theme.accentRgb(), 0x66) : Theme.pillOff());
-                        RenderUtil.vanillaText(ctx, this.textRenderer, kd, chipX + 6 * S, py + 3 * S, cap ? Theme.activeText() : Theme.accent(), S);
-                        serverHits.add(new Object[]{ "subBind", chipX, py, chipW, ph, bs });
-                    }
-                }
-                cur += rh;
-            }
-            cur += 6 * S;
-
-            // item encyclopedia — per-item "present" verify
-            RenderUtil.vanillaText(ctx, this.textRenderer, "Предметы — отметь что есть на сервере:", sx + 2 * S, gy + cur - scrollI, Theme.txtDim(), S);
-            cur += 14 * S;
-            String[] catNames = { "Активные", "Сферы", "Талисманы" };
-            ItemRule.Cat[] cats = { ItemRule.Cat.ACTIVE, ItemRule.Cat.SPHERE, ItemRule.Cat.TALISMAN };
-            for (int ci = 0; ci < cats.length; ci++) {
-                int ryh = gy + cur - scrollI;
-                if (ryh + 12 * S >= clipTop && ryh <= clipBot)
-                    RenderUtil.vanillaText(ctx, this.textRenderer, catNames[ci], sx + 4 * S, ryh, Theme.accent(), S);
-                cur += 13 * S;
-                for (ItemRule it : ItemRules.byCat(cats[ci])) {
-                    int ry = gy + cur - scrollI, rh = 16 * S;
-                    if (ry + rh >= clipTop && ry <= clipBot) {
-                        int cb = 11 * S, cbx = sx + 4 * S, cby = ry + (rh - cb) / 2;
-                        RenderUtil.roundedRect(ctx, cbx, cby, cb, cb, 3 * S, it.present ? it.color : Theme.pillOff());
-                        if (it.present) RenderUtil.roundedRect(ctx, cbx + (cb - 4 * S) / 2, cby + (cb - 4 * S) / 2, 4 * S, 4 * S, S, 0xFFFFFFFF);
-                        serverHits.add(new Object[]{ "present", cbx, ry, w, rh, it });
-                        RenderUtil.vanillaText(ctx, this.textRenderer, it.name, cbx + cb + 6 * S, ry + 4 * S, it.present ? Theme.txt() : Theme.txtDim(), S);
-                        StringBuilder rb = new StringBuilder();
-                        if (it.radius > 0) rb.append("R").append((int) it.radius).append(" ");
-                        if (it.cooldownSec > 0) rb.append(it.cooldownSec).append("с");
-                        if (rb.length() > 0) {
-                            int rw = RenderUtil.vanillaWidth(this.textRenderer, rb.toString(), S);
-                            RenderUtil.vanillaText(ctx, this.textRenderer, rb.toString(), sx + w - rw, ry + 4 * S, Theme.txtDim(), S);
-                        }
-                    }
-                    cur += 16 * S;
-                }
-                cur += 2 * S;
-            }
-
-            // events — learned schedule
-            cur += 4 * S;
-            int rye = gy + cur - scrollI;
-            if (rye + 12 * S >= clipTop && rye <= clipBot)
-                RenderUtil.vanillaText(ctx, this.textRenderer, "Расписание ивентов (учится по чату):", sx + 2 * S, rye, Theme.txtDim(), S);
-            cur += 14 * S;
-            for (com.lume.client.fthw.EventRule r : EventManager.rules) {
-                int ry = gy + cur - scrollI;
-                if (ry + 12 * S >= clipTop && ry <= clipBot) {
-                    int left = -1;
-                    for (EventManager.Active a : EventManager.active) if (a.rule == r) { left = a.secondsLeft(); break; }
-                    int col; String line;
-                    if (left >= 0) { col = 0xFF6FCF7F; line = left > 0 ? "● " + r.name + " — идёт, " + left + "с" : "● " + r.name + " — идёт"; }
-                    else {
-                        long eta = r.etaSec(), ago = r.agoSec();
-                        if (eta > 0) { col = 0xFFE8C15A; line = "◷ " + r.name + " — ≈ через " + fmtDur(eta); }
-                        else if (ago >= 0) { col = Theme.txtDim(); line = "○ " + r.name + " — был " + fmtDur(ago) + " назад"; }
-                        else { col = Theme.txtDim(); line = "○ " + r.name + " — ещё не видел"; }
-                    }
-                    RenderUtil.vanillaText(ctx, this.textRenderer, line, sx + 6 * S, ry, col, S);
-                }
-                cur += 13 * S;
-            }
-        }
-
-        ctx.disableScissor();
-        serverContentH = cur;
-
-        if (maxScroll > 0) {
-            int sbW = 3 * S, sbX = x + W - margin / 2 - sbW;
-            RenderUtil.roundedRect(ctx, sbX, gy, sbW, visH, sbW, Theme.glassRow());
-            int thumbH = Math.max(14 * S, Math.round(visH * (visH / (float) serverContentH)));
-            int thumbY = gy + Math.round((visH - thumbH) * (scroll / maxScroll));
-            RenderUtil.roundedRect(ctx, sbX, thumbY, sbW, thumbH, sbW, Theme.accent());
-        }
-    }
-
     private static String fmtDur(long sec) {
         if (sec < 0) return "—";
         if (sec < 90) return sec + "с";
@@ -2221,7 +1982,7 @@ public class ClickGuiScreen extends Screen {
             h += 26 * S;           // reset button
         }
         if (m instanceof Waypoints) h += wpManagerHeight(S);
-        if (m instanceof ServerHelper) h += (EventManager.rules.size() + 1) * 12 * S + 6 * S;
+        if (m instanceof com.lume.client.module.modules.fthw.EventsHud) h += (EventManager.rules.size() + 1) * 12 * S + 6 * S;
         if (m instanceof com.lume.client.module.modules.qol.KeybindManager) h += 2 * (22 * S + 4 * S);
         return h + 8 * S;
     }
@@ -2387,7 +2148,7 @@ public class ClickGuiScreen extends Screen {
             yy += bh;
         }
         if (m instanceof Waypoints) renderWaypointManager(ctx, sx, yy + 4 * S, swid, S);
-        if (m instanceof ServerHelper) renderEventList(ctx, sx, yy + 4 * S, swid, S);
+        if (m instanceof com.lume.client.module.modules.fthw.EventsHud) renderEventList(ctx, sx, yy + 4 * S, swid, S);
         if (m instanceof com.lume.client.module.modules.qol.KeybindManager) renderKeybindManagerButtons(ctx, sx, yy, swid, S);
     }
 
@@ -2873,30 +2634,6 @@ public class ClickGuiScreen extends Screen {
                         return true;
                     }
                     // header area → fall through to window drag
-                }
-                if (isServerTab()) {
-                    if (mly >= lastClipTop && mly <= lastClipBot) {
-                        for (Object[] h : serverHits) {
-                            if (!inside(mlx, mly, (int) h[1], (int) h[2], (int) h[3], (int) h[4])) continue;
-                            String kind = (String) h[0];
-                            switch (kind) {
-                                case "master" -> {
-                                    Module shm = LumeClient.MODULES.getByName("Server Helper");
-                                    if (shm != null) { shm.toggle(); com.lume.client.Config.save(); }
-                                }
-                                case "subToggle" -> { BoolSetting bs = (BoolSetting) h[5]; bs.value = !bs.value; com.lume.client.Config.save(); }
-                                case "subBind" -> { BoolSetting bs = (BoolSetting) h[5]; bindingSetting = (bindingSetting == bs) ? null : bs; }
-                                case "present" -> { ItemRule it = (ItemRule) h[5]; it.present = !it.present; com.lume.client.Config.save(); }
-                                case "connect:funtime" -> fastConnect("FunTime", "mc.funtime.su");
-                                case "qcmdSend" -> com.lume.client.fthw.QuickCommands.send((com.lume.client.fthw.QuickCommands.Cmd) h[5]);
-                                case "qcmdBind" -> { var qc = (com.lume.client.fthw.QuickCommands.Cmd) h[5]; bindingQuickCmd = (bindingQuickCmd == qc) ? null : qc; }
-                            }
-                            return true;
-                        }
-                        bindingSetting = null;
-                        return true;   // consume content clicks
-                    }
-                    // header → fall through to window drag
                 }
                 if (mly >= lastClipTop && mly <= lastClipBot) {
                     for (Object[] h : wpHits) {

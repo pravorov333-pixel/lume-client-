@@ -45,7 +45,6 @@ public class FriendsScreen extends LumeSubScreen {
         ctx.fill(0, 0, width, height, Theme.backdrop());
         drawHudEditor(ctx, mouseX, mouseY);
         NanoVgRenderer.ensureInit();
-        if (!NanoVgRenderer.ready()) return;
 
         long now = System.currentTimeMillis();
         float dt = Math.min(0.1f, (now - lastFrame) / 1000f);
@@ -73,8 +72,16 @@ public class FriendsScreen extends LumeSubScreen {
         List<String> myIncoming = Friends.incoming;
         List<Friends.Point> myPoints = Friends.pointsHere();
 
+        if (!NanoVgRenderer.ready()) {
+            renderLegacyContent(ctx, S, sw, sh, x, y, W, H, mx, my, dt, sx, ew, listY, shareBarY,
+                    addBarY, clipBot, rowH, gap, myFriends, myIncoming, myPoints);
+            drawOpenTransition(S, sw, sh, x, y, W, H);
+            return;
+        }
+
         drawGlassBackdrop(S, sw, sh, x, y, W, H, 18 * S);
         ctx.draw();   // flush DrawContext's own queued geometry before raw-GL NanoVG draws
+        NvgTextQueue.begin(ClickGuiScreen.getWinOffX() * S, ClickGuiScreen.getWinOffY() * S, sw / 2.0, sh / 2.0, total);
         NanoVgRenderer.frame(vg -> {
             applyTransform(vg, S, sw, sh);
             drawWindowFrame(vg, x, y, W, H, S, mx, my, 3, dt);
@@ -230,6 +237,7 @@ public class FriendsScreen extends LumeSubScreen {
             NanoVgRenderer.text(vg, applyX + applyW / 2f, ibY + ibH / 2f, 10 * S, Theme.activeText(), NanoVgRenderer.ALIGN_CENTER_MIDDLE, Lang.tUI("Add"));
             addBtnCoords = new int[]{ applyX, ibY, applyW, ibH };
         });
+        NvgTextQueue.flush(ctx);
         drawOpenTransition(S, sw, sh, x, y, W, H);
     }
 
@@ -240,6 +248,165 @@ public class FriendsScreen extends LumeSubScreen {
     private int drawSectionTitle(long vg, int sx, int listY, int cur, int S, String label) {
         NanoVgRenderer.text(vg, sx, listY + cur + 6 * S, 9 * S, Theme.txtDim(), NanoVgRenderer.ALIGN_MIDDLE, label.toUpperCase(Locale.ROOT));
         return cur + 20 * S;
+    }
+
+    private int drawSectionTitleLegacy(DrawContext ctx, int sx, int listY, int cur, int S, String label) {
+        RenderUtil.textVCentered(ctx, this.textRenderer, label.toUpperCase(Locale.ROOT), sx, listY + cur, 12 * S, Theme.txtDim(), 9f / 18f);
+        return cur + 20 * S;
+    }
+
+    /** DrawContext port of the NanoVG frame body above — same layout math, 1:1 primitive swap
+     *  per the established NanoVG-removal conversion pattern. */
+    private void renderLegacyContent(DrawContext ctx, int S, int sw, int sh, int x, int y, int W, int H,
+                                      int mx, int my, float dt, int sx, int ew, int listY, int shareBarY,
+                                      int addBarY, int clipBot, int rowH, int gap,
+                                      List<String> myFriends, List<String> myIncoming, List<Friends.Point> myPoints) {
+        applyTransformLegacy(ctx, S, sw, sh);
+        drawWindowFrameLegacy(ctx, x, y, W, H, S, mx, my, 3, dt);
+        var tr = this.textRenderer;
+
+        ctx.enableScissor(x, listY, x + W, clipBot);
+        int cur = (int) -scroll;
+
+        if (!myIncoming.isEmpty()) {
+            cur = drawSectionTitleLegacy(ctx, sx, listY, cur, S, Lang.tUI("Incoming requests"));
+            for (String name : myIncoming) {
+                int ry = listY + cur;
+                if (rowVisible(ry, rowH, listY, clipBot)) {
+                    boolean hov = mx >= sx && mx <= sx + ew && my >= ry && my <= ry + rowH;
+                    sdfFill(ctx, S, sx, ry, ew, rowH, 9 * S, hov ? Theme.glassHov() : Theme.glassRow());
+                    RenderUtil.textVCentered(ctx, tr, name, sx + 12 * S, ry, rowH, Theme.txt(), 11f / 18f);
+
+                    int btnW = 26 * S, btnH = 22 * S, gapB = 6 * S;
+                    int declX = sx + ew - 12 * S - btnW, declY = ry + (rowH - btnH) / 2;
+                    int accX = declX - gapB - btnW;
+                    sdfFill(ctx, S, accX, declY, btnW, btnH, 6 * S, 0xFF3E9C5E);
+                    RenderUtil.textCentered(ctx, tr, "✓", accX, declY, btnW, btnH, 0xFFFFFFFF, 11f / 18f);
+                    sdfFill(ctx, S, declX, declY, btnW, btnH, 6 * S, 0xFFB2453F);
+                    RenderUtil.textCentered(ctx, tr, "✕", declX, declY, btnW, btnH, 0xFFFFFFFF, 11f / 18f);
+                    hits.add(new Hit("accept", name, accX, declY, btnW, btnH));
+                    hits.add(new Hit("decline", name, declX, declY, btnW, btnH));
+                }
+                cur += rowH + gap;
+            }
+            cur += 8 * S;
+        }
+
+        long onlineCount = myFriends.stream().filter(Friends::isOnline).count();
+        cur = drawSectionTitleLegacy(ctx, sx, listY, cur, S,
+                Lang.tUI("Friends") + " (" + onlineCount + "/" + myFriends.size() + " " + Lang.tUI("online") + ")");
+
+        if (myFriends.isEmpty()) {
+            int ry = listY + cur;
+            if (rowVisible(ry, rowH, listY, clipBot)) {
+                RenderUtil.textVCentered(ctx, tr, Lang.tUI("No friends yet — add a player name below"), sx, ry, rowH, Theme.txtDim(), 10f / 18f);
+            }
+            cur += rowH + gap;
+        }
+
+        for (String name : myFriends) {
+            int ry = listY + cur;
+            if (rowVisible(ry, rowH, listY, clipBot)) {
+                boolean hov = mx >= sx && mx <= sx + ew && my >= ry && my <= ry + rowH;
+                boolean online = Friends.isOnline(name);
+                boolean sameServer = Friends.onSameServer(name);
+                Friends.Status st = Friends.statusOf(name);
+
+                sdfFill(ctx, S, sx, ry, ew, rowH, 9 * S, hov ? Theme.glassHov() : Theme.glassRow());
+                sdfFill(ctx, S, sx + 10 * S, ry + rowH / 2 - 4 * S, 8 * S, 8 * S, 4 * S, online ? 0xFF6FCF7F : Theme.pillOff());
+                RenderUtil.textVCentered(ctx, tr, name, sx + 24 * S, ry, rowH, Theme.txt(), 11f / 18f);
+
+                String statusTxt;
+                if (!online) statusTxt = Lang.tUI("offline");
+                else if (sameServer) statusTxt = Lang.tUI("online · this server");
+                else statusTxt = Lang.tUI("online") + (st != null && st.server != null ? " · " + st.server : "");
+
+                int btnW = 46 * S, btnH = 22 * S, gapB = 6 * S;
+                int removeX = sx + ew - 12 * S - 22 * S, removeY = ry + (rowH - btnH) / 2;
+                RenderUtil.textCentered(ctx, tr, "✕", removeX, removeY, 22 * S, btnH, 0xFFE05656, 10f / 18f);
+                hits.add(new Hit("remove", name, removeX, removeY, 22 * S, btnH));
+
+                int rightEdge = removeX - gapB;
+                if (online && sameServer) {
+                    int tpaX = rightEdge - btnW;
+                    sdfFill(ctx, S, tpaX, removeY, btnW, btnH, 6 * S, Theme.accent());
+                    RenderUtil.textCentered(ctx, tr, "TPA", tpaX, removeY, btnW, btnH, Theme.activeText(), 9f / 18f);
+                    hits.add(new Hit("tpa", name, tpaX, removeY, btnW, btnH));
+                    rightEdge = tpaX - gapB;
+                } else if (online && st != null && st.server != null && !st.server.equals("singleplayer")) {
+                    int connW = 66 * S;
+                    int connX = rightEdge - connW;
+                    sdfFillOutline(ctx, S, connX, removeY, connW, btnH, 6 * S, Theme.glassHov(), Theme.accent(), S);
+                    RenderUtil.textCentered(ctx, tr, Lang.tUI("Connect"), connX, removeY, connW, btnH, Theme.accent(), 9f / 18f);
+                    hits.add(new Hit("connect", st.server, connX, removeY, connW, btnH));
+                    rightEdge = connX - gapB;
+                }
+
+                int statusW = RenderUtil.width(tr, statusTxt, 9f / 18f);
+                RenderUtil.textVCentered(ctx, tr, statusTxt, rightEdge - 8 * S - statusW, ry, rowH, Theme.txtDim(), 9f / 18f);
+            }
+            cur += rowH + gap;
+        }
+
+        if (!myPoints.isEmpty()) {
+            cur += 8 * S;
+            cur = drawSectionTitleLegacy(ctx, sx, listY, cur, S, Lang.tUI("Shared points here"));
+            String me = Friends.myName();
+            for (Friends.Point p : myPoints) {
+                int ry = listY + cur;
+                if (rowVisible(ry, rowH, listY, clipBot)) {
+                    sdfFill(ctx, S, sx, ry, ew, rowH, 9 * S, Theme.glassRow());
+                    sdfFill(ctx, S, sx + 10 * S, ry + rowH / 2 - 4 * S, 8 * S, 8 * S, 4 * S, 0xFF6F9CE0);
+                    RenderUtil.textVCentered(ctx, tr, p.name + "  —  " + p.from, sx + 24 * S, ry, rowH, Theme.txt(), 11f / 18f);
+                    if (me != null && me.equalsIgnoreCase(p.from)) {
+                        int dX = sx + ew - 12 * S - 22 * S, dY = ry + (rowH - 22 * S) / 2;
+                        RenderUtil.textCentered(ctx, tr, "✕", dX, dY, 22 * S, 22 * S, 0xFFE05656, 10f / 18f);
+                        hits.add(new Hit("deletepoint", String.valueOf(p.id), dX, dY, 22 * S, 22 * S));
+                    }
+                }
+                cur += rowH + gap;
+            }
+        }
+
+        int contentH = cur;
+        ctx.disableScissor();
+
+        int viewH = clipBot - listY;
+        if (contentH > viewH) {
+            float ratio = (float) viewH / contentH;
+            int barH = Math.max(20 * S, (int) (viewH * ratio));
+            int barY = listY + (int) (scroll / Math.max(1, contentH - viewH) * (viewH - barH));
+            sdfFill(ctx, S, x + W - 8 * S, barY, 3 * S, barH, S, Theme.rim());
+        }
+
+        // Share-my-location bar
+        RenderUtil.textVCentered(ctx, tr, Lang.tUI("Share your position with all friends:"), sx, shareBarY, 12 * S, Theme.txtDim(), 9f / 18f);
+        int shW = 150 * S, shH = 26 * S, shX = sx, shY = shareBarY + 16 * S;
+        boolean canShare = Friends.myName() != null;
+        sdfFill(ctx, S, shX, shY, shW, shH, 8 * S, canShare ? Theme.accent() : Theme.glassRow());
+        RenderUtil.textCentered(ctx, tr, Lang.tUI("Share position"), shX, shY, shW, shH, Theme.activeText(), 10f / 18f);
+        shareBtnCoords = new int[]{ shX, shY, shW, shH };
+
+        // Add friend field
+        RenderUtil.roundedRect(ctx, x + 10 * S, addBarY - 2 * S, W - 20 * S, Math.max(1, S), Math.max(1, S) / 2, Theme.border());
+        RenderUtil.textVCentered(ctx, tr, Lang.tUI("Add friend:"), sx, addBarY, 12 * S, Theme.txtDim(), 9f / 18f);
+
+        int ibW = ew - 80 * S, ibH = 28 * S;
+        int ibX = sx, ibY = addBarY + 22 * S;
+        sdfFillOutline(ctx, S, ibX, ibY, ibW, ibH, 8 * S,
+                addFocused ? Theme.glassHov() : Theme.glassRow(), addFocused ? Theme.accent() : Theme.rim(), S);
+        String placeholder = Lang.tUI("player name…");
+        String shown = addName.isEmpty() && !addFocused ? placeholder : addName + (addFocused ? "|" : "");
+        RenderUtil.textVCentered(ctx, tr, shown, ibX + 10 * S, ibY, ibH,
+                addName.isEmpty() && !addFocused ? Theme.txtDim() : Theme.txt(), 10f / 18f);
+        addBox = new int[]{ ibX, ibY, ibW, ibH };
+
+        int applyX = ibX + ibW + 8 * S, applyW = ew - ibW - 8 * S;
+        sdfFill(ctx, S, applyX, ibY, applyW, ibH, 8 * S, Theme.accent());
+        RenderUtil.textCentered(ctx, tr, Lang.tUI("Add"), applyX, ibY, applyW, ibH, Theme.activeText(), 10f / 18f);
+        addBtnCoords = new int[]{ applyX, ibY, applyW, ibH };
+
+        ctx.getMatrices().pop();
     }
 
     @Override

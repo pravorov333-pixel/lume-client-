@@ -146,13 +146,20 @@ public class EventsScreen extends LumeSubScreen {
         return Math.max(minSize, baseSize * maxW / w);
     }
 
+    /** DrawContext equivalent of {@link #fitSize} — shrinks the RenderUtil scale just enough for
+     *  {@code text} to fit {@code maxW}, never below {@code minScale}. */
+    private static float fitSizeLegacy(net.minecraft.client.font.TextRenderer tr, float baseScale, String text, float maxW, float minScale) {
+        float w = RenderUtil.width(tr, text, baseScale);
+        if (w <= maxW || w <= 0) return baseScale;
+        return Math.max(minScale, baseScale * maxW / w);
+    }
+
     @Override
     public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
         super.render(ctx, mouseX, mouseY, delta);   // same background blur as the main menu
         ctx.fill(0, 0, width, height, Theme.backdrop());
         drawHudEditor(ctx, mouseX, mouseY);          // draggable HUD frames stay visible here
         NanoVgRenderer.ensureInit();
-        if (!NanoVgRenderer.ready()) return;
 
         int S = (int) Math.max(1, client.getWindow().getScaleFactor());
         long now = System.currentTimeMillis();
@@ -218,8 +225,17 @@ public class EventsScreen extends LumeSubScreen {
         final int fMaxScroll = maxScroll, fContentH = contentH;
         final int fCardW = cardW, fColGap = colGap;
 
+        if (!NanoVgRenderer.ready()) {
+            renderLegacyContent(ctx, S, sw, sh, x, y, W, H, mx, my, dt, tg, cards, localRules, curAnarchy,
+                    sx, ew, selY, selH, gy, clipTop, clipBot, visH, scrollI, fMaxScroll, fContentH,
+                    fCardW, fColGap, cardH, cardCol, cardY);
+            drawOpenTransition(S, sw, sh, x, y, W, H);
+            return;
+        }
+
         drawGlassBackdrop(S, sw, sh, x, y, W, H, 18 * S);
         ctx.draw();   // flush DrawContext's own queued geometry before raw-GL NanoVG draws
+        NvgTextQueue.begin(ClickGuiScreen.getWinOffX() * S, ClickGuiScreen.getWinOffY() * S, sw / 2.0, sh / 2.0, total);
         NanoVgRenderer.frame(vg -> {
             applyTransform(vg, S, sw, sh);
             drawWindowFrame(vg, x, y, W, H, S, mx, my, 1, dt);
@@ -306,7 +322,104 @@ public class EventsScreen extends LumeSubScreen {
                 NanoVgRenderer.roundedRect(vg, sbX, thumbY, sbW, thumbH, sbW / 2f, Theme.accent());
             }
         });
+        NvgTextQueue.flush(ctx);
         drawOpenTransition(S, sw, sh, x, y, W, H);
+    }
+
+    /** DrawContext port of the NanoVG frame body above — same layout math (passed in from
+     *  render(), computed once regardless of path), 1:1 primitive swap per the established
+     *  NanoVG-removal conversion pattern (NanoVgRenderer.text/roundedRect/scissor -> RenderUtil
+     *  equivalents / ctx.enableScissor, native px straight through). */
+    private void renderLegacyContent(DrawContext ctx, int S, int sw, int sh, int x, int y, int W, int H,
+                                      int mx, int my, float dt, boolean tg, List<Card> cards, List<EventRule> localRules,
+                                      String curAnarchy, int sx, int ew, int selY, int selH, int gy,
+                                      int clipTop, int clipBot, int visH, int scrollI, int fMaxScroll, int fContentH,
+                                      int fCardW, int fColGap, int[] cardH, int[] cardCol, int[] cardY) {
+        applyTransformLegacy(ctx, S, sw, sh);
+        drawWindowFrameLegacy(ctx, x, y, W, H, S, mx, my, 1, dt);
+        var tr = this.textRenderer;
+
+        // Network selector — only FunTime for now, same layout as the NanoVG version.
+        RenderUtil.textVCentered(ctx, tr, "Сервер:", sx + 2 * S, selY, selH, Theme.txtDim(), 9.5f / 18f);
+        int lblW = RenderUtil.width(tr, "Сервер:", 9.5f / 18f);
+        int pillW = RenderUtil.width(tr, "FunTime", 10f / 18f) + 20 * S;
+        int pillX = sx + lblW + 8 * S;
+        sdfFill(ctx, S, pillX, selY, pillW, selH, selH / 2, Theme.accent());
+        RenderUtil.textCentered(ctx, tr, "FunTime", pillX, selY, pillW, selH, Theme.activeText(), 10f / 18f);
+
+        ctx.enableScissor(x, clipTop, x + W, clipTop + visH);
+        titleHits.clear();
+
+        if (tg && cards.isEmpty()) {
+            RenderUtil.textCentered(ctx, tr, "Нет активных ивентов", sx, gy, ew, visH, Theme.txtDim(), 11f / 18f);
+        }
+
+        if (tg) {
+            float innerW = fCardW - 20 * S;
+            for (int i = 0; i < cards.size(); i++) {
+                Card c = cards.get(i);
+                int cx2 = sx + cardCol[i] * (fCardW + fColGap);
+                int h = cardH[i];
+                int ry = gy + cardY[i] - scrollI;
+                if (ry + h >= clipTop && ry <= clipBot) {
+                    boolean mine = c.anarchy.equals(curAnarchy);
+                    sdfFill(ctx, S, cx2, ry, fCardW, h, 10 * S, mine ? Theme.glassHov() : Theme.glassRow());
+                    String title = (mine ? "★ " : "") + "/an" + c.anarchy;
+                    float titleScale = fitSizeLegacy(tr, 12f / 18f, title, innerW, 8f / 18f);
+                    RenderUtil.textVCentered(ctx, tr, title, cx2 + 10 * S, ry + 8 * S, 14 * S, Theme.accent(), titleScale);
+                    titleHits.add(new Object[]{ "/an" + c.anarchy, cx2, ry, fCardW, 18 * S });
+                    int ey = ry + 18 * S;
+                    for (TelegramEvents.Ev e : c.events) {
+                        int col2 = statusColor(e);
+                        float nameScale = fitSizeLegacy(tr, 9.5f / 18f, e.name, innerW, 7f / 18f);
+                        RenderUtil.textVCentered(ctx, tr, e.name, cx2 + 10 * S, ey + 4 * S, 14 * S, Theme.txtDim(), nameScale);
+                        String status = e.statusText();
+                        float statusScale = fitSizeLegacy(tr, 10f / 18f, status, innerW, 7f / 18f);
+                        RenderUtil.textVCentered(ctx, tr, status, cx2 + 10 * S, ey + 16 * S, 14 * S, col2, statusScale);
+                        ey += 26 * S;
+                    }
+                }
+            }
+        } else if (localRules != null) {
+            int rowH = 38 * S, gapr = 8 * S;
+            int cur = 0;
+            for (EventRule er : localRules) {
+                int ry = gy + cur - scrollI;
+                if (ry + rowH >= clipTop && ry <= clipBot) {
+                    int left = -1;
+                    for (EventManager.Active a : EventManager.active) if (a.rule == er) { left = a.secondsLeft(); break; }
+                    long eta = er.etaSec(), ago = er.agoSec();
+                    int dotCol; String status; int statusCol;
+                    if (left >= 0) { dotCol = 0xFF6FCF7F; status = "идёт сейчас"; statusCol = 0xFF6FCF7F; }
+                    else if (eta > 0) { dotCol = 0xFFE8C15A; status = "≈ через " + fmtDur(eta); statusCol = 0xFFE8C15A; }
+                    else if (ago >= 0) { dotCol = Theme.txtDim(); status = "был " + fmtDur(ago) + " назад"; statusCol = Theme.txtDim(); }
+                    else { dotCol = Theme.pillOff(); status = "ещё не видел"; statusCol = Theme.txtDim(); }
+                    sdfFill(ctx, S, sx, ry, ew, rowH, 10 * S, Theme.glassRow());
+                    sdfFill(ctx, S, sx, ry, 3 * S, rowH, 2 * S, dotCol);
+                    RenderUtil.textVCentered(ctx, tr, er.name, sx + 14 * S, ry + 6 * S, 14 * S, Theme.txt(), 13f / 18f);
+                    RenderUtil.textVCentered(ctx, tr, status, sx + 14 * S, ry + 20 * S, 14 * S, statusCol, 10f / 18f);
+                    String big = left > 0 ? left + "с" : (eta > 0 ? fmtDur(eta) : "");
+                    if (!big.isEmpty()) {
+                        int tw = RenderUtil.width(tr, big, 18f / 18f);
+                        RenderUtil.textVCentered(ctx, tr, big, sx + ew - tw - 14 * S, ry, rowH,
+                                left >= 0 ? 0xFF6FCF7F : 0xFFE8C15A, 18f / 18f);
+                    }
+                }
+                cur += rowH + gapr;
+            }
+        }
+
+        ctx.disableScissor();
+
+        if (fMaxScroll > 0) {
+            int sbW = 3 * S, sbX = x + W - 14 * S;
+            sdfFill(ctx, S, sbX, gy, sbW, visH, sbW / 2, Theme.glassRow());
+            int thumbH = Math.max(14 * S, Math.round(visH * (visH / (float) fContentH)));
+            int thumbY = gy + Math.round((visH - thumbH) * (scroll / fMaxScroll));
+            sdfFill(ctx, S, sbX, thumbY, sbW, thumbH, sbW / 2, Theme.accent());
+        }
+
+        ctx.getMatrices().pop();
     }
 
     @Override

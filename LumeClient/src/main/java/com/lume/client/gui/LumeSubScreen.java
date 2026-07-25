@@ -64,6 +64,7 @@ abstract class LumeSubScreen extends Screen {
      *  AFTER the NanoVG frame that drew [x,y,W,H] (window-local) so it captures the freshly
      *  drawn sharp content and blurs THAT, fading out as anim() finishes. */
     protected void drawOpenTransition(int S, int sw, int sh, int x, int y, int W, int H) {
+        if (com.lume.client.Config.ultra()) return;   // catalog-switch blur-dissolve is pure decoration
         float p = anim();
         if (p >= 1f) return;
         double cx = sw / 2.0, cy = sh / 2.0;
@@ -99,7 +100,7 @@ abstract class LumeSubScreen extends Screen {
      *  GL, not routed through NanoVG), using the SAME window-local [x,y,W,H] the subclass is
      *  about to hand to drawWindowFrame. No-op unless Full Glass is the active style. */
     protected void drawGlassBackdrop(int S, int sw, int sh, int x, int y, int W, int H, int r) {
-        if (Theme.getGlassStyle() != 1) return;
+        if (Theme.getGlassStyle() != 1 || com.lume.client.Config.ultra()) return;
         double cx = sw / 2.0, cy = sh / 2.0;
         com.lume.client.nanovg.GlassRenderer.panelWindowLocal(
                 ClickGuiScreen.getWinOffX() * S, ClickGuiScreen.getWinOffY() * S, cx, cy, total,
@@ -151,6 +152,134 @@ abstract class LumeSubScreen extends Screen {
         // each owning a separate, unaware-of-each-other copy of the same bar.
         int[] yh = NavBar.draw(vg, x, y, W, S, activeTab, dt, navX, navW);
         navBarY = yh[0]; navBarH = yh[1];
+    }
+
+    // ---- DrawContext (non-NanoVG) fallback — mirrors applyTransform/drawWindowFrame/drawNavBar
+    // above, used when NanoVgRenderer.ready() is false (see ClickGuiScreen's own render() for the
+    // same gate). Content-drawing subclasses (EventsScreen/ConfigScreen/FriendsScreen) call this
+    // group instead of the NanoVG group in that case. ----
+
+    /** DrawContext equivalent of {@link #applyTransform} — pushes the same pan/zoom/anim matrix
+     *  onto the DrawContext MatrixStack instead of NanoVG's own transform. Caller must pop
+     *  {@code ctx.getMatrices()} when done, mirroring how {@link #applyTransform} /
+     *  {@code NanoVgRenderer.frame} bracket the NanoVG draws today. */
+    protected void applyTransformLegacy(DrawContext ctx, int S, int sw, int sh) {
+        double cx = sw / 2.0, cy = sh / 2.0;
+        var m = ctx.getMatrices();
+        m.push();
+        m.scale(1f / S, 1f / S, 1f);
+        m.translate(ClickGuiScreen.getWinOffX() * S, ClickGuiScreen.getWinOffY() * S, 0.0);
+        m.translate(cx, cy, 0.0);
+        m.scale(total, total, 1.0f);
+        m.translate(-cx, -cy, 0.0);
+    }
+
+    /** DrawContext equivalent of {@link #drawWindowFrame} — same window skeleton (nav bar,
+     *  panel, wordmark, theme/colors buttons), drawn via RenderUtil/SdfRenderer instead of
+     *  NanoVG. Must be called AFTER {@link #applyTransformLegacy} (content is drawn inside that
+     *  same pushed matrix, exactly like the NanoVG version draws inside applyTransform's frame). */
+    protected void drawWindowFrameLegacy(DrawContext ctx, int x, int y, int W, int H, int S, int mx, int my, int activeTab, float dt) {
+        drawNavBarLegacy(ctx, x, y, W, S, mx, my, activeTab, dt);
+
+        int sw = width * S, sh = height * S;
+        double cx = sw / 2.0, cy = sh / 2.0;
+        int r = 18 * S;
+        // Panel — pixel-perfect SDF rounded rect (raw GL), same call shape ClickGuiScreen's own
+        // fallback uses for its window panel. Flat minimalist chrome: flat fill + thin rim.
+        ctx.draw();
+        com.lume.client.nanovg.SdfRenderer.boxWindowLocal(
+                ClickGuiScreen.getWinOffX() * S, ClickGuiScreen.getWinOffY() * S, cx, cy, total,
+                x, y, W, H, r, Theme.winBg(), Theme.rim(), 1.5f * S, 0, 0f);
+
+        // header: centred wordmark — logo intentionally omitted, matches drawWindowFrame's own
+        // "logo removed" layout above (only ClickGuiScreen's own header keeps the corner mark).
+        Wordmark.drawLegacyCentered(ctx, this.textRenderer, x, W, y + 14 * S, 0.83f * S);
+
+        int tbw = 22 * S, tbh = 22 * S, tbx = x + W - tbw - 20 * S, tby = y + 14 * S;
+        boolean tbHov = mx >= tbx && mx <= tbx + tbw && my >= tby && my <= tby + tbh;
+        themeHoverT = approach(themeHoverT, tbHov ? 1f : 0f, 12f, dt);
+
+        int cbw = 22 * S, cbh = 22 * S, cbx = tbx - cbw - 6 * S, cby = tby;
+        boolean cbHov = mx >= cbx && mx <= cbx + cbw && my >= cby && my <= cby + cbh;
+        colorsHoverT = approach(colorsHoverT, cbHov ? 1f : 0f, 12f, dt);
+
+        int themeBg = Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), themeHoverT);
+        int colorsBg = Theme.colorLerp(Theme.glassRow(), Theme.glassHov(), colorsHoverT);
+        ThemeIcons.drawThemeLegacy(ctx, tbx, tby, tbw, themeBg);
+        ThemeIcons.drawColorsLegacy(ctx, cbx, cby, cbw, colorsBg);
+        themeBtn = new int[]{ tbx, tby, tbw, tbh };
+        colorsBtn = new int[]{ cbx, cby, cbw, cbh };
+    }
+
+    protected void drawNavBarLegacy(DrawContext ctx, int x, int y, int W, int S, int mx, int my, int activeTab, float dt) {
+        int sw = width * S, sh = height * S;
+        double cx = sw / 2.0, cy = sh / 2.0;
+        int[] yh = NavBar.drawLegacy(ctx, x, y, W, S, activeTab, dt, navX, navW,
+                ClickGuiScreen.getWinOffX() * S, ClickGuiScreen.getWinOffY() * S, cx, cy, total);
+        navBarY = yh[0]; navBarH = yh[1];
+    }
+
+    /** SDF-filled rounded rect at window-local native px (same pan/zoom/anim transform as
+     *  everything else drawn under {@link #applyTransformLegacy}) — flat fill, no outline/glow.
+     *  Crisp shader edges instead of RenderUtil's CPU-coverage approximation; used throughout
+     *  the content screens' legacy render path for row/card/field backgrounds. */
+    protected void sdfFill(DrawContext ctx, int S, int wx, int wy, int w, int h, int r, int fillArgb) {
+        sdfFillOutline(ctx, S, wx, wy, w, h, r, fillArgb, 0, 0f);
+    }
+
+    /** {@link #sdfFill} with an added outline (thin rim), e.g. a focused text field or an
+     *  accent-outlined "Connect" pill. */
+    protected void sdfFillOutline(DrawContext ctx, int S, int wx, int wy, int w, int h, int r,
+                                   int fillArgb, int outlineArgb, float outlineWidthPx) {
+        int sw = width * S, sh = height * S;
+        double cx = sw / 2.0, cy = sh / 2.0;
+        ctx.draw();
+        com.lume.client.nanovg.SdfRenderer.boxWindowLocal(
+                ClickGuiScreen.getWinOffX() * S, ClickGuiScreen.getWinOffY() * S, cx, cy, total,
+                wx, wy, w, h, r, fillArgb, outlineArgb, outlineWidthPx, 0, 0f);
+    }
+
+    // ---- Real per-glyph SDF text (com.lume.client.nanovg.SdfTextRenderer) — crisp at any GUI
+    // scale, unlike LumeFont's texture atlas. Window-local native px, same convention as
+    // sdfFill/sdfFillOutline above. `scale` is the same RenderUtil.FONT_SCALE-relative unit
+    // every other text helper in this codebase uses (0.5 ~= 9px).
+
+    // Was com.lume.client.nanovg.SdfTextRenderer (MSDF, hardcoded Montserrat, this project's
+    // buggiest text subsystem across several rounds — see [[lume-client]] memory) — now routes
+    // through RenderUtil's vanilla Inter-font path instead, same font every other screen uses.
+    // SdfTextRenderer.drawWindowLocal applied the window pan/zoom transform internally (raw-GL,
+    // no DrawContext matrix involved); RenderUtil needs that same transform pushed onto ctx's own
+    // MatrixStack first — see applyTransformLegacy, this mirrors it exactly, just scoped to a
+    // single text draw instead of the whole legacy render pass.
+
+    protected float sdfWidth(String s, float scale, boolean bold) {
+        net.minecraft.client.font.TextRenderer tr = net.minecraft.client.MinecraftClient.getInstance().textRenderer;
+        return bold ? RenderUtil.widthBold(tr, s, scale) : RenderUtil.width(tr, s, scale);
+    }
+
+    protected void sdfText(DrawContext ctx, int S, String s, double x, double y, float scale, int color, boolean bold) {
+        int sw = width * S, sh = height * S;
+        double cx = sw / 2.0, cy = sh / 2.0;
+        net.minecraft.client.font.TextRenderer tr = net.minecraft.client.MinecraftClient.getInstance().textRenderer;
+        var m = ctx.getMatrices();
+        m.push();
+        m.scale(1f / S, 1f / S, 1f);
+        m.translate(ClickGuiScreen.getWinOffX() * S, ClickGuiScreen.getWinOffY() * S, 0.0);
+        m.translate(cx, cy, 0.0);
+        m.scale(total, total, 1f);
+        m.translate(-cx, -cy, 0.0);
+        if (bold) RenderUtil.textBold(ctx, tr, s, x, y, color, scale);
+        else RenderUtil.text(ctx, tr, s, x, y, color, false, scale);
+        m.pop();
+    }
+
+    protected void sdfTextVCentered(DrawContext ctx, int S, String s, double x, double boxY, double boxH, float scale, int color, boolean bold) {
+        sdfText(ctx, S, s, x, boxY + boxH / 2.0 - 3.5 * scale, scale, color, bold);
+    }
+
+    protected void sdfTextCentered(DrawContext ctx, int S, String s, double boxX, double boxY, double boxW, double boxH, float scale, int color, boolean bold) {
+        float w = sdfWidth(s, scale, bold);
+        sdfTextVCentered(ctx, S, s, boxX + (boxW - w) / 2.0, boxY, boxH, scale, color, bold);
     }
 
     // ---- HUD editor: draggable element frames, shown in every catalog ----
@@ -288,6 +417,7 @@ abstract class LumeSubScreen extends Screen {
     public boolean shouldPause() { return false; }
 
     protected static float approach(float cur, float target, float rate, float dt) {
+        if (com.lume.client.Config.ultra()) return target;
         return cur + (target - cur) * Math.min(1f, rate * dt);
     }
 

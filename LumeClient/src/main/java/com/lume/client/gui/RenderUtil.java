@@ -10,23 +10,38 @@ import net.minecraft.util.Identifier;
 /**
  * Small drawing helpers. Vanilla DrawContext has no rounded-rect primitive,
  * so we approximate one by filling each scan-line with a corner inset.
- * Also provides the Lume custom font (Inter) rendered with 2x supersampling:
- * the font is rasterised at high resolution (size 18) and drawn at half scale,
- * giving crisp, smooth glyphs instead of the blurry/ragged vanilla TTF scaling.
+ *
+ * <p>Text goes through Minecraft's OWN vanilla font renderer with a custom bundled TTF
+ * (Montserrat, regular + bold, registered as real Minecraft font resources via a "ttf" font
+ * provider with oversample — see {@code assets/lume/font/main.json}/{@code bold.json}), not a
+ * hand-rolled GL text renderer. After several rounds of self-built raw-GL text atlases each
+ * shipping a different rendering bug (Cyrillic-centring, empty-buffer-on-upload, atlas
+ * bleeding — see [[lume-client]] memory for the blow-by-blow), the user asked for the boring,
+ * proven option: MC's TextRenderer already handles shaping, shadows, formatting, and Cyrillic
+ * correctly for any font registered this way — nothing custom left to get wrong. {@code
+ * SdfTextRenderer}/{@code LumeFont}/{@code LumeFontBold} are kept in the tree (unused by this
+ * file) as a documented dead end, not deleted, in case a future session wants to revisit raw-GL
+ * text with more time to get the geometry right.
  */
 public final class RenderUtil {
 
-    /** The bundled Inter font, defined in assets/lume/font/main.json. */
+    /** Montserrat Regular, defined in assets/lume/font/main.json (ttf provider, oversample 4). */
     public static final Identifier FONT = Identifier.of("lume", "main");
+    /** Montserrat Bold, defined in assets/lume/font/bold.json (same provider, bold face). */
+    public static final Identifier FONT_BOLD = Identifier.of("lume", "bold");
 
-    /** Draw scale — font json size (18) * this = on-screen text height (~9px). */
+    /** Draw scale — ~9px on-screen text height at scale 0.5, matching every existing call site's
+     *  established convention (unchanged from before this file's font backend swap). */
     public static final float FONT_SCALE = 0.5f;
 
     private RenderUtil() {}
 
-    /** Wraps a string in the Lume font so it renders with Inter, not the vanilla font. */
     public static Text t(String s) {
         return Text.literal(s).setStyle(Style.EMPTY.withFont(FONT));
+    }
+
+    public static Text tBold(String s) {
+        return Text.literal(s).setStyle(Style.EMPTY.withFont(FONT_BOLD));
     }
 
     public static void text(DrawContext ctx, TextRenderer tr, String s, double x, double y, int color, boolean shadow) {
@@ -37,23 +52,15 @@ public final class RenderUtil {
         return width(tr, s, FONT_SCALE);
     }
 
-    /**
-     * Draw text at a custom scale. Uses the custom LumeFont renderer when ready,
-     * otherwise falls back to the vanilla TTF font so nothing ever breaks.
-     */
-    /** True if the string has any Cyrillic — those render with the vanilla font (LumeFont/Poppins has no Cyrillic). */
+    /** True if the string has any Cyrillic. Kept only because some callers still use it for
+     *  their own layout choices — {@link #text}/{@link #textBold} themselves no longer branch
+     *  on it, Montserrat covers Cyrillic directly like any other glyph. */
     public static boolean hasCyrillic(String s) {
         for (int i = 0; i < s.length(); i++) { char c = s.charAt(i); if (c >= 0x400 && c <= 0x4FF) return true; }
         return false;
     }
 
     public static void text(DrawContext ctx, TextRenderer tr, String s, double x, double y, int color, boolean shadow, float scale) {
-        if (hasCyrillic(s)) { vanillaText(ctx, tr, s, x, y, color, scale * 2f); return; }   // Cyrillic → vanilla font, size-matched
-        LumeFont.ensure();
-        if (LumeFont.ready) {
-            LumeFont.draw(ctx, s, x, y, color, scale * (18f / LumeFont.FONT_PX));
-            return;
-        }
         var m = ctx.getMatrices();
         m.push();
         m.translate(x, y, 0.0);
@@ -64,11 +71,10 @@ public final class RenderUtil {
 
     /**
      * Draw text left-aligned at {@code x}, vertically centred inside a box that
-     * spans [boxY, boxY+boxH]. Uses the font's measured optical centre so the
-     * glyph body — not the padded atlas cell — sits in the middle.
+     * spans [boxY, boxY+boxH].
      */
     public static void textVCentered(DrawContext ctx, TextRenderer tr, String s, double x, double boxY, double boxH, int color, float scale) {
-        text(ctx, tr, s, x, vCenterY(s, boxY, boxH, scale, false), color, false, scale);
+        text(ctx, tr, s, x, vCenterY(boxY, boxH, scale), color, false, scale);
     }
 
     /** Draw text centred both horizontally and vertically inside the given box. */
@@ -77,39 +83,16 @@ public final class RenderUtil {
         textVCentered(ctx, tr, s, boxX + (boxW - w) / 2.0, boxY, boxH, color, scale);
     }
 
-    /**
-     * Vertical-centring offset shared by {@code textVCentered}/{@code textBoldCentered} — split
-     * out because it MUST branch on {@link #hasCyrillic} the same way {@link #text}/{@link
-     * #textBold} do: a Cyrillic string doesn't actually render through LumeFont at all (it
-     * routes to the vanilla font at {@code scale*2f}, see {@link #text}), so centring it with
-     * LumeFont's own optical-centre metric put it visibly off-centre — the fix for the "text
-     * is buggy in the new catalogs" report, which is Cyrillic-heavy (server/event/profile text)
-     * where the old fallback path barely had any Cyrillic before.
-     */
-    private static double vCenterY(String s, double boxY, double boxH, float scale, boolean bold) {
-        if (hasCyrillic(s)) {
-            // vanilla font at scale*2f (see text()/textBold()'s Cyrillic branch) — half its
-            // ~7px cap height at that doubled scale, i.e. 2x the plain-vanilla-fallback constant
-            // below (bold uses MC's own synthetic-bold vanilla style, same metrics as regular).
-            return boxY + boxH / 2.0 - 7.0 * scale;
-        }
-        if (bold) {
-            LumeFontBold.ensure();
-            if (LumeFontBold.ready) {
-                double ds = scale * (18f / LumeFontBold.FONT_PX);
-                return boxY + boxH / 2.0 - LumeFontBold.opticalCenterPx() * ds;
-            }
-        }
-        LumeFont.ensure();
-        if (LumeFont.ready) {
-            double ds = scale * (18f / LumeFont.FONT_PX);
-            return boxY + boxH / 2.0 - LumeFont.opticalCenterPx() * ds;
-        }
-        return boxY + boxH / 2.0 - 3.5 * scale; // vanilla glyphs are ~7px tall
+    /** Vanilla TextRenderer glyphs are ~7px tall regardless of which registered font is active
+     *  (the ttf provider's "size"/oversample only affects rasterisation crispness, not the
+     *  logical line-height MC lays text out at) — same constant for every caller now, no more
+     *  per-font/per-script branching. */
+    private static double vCenterY(double boxY, double boxH, float scale) {
+        return boxY + boxH / 2.0 - 3.5 * scale;
     }
 
-    /** Draw text with the VANILLA font's own synthetic bold style (has Cyrillic, and MC's
-     *  built-in bold is a real per-glyph technique — not a redraw-offset hack). */
+    /** Draw text with the vanilla font's own synthetic bold style. Only used as a last-resort
+     *  fallback now (see {@link #textBold}) — the real bold face is {@link #FONT_BOLD}. */
     public static void vanillaTextBold(DrawContext ctx, TextRenderer tr, String s, double x, double y, int color, float scale) {
         var m = ctx.getMatrices();
         m.push();
@@ -119,71 +102,42 @@ public final class RenderUtil {
         m.pop();
     }
 
-    /** Bold text — draws through a real bold glyph atlas ({@link LumeFontBold}, rasterised from
-     *  the bundled {@code montserrat-bold.ttf}) or the vanilla font's own synthetic-bold style
-     *  for Cyrillic, matching {@link #text}'s routing exactly. Falls back to the old sub-pixel
-     *  triple-draw trick only if the bold atlas failed to load on this GPU/JVM. */
+    /** Bold text — draws through the real bundled Montserrat Bold TTF ({@link #FONT_BOLD}),
+     *  same vanilla TextRenderer path as {@link #text}, just a different registered font. */
     public static void textBold(DrawContext ctx, TextRenderer tr, String s, double x, double y, int color, float scale) {
-        if (hasCyrillic(s)) { vanillaTextBold(ctx, tr, s, x, y, color, scale * 2f); return; }
-        LumeFontBold.ensure();
-        if (LumeFontBold.ready) {
-            LumeFontBold.draw(ctx, s, x, y, color, scale * (18f / LumeFontBold.FONT_PX));
-            return;
-        }
-        text(ctx, tr, s, x, y, color, false, scale);
-        text(ctx, tr, s, x + 0.4, y, color, false, scale);
-        text(ctx, tr, s, x, y + 0.35, color, false, scale);
+        var m = ctx.getMatrices();
+        m.push();
+        m.translate(x, y, 0.0);
+        m.scale(scale, scale, 1.0f);
+        ctx.drawText(tr, tBold(s), 0, 0, color, false);
+        m.pop();
     }
 
     /** Bold + centred both horizontally and vertically inside the given box. */
     public static void textBoldCentered(DrawContext ctx, TextRenderer tr, String s, double boxX, double boxY, double boxW, double boxH, int color, float scale) {
         int w = widthBold(tr, s, scale);
         double x = boxX + (boxW - w) / 2.0;
-        double y = vCenterY(s, boxY, boxH, scale, true);
+        double y = vCenterY(boxY, boxH, scale);
         textBold(ctx, tr, s, x, y, color, scale);
     }
 
-    // ---- SDF text path -----------------------------------------------------------------
-    // Routes through com.lume.client.nanovg.SdfTextRenderer — a real per-glyph Signed Distance
-    // Field font atlas (genuinely crisp at any scale, not a plain alpha-blended texture atlas
-    // like LumeFont/LumeFontBold above), built for ClickGuiScreen's own pan/zoom window space.
-    // Its drawWindowLocal formula collapses to a straight logical->framebuffer conversion when
-    // given an IDENTITY window-local transform (offX=0,offY=0,cx=0,cy=0,total=1), which is what
-    // lets a non-windowed overlay like LumeTitleMenu reuse it correctly without touching that
-    // file. Falls back to textBold/text (LumeFontBold/LumeFont) if the SDF text shader failed to
-    // init on this GPU — same defensive fallback chain every raw-GL helper here has.
+    // ---- SDF text path (DEPRECATED — kept only so existing call sites keep compiling) --------
+    // No longer routes through the raw-GL SdfTextRenderer; both now just call the vanilla-font
+    // text() / textBold() above. See the class doc for why. Callers can be simplified to call
+    // text()/textBold() directly next time any of them are touched anyway — not worth a churny
+    // rename-everywhere pass on its own.
 
     public static void sdfText(DrawContext ctx, TextRenderer tr, String s, double x, double y, int color, float scale, boolean bold) {
-        if (com.lume.client.nanovg.SdfTextRenderer.ensureInit()) {
-            int S = (int) Math.max(1, net.minecraft.client.MinecraftClient.getInstance().getWindow().getScaleFactor());
-            ctx.draw();
-            float drawScale = scale * (18f / com.lume.client.nanovg.SdfTextRenderer.FONT_PX) * S;
-            com.lume.client.nanovg.SdfTextRenderer.drawWindowLocal(0, 0, 0, 0, 1f, x * S, y * S, drawScale, s, color, bold);
-        } else if (bold) {
-            textBold(ctx, tr, s, x, y, color, scale);
-        } else {
-            text(ctx, tr, s, x, y, color, false, scale);
-        }
+        if (bold) textBold(ctx, tr, s, x, y, color, scale);
+        else text(ctx, tr, s, x, y, color, false, scale);
     }
 
     public static int sdfWidth(TextRenderer tr, String s, float scale, boolean bold) {
-        if (com.lume.client.nanovg.SdfTextRenderer.ensureInit()) {
-            float adv = com.lume.client.nanovg.SdfTextRenderer.advance(s, bold);
-            return Math.round(adv * scale * (18f / com.lume.client.nanovg.SdfTextRenderer.FONT_PX));
-        }
         return bold ? widthBold(tr, s, scale) : width(tr, s, scale);
     }
 
-    private static double sdfVCenterY(String s, double boxY, double boxH, float scale, boolean bold) {
-        if (com.lume.client.nanovg.SdfTextRenderer.ensureInit()) {
-            double ds = scale * (18f / com.lume.client.nanovg.SdfTextRenderer.FONT_PX);
-            return boxY + boxH / 2.0 - com.lume.client.nanovg.SdfTextRenderer.opticalCenterPx(bold) * ds;
-        }
-        return vCenterY(s, boxY, boxH, scale, bold);
-    }
-
     public static void sdfTextVCentered(DrawContext ctx, TextRenderer tr, String s, double x, double boxY, double boxH, int color, float scale, boolean bold) {
-        sdfText(ctx, tr, s, x, sdfVCenterY(s, boxY, boxH, scale, bold), color, scale, bold);
+        sdfText(ctx, tr, s, x, vCenterY(boxY, boxH, scale), color, scale, bold);
     }
 
     public static void sdfTextCentered(DrawContext ctx, TextRenderer tr, String s, double boxX, double boxY, double boxW, double boxH, int color, float scale, boolean bold) {
@@ -192,25 +146,13 @@ public final class RenderUtil {
     }
 
     public static int width(TextRenderer tr, String s, float scale) {
-        if (hasCyrillic(s)) return Math.round(tr.getWidth(s) * scale * 2f);
-        LumeFont.ensure();
-        if (LumeFont.ready) {
-            return Math.round(LumeFont.advance(s) * scale * (18f / LumeFont.FONT_PX));
-        }
         return Math.round(tr.getWidth(t(s)) * scale);
     }
 
-    /** {@link #width}, but measuring the bold face (LumeFontBold's advances differ slightly
-     *  from Medium's) — needed for accurate horizontal centring in {@link #textBoldCentered}. */
+    /** {@link #width}, but measuring the bold face — needed for accurate horizontal centring
+     *  in {@link #textBoldCentered}. */
     public static int widthBold(TextRenderer tr, String s, float scale) {
-        if (hasCyrillic(s)) {
-            return Math.round(tr.getWidth(Text.literal(s).setStyle(Style.EMPTY.withBold(true))) * scale * 2f);
-        }
-        LumeFontBold.ensure();
-        if (LumeFontBold.ready) {
-            return Math.round(LumeFontBold.advance(s) * scale * (18f / LumeFontBold.FONT_PX));
-        }
-        return Math.round(tr.getWidth(t(s)) * scale);
+        return Math.round(tr.getWidth(tBold(s)) * scale);
     }
 
     /** Draw text with the VANILLA font (has Cyrillic) at a scale — for Russian HUD content. */
@@ -474,18 +416,20 @@ public final class RenderUtil {
      */
     public static void premiumBg(DrawContext ctx, int x, int y, int w, int h, int radius,
                                   float hoverAmt, int fillArgb, int outlineArgb, int glowRgb) {
+        // Outline-only highlight (glow removed per explicit request) — the rim itself brightens
+        // and tints toward glowRgb (normally the accent colour) on hover instead of a separate
+        // blurred halo, and thickens slightly for extra legibility.
+        int hoverOutline = lerp(outlineArgb, 0xFF000000 | (glowRgb & 0xFFFFFF), Math.min(1f, hoverAmt));
+        float outlineW = 1f + hoverAmt * 0.6f;
         if (com.lume.client.nanovg.SdfRenderer.ensureInit()) {
             net.minecraft.client.MinecraftClient mc = net.minecraft.client.MinecraftClient.getInstance();
             int S = (int) Math.max(1, mc.getWindow().getScaleFactor());
-            int glowA = Math.round(hoverAmt * 200f);
-            int glow = (glowA << 24) | (glowRgb & 0xFFFFFF);
             ctx.draw(); // flush queued DrawContext content before this raw-GL write — see ClickGuiScreen's own SdfRenderer calls
             com.lume.client.nanovg.SdfRenderer.box(x * S, y * S, w * S, h * S, radius * S,
-                    fillArgb, outlineArgb, 1f * S, glow, (4f + hoverAmt * 8f) * S);
+                    fillArgb, hoverOutline, outlineW * S, 0, 0f);
         } else {
             roundedRect(ctx, x, y, w, h, radius, fillArgb);
-            if (outlineArgb != 0) strokeRoundedRect(ctx, x, y, w, h, radius, 1, outlineArgb);
-            if (hoverAmt > 0.02f) glow(ctx, x, y, w, h, radius, glowRgb, Math.max(1, Math.round(hoverAmt * 5)));
+            if (hoverOutline != 0) strokeRoundedRect(ctx, x, y, w, h, radius, Math.max(1, Math.round(outlineW)), hoverOutline);
         }
     }
 
@@ -576,9 +520,9 @@ public final class RenderUtil {
     // the per-frame fill count massively versus filling every scanline.
     private static void roundedRectRaw(DrawContext ctx, int x, int y, int w, int h, int r, int color) {
         if (w <= 0 || h <= 0) return;
-        // Ultra Performance: sharp rect, one fill — no per-corner AA loop. Same panel, flat
-        // corners instead of rounded/glass. See Config#ultra().
-        if (r <= 0 || Config.ultra()) { ctx.fill(x, y, x + w, y + h, color); return; }
+        // Max Performance still rounds corners — the menu's shape must stay identical, only
+        // decorative effects (glow/blur/animation) are stripped elsewhere. See Config#ultra().
+        if (r <= 0) { ctx.fill(x, y, x + w, y + h, color); return; }
         r = Math.min(r, Math.min(w, h) / 2);
         int baseA = (color >>> 24) & 0xFF, rgb = color & 0xFFFFFF;
 
