@@ -190,7 +190,7 @@ def build_set(theme,style):
     # 20px-logical icon becomes a 60px-framebuffer one, drawn from a 24px source (a ~2.5x
     # upscale, hence the blur). 96px gives enough headroom to stay a downscale (crisp) even at
     # high GUI scale. Same design/proportions as before, just 4x the source resolution.
-    ICON_PX = 96
+    ICON_PX = 144  # was 96 — extra headroom for higher GUI-scale settings, still a trivial file size
     def icon_btn(nm,drawer):
         img=new(ICON_PX,ICON_PX); drawer(img); save(img,ICON_PX,ICON_PX,os.path.join(outdir,nm+'.png'))
     IC = ICON_PX/2
