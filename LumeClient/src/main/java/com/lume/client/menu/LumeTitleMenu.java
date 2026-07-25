@@ -161,7 +161,7 @@ public final class LumeTitleMenu {
         st[0] = approach(st[0], hov ? 1f : 0f, 8f, dt);
         RenderUtil.premiumBg(ctx, x, y, MAIN_BTN_W, MAIN_BTN_H, RADIUS, st[0], Theme.winBg(), Theme.rim(), Theme.accentRgb());
         int ly = y - RenderUtil.premiumLift(st[0]);
-        RenderUtil.textBoldCentered(ctx, MinecraftClient.getInstance().textRenderer, label, x, ly, MAIN_BTN_W, MAIN_BTN_H, Theme.txt(), 0.5f);
+        RenderUtil.textBoldCentered(ctx, MinecraftClient.getInstance().textRenderer, label, x, ly, MAIN_BTN_W, MAIN_BTN_H, Theme.txt(), 1.0f);
         hits.add(new Object[]{id, x, y, MAIN_BTN_W, MAIN_BTN_H});
     }
 
@@ -197,8 +197,8 @@ public final class LumeTitleMenu {
         };
         int textX = x + TH + 4;
         var tr = mc.textRenderer;
-        RenderUtil.textVCentered(ctx, tr, nick, textX, ly + TH / 2 - 7, 7, Theme.txt(), 0.43f);
-        RenderUtil.textVCentered(ctx, tr, subLabel, textX, ly + TH / 2, 7, Theme.txtDim(), 0.33f);
+        RenderUtil.textVCentered(ctx, tr, nick, textX, ly + TH / 2 - 7, 7, Theme.txt(), 0.75f);
+        RenderUtil.textVCentered(ctx, tr, subLabel, textX, ly + TH / 2, 7, Theme.txtDim(), 0.58f);
         hits.add(new Object[]{"account", x, y, ACCT_W, TH});
     }
 
@@ -294,7 +294,7 @@ public final class LumeTitleMenu {
         var tr = MinecraftClient.getInstance().textRenderer;
         int ry = py + headerH;
         for (Row r : rows) {
-            RenderUtil.textVCentered(ctx, tr, r.label(), px + 12, ry, srowH, Theme.txt(), 0.45f);
+            RenderUtil.textVCentered(ctx, tr, r.label(), px + 12, ry, srowH, Theme.txt(), 0.8f);
             float[] rh = a("set:" + r.kind());
             rh[0] = approach(rh[0], inside(mouseX, mouseY, rowX, ry, rowW, srowH) ? 1f : 0f, 10f, dt);
             cyclerVanilla(ctx, rowX, ry, rowW, srowH, r.value().get(), rh[0]);
@@ -312,16 +312,16 @@ public final class LumeTitleMenu {
     private static void cyclerVanilla(DrawContext ctx, int x, int y, int w, int h, String value, float hoverAmt) {
         var tr = MinecraftClient.getInstance().textRenderer;
         RenderUtil.premiumBg(ctx, x, y, w, h, 6, hoverAmt, Theme.glassRow(), 0, Theme.accentRgb());
-        RenderUtil.textVCentered(ctx, tr, "‹", x + 6, y, h, Theme.txtDim(), 0.45f);
-        RenderUtil.textVCentered(ctx, tr, "›", x + w - 12, y, h, Theme.txtDim(), 0.45f);
-        RenderUtil.textCentered(ctx, tr, value, x, y, w, h, Theme.txt(), 0.45f);
+        RenderUtil.textVCentered(ctx, tr, "‹", x + 6, y, h, Theme.txtDim(), 0.8f);
+        RenderUtil.textVCentered(ctx, tr, "›", x + w - 12, y, h, Theme.txtDim(), 0.8f);
+        RenderUtil.textCentered(ctx, tr, value, x, y, w, h, Theme.txt(), 0.8f);
     }
 
     /** Shared drop-shadow + glass window + title, used by every panel below. */
     private static void panelChrome(DrawContext ctx, int px, int py, int pw, int ph, String title) {
         var tr = MinecraftClient.getInstance().textRenderer;
         RenderUtil.panelBg(ctx, px, py, pw, ph, 10, Theme.winBg(), Theme.rim());
-        if (title != null) RenderUtil.textVCentered(ctx, tr, title, px + 12, py, 22, Theme.txtDim(), 0.48f);
+        if (title != null) RenderUtil.textVCentered(ctx, tr, title, px + 12, py, 22, Theme.txtDim(), 0.85f);
     }
 
     // ---------------------------------------------------------------------
@@ -351,9 +351,9 @@ public final class LumeTitleMenu {
             float[] rh = a("fcrow:" + i);
             rh[0] = approach(rh[0], inside(mouseX, mouseY, rowX, ry, rowW, rowH) ? 1f : 0f, 10f, dt);
             RenderUtil.premiumBg(ctx, rowX, ry, rowW, rowH, 6, rh[0], Theme.glassRow(), 0, Theme.accentRgb());
-            RenderUtil.text(ctx, tr, e.name, rowX + 6, ry + 4, Theme.txt(), false, 0.4f);
-            RenderUtil.text(ctx, tr, e.address, rowX + 6, ry + rowH - 12, Theme.txtDim(), false, 0.32f);
-            RenderUtil.textCentered(ctx, tr, "✕", delX, ry, delW, rowH, Theme.txtDim(), 0.4f);
+            RenderUtil.text(ctx, tr, e.name, rowX + 6, ry + 4, Theme.txt(), false, 0.7f);
+            RenderUtil.text(ctx, tr, e.address, rowX + 6, ry + rowH - 12, Theme.txtDim(), false, 0.56f);
+            RenderUtil.textCentered(ctx, tr, "✕", delX, ry, delW, rowH, Theme.txtDim(), 0.7f);
             hits.add(new Object[]{"fcConnect", rowX, ry, rowW - delW - 4, rowH, i});
             hits.add(new Object[]{"fcDelete", delX, ry, delW, rowH, i});
             ry += rowH + rowGap;
@@ -362,7 +362,7 @@ public final class LumeTitleMenu {
             float[] ah = a("fcAddRow");
             ah[0] = approach(ah[0], inside(mouseX, mouseY, rowX, ry, rowW, rowH) ? 1f : 0f, 10f, dt);
             RenderUtil.premiumBg(ctx, rowX, ry, rowW, rowH, 6, ah[0], Theme.glassRow(), 0, Theme.accentRgb());
-            RenderUtil.textCentered(ctx, tr, "+ " + com.lume.client.Lang.tUI("Add server"), rowX, ry, rowW, rowH, Theme.accent(), 0.4f);
+            RenderUtil.textCentered(ctx, tr, "+ " + com.lume.client.Lang.tUI("Add server"), rowX, ry, rowW, rowH, Theme.accent(), 0.7f);
             hits.add(new Object[]{"fcOpenForm", rowX, ry, rowW, rowH});
         } else {
             panelField(ctx, tr, "fc:name", rowX, ry, rowW, 20, "server name", fcName);
@@ -374,9 +374,9 @@ public final class LumeTitleMenu {
             saveH[0] = approach(saveH[0], inside(mouseX, mouseY, rowX, ry, halfW, 22) ? 1f : 0f, 10f, dt);
             cancelH[0] = approach(cancelH[0], inside(mouseX, mouseY, rowX + halfW + 6, ry, halfW, 22) ? 1f : 0f, 10f, dt);
             RenderUtil.premiumBg(ctx, rowX, ry, halfW, 22, 6, saveH[0], Theme.accent(), 0, Theme.accentRgb());
-            RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Add"), rowX, ry, halfW, 22, Theme.activeText(), 0.4f);
+            RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Add"), rowX, ry, halfW, 22, Theme.activeText(), 0.7f);
             RenderUtil.premiumBg(ctx, rowX + halfW + 6, ry, halfW, 22, 6, cancelH[0], Theme.glassRow(), 0, Theme.accentRgb());
-            RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Cancel"), rowX + halfW + 6, ry, halfW, 22, Theme.txt(), 0.4f);
+            RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Cancel"), rowX + halfW + 6, ry, halfW, 22, Theme.txt(), 0.7f);
             hits.add(new Object[]{"fcSave", rowX, ry, halfW, 22});
             hits.add(new Object[]{"fcCancel", rowX + halfW + 6, ry, halfW, 22});
         }
@@ -403,8 +403,8 @@ public final class LumeTitleMenu {
             rh[0] = approach(rh[0], inside(mouseX, mouseY, rowX, ry, rowW, rowH) ? 1f : 0f, 10f, dt);
             RenderUtil.premiumBg(ctx, rowX, ry, rowW, rowH, 6, rh[0], Theme.glassRow(), 0, Theme.accentRgb());
             RenderUtil.roundedRect(ctx, rowX + 5, ry + rowH / 2 - 3, 5, 5, 3, online ? 0xFF6FCF7F : Theme.txtDim());
-            RenderUtil.textVCentered(ctx, tr, name, rowX + 14, ry, rowH, Theme.txt(), 0.4f);
-            RenderUtil.textCentered(ctx, tr, "✕", delX, ry, delW, rowH, Theme.txtDim(), 0.4f);
+            RenderUtil.textVCentered(ctx, tr, name, rowX + 14, ry, rowH, Theme.txt(), 0.7f);
+            RenderUtil.textCentered(ctx, tr, "✕", delX, ry, delW, rowH, Theme.txtDim(), 0.7f);
             hits.add(new Object[]{"frConnect", rowX, ry, rowW - delW - 4, rowH, name});
             hits.add(new Object[]{"frDelete", delX, ry, delW, rowH, name});
             ry += rowH + rowGap;
@@ -414,12 +414,12 @@ public final class LumeTitleMenu {
         RenderUtil.roundedRect(ctx, rowX, ry, fieldW, fieldH, 6, foc ? Theme.glassHov() : Theme.glassRow());
         if (foc) RenderUtil.roundedRect(ctx, rowX, ry + fieldH - 1, fieldW, 1, 1, Theme.accent());
         String show = frAddName.isEmpty() && !foc ? com.lume.client.Lang.tUI("friend name") : frAddName + (foc ? "_" : "");
-        RenderUtil.textVCentered(ctx, tr, show, rowX + 5, ry, fieldH, frAddName.isEmpty() && !foc ? Theme.txtDim() : Theme.txt(), 0.36f);
+        RenderUtil.textVCentered(ctx, tr, show, rowX + 5, ry, fieldH, frAddName.isEmpty() && !foc ? Theme.txtDim() : Theme.txt(), 0.63f);
         int addX = rowX + fieldW + 6;
         float[] addH = a("frAddHov");
         addH[0] = approach(addH[0], inside(mouseX, mouseY, addX, ry, addW, fieldH) ? 1f : 0f, 10f, dt);
         RenderUtil.premiumBg(ctx, addX, ry, addW, fieldH, 6, addH[0], Theme.accent(), 0, Theme.accentRgb());
-        RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Add"), addX, ry, addW, fieldH, Theme.activeText(), 0.38f);
+        RenderUtil.textCentered(ctx, tr, com.lume.client.Lang.tUI("Add"), addX, ry, addW, fieldH, Theme.activeText(), 0.67f);
         hits.add(new Object[]{"field:fr:add", rowX, ry, fieldW, fieldH});
         hits.add(new Object[]{"frAdd", addX, ry, addW, fieldH});
         hits.add(new Object[]{"panel", px, py, pw, ph});
@@ -433,7 +433,7 @@ public final class LumeTitleMenu {
         int color = value.isEmpty() && !foc ? Theme.txtDim() : Theme.txt();
         RenderUtil.roundedRect(ctx, x, y, w, h, 5, foc ? Theme.glassHov() : Theme.glassRow());
         if (foc) RenderUtil.roundedRect(ctx, x, y + h - 1, w, 1, 1, Theme.accent());
-        RenderUtil.textVCentered(ctx, tr, show, x + 6, y, h, color, 0.4f);
+        RenderUtil.textVCentered(ctx, tr, show, x + 6, y, h, color, 0.7f);
         hits.add(new Object[]{"field:" + id, x, y, w, h});
     }
 
