@@ -181,14 +181,25 @@ def build_set(theme,style):
     # Glyph-ONLY sprites (transparent bg) — the SDF shader now draws the button background live
     # (fill + contour glow + lift), so these just blit the icon on top of it. Was: background
     # baked into the same PNG as the glyph.
+    #
+    # Baked at 96x96 now (was 24x24 — same 4x bump {@code IC}/radii below apply) — at typical GUI
+    # scale factors (2-4x, common on most monitors) a 24px source was being upscaled ON SCREEN,
+    # which is what actually caused the "looks blurry/cheap" report, not the icon design itself:
+    # MenuAssets.blit draws these at roughly 14-20 logical px, which DrawContext then multiplies
+    # by the window's GUI scale factor when rendering to the real framebuffer — at scale 3, a
+    # 20px-logical icon becomes a 60px-framebuffer one, drawn from a 24px source (a ~2.5x
+    # upscale, hence the blur). 96px gives enough headroom to stay a downscale (crisp) even at
+    # high GUI scale. Same design/proportions as before, just 4x the source resolution.
+    ICON_PX = 96
     def icon_btn(nm,drawer):
-        img=new(24,24); drawer(img); save(img,24,24,os.path.join(outdir,nm+'.png'))
-    icon_btn('ic_theme', lambda im:(ic_sun(ImageDraw.Draw(im),12*SS,12*SS,5*SS,inkc) if theme=='light' else ic_moon(im,12*SS,12*SS,5*SS,inkc)))
-    icon_btn('ic_colors',lambda im: ic_brush(ImageDraw.Draw(im),12*SS,12*SS,7*SS,inkc))
-    icon_btn('ic_gear',  lambda im: ic_gear(im,12*SS,12*SS,4.2*SS,inkc,holecol))
-    icon_btn('ic_globe', lambda im: ic_globe(ImageDraw.Draw(im),12*SS,12*SS,7*SS,inkc))
-    icon_btn('ic_x',     lambda im: ic_x(ImageDraw.Draw(im),12*SS,12*SS,7*SS,inkc))
-    icon_btn('ic_menu',  lambda im: draw_glass_star(im,4,4,16,pal))
+        img=new(ICON_PX,ICON_PX); drawer(img); save(img,ICON_PX,ICON_PX,os.path.join(outdir,nm+'.png'))
+    IC = ICON_PX/2
+    icon_btn('ic_theme', lambda im:(ic_sun(ImageDraw.Draw(im),IC*SS,IC*SS,20*SS,inkc) if theme=='light' else ic_moon(im,IC*SS,IC*SS,20*SS,inkc)))
+    icon_btn('ic_colors',lambda im: ic_brush(ImageDraw.Draw(im),IC*SS,IC*SS,28*SS,inkc))
+    icon_btn('ic_gear',  lambda im: ic_gear(im,IC*SS,IC*SS,16.8*SS,inkc,holecol))
+    icon_btn('ic_globe', lambda im: ic_globe(ImageDraw.Draw(im),IC*SS,IC*SS,28*SS,inkc))
+    icon_btn('ic_x',     lambda im: ic_x(ImageDraw.Draw(im),IC*SS,IC*SS,28*SS,inkc))
+    icon_btn('ic_menu',  lambda im: draw_glass_star(im,16,16,64,pal))
 
     img=new(96,24); draw_surface(img,96,24,7,style,theme,pal); save(img,96,24,os.path.join(outdir,'pill.png'))
     img=new(108,24); draw_surface(img,108,24,7,style,theme,pal); save(img,108,24,os.path.join(outdir,'account.png'))
