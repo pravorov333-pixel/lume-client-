@@ -35,6 +35,23 @@ ROI          = профит / (цена_покупки + переводы)
 > ⚠️ **Комиссии в `config.example.yaml` примерные.** Маркеты их меняют, поэтому перед реальными покупками сверьте
 > `sell_fee`, `price_markup`, `deposit_cost_ton` и `withdraw_cost_ton` с тем, что показывают сами маркеты.
 
+## Запуск прямо на Android-телефоне (Termux)
+
+Бот работает, пока телефон включён, есть интернет и Termux не закрыт. На iPhone так не получится.
+
+1. Установите **Termux** из F-Droid (https://f-droid.org/packages/com.termux/). Версия из Google Play устарела.
+2. Создайте бота в @BotFather и скопируйте токен.
+3. Откройте Termux и вставьте одну команду:
+   ```
+   curl -sL https://raw.githubusercontent.com/pravorov333-pixel/lume-client-/ccr-ac390c81-vj2x5m/GiftSniper/termux/install.sh | bash
+   ```
+   Установка займёт 5–15 минут. В конце скрипт попросит токен бота.
+4. Запуск: `gs`. Обновить код: `gs update`. Сменить токен: `gs token`.
+5. В Telegram: `/start` → `/api <api_id> <api_hash>` → `/login` (подробно — в разделе ниже, шаг 4).
+
+Чтобы Android не усыплял бота: в настройках телефона отключите для Termux оптимизацию батареи.
+Команда `gs` сама включает `termux-wake-lock`.
+
 ## Запуск с телефона (без компьютера)
 
 Боту нужен сервер, который работает круглосуточно. Проще всего — [Railway](https://railway.com): там всё делается из браузера телефона.
