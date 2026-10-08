@@ -125,6 +125,12 @@ def load_config(path: str | Path) -> Config:
     cfg.api_hash = env.get("TG_API_HASH", cfg.api_hash)
     cfg.bot_token = env.get("BOT_TOKEN", cfg.bot_token)
     cfg.proxy = env.get("GIFTSNIPER_PROXY", cfg.proxy) or None
+    cfg.db_path = env.get("DB_PATH", cfg.db_path)
+    if env.get("ADMIN_IDS"):
+        cfg.admin_ids = [int(x) for x in env["ADMIN_IDS"].replace(" ", "").split(",") if x]
+    if env.get("CHANNEL_ID"):
+        v = env["CHANNEL_ID"].strip()
+        cfg.channel_id = int(v) if v.lstrip("-").isdigit() else v
     for name, m in cfg.markets.items():
         v = env.get(f"{name.upper()}_INIT_DATA")
         if v:

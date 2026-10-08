@@ -45,7 +45,7 @@ class Engine:
 
     @property
     def live(self) -> dict[str, Market]:
-        return {n: m for n, m in self.markets.items() if m.ready}
+        return {n: m for n, m in self.markets.items() if m.ready and m.cfg.enabled}
 
     # ---- стаканы и флоры ------------------------------------------------
     async def book(self, collection: str, model: str | None) -> dict[str, list[Listing]]:
@@ -183,7 +183,7 @@ class Engine:
         st = self.stats[m.name]
         fails = 0
         while True:
-            if self.snipe_on and m.ready:
+            if self.snipe_on and m.ready and m.cfg.enabled:
                 try:
                     listings = await m.latest()
                     st["polls"] += 1
@@ -212,11 +212,13 @@ class Engine:
         async def _start(m: Market):
             try:
                 await m.start()
+                m.last_error = None
                 log.info("Маркет %s: готов", m.name)
             except Exception as e:
                 m.last_error = f"{type(e).__name__}: {e}"
                 log.error("Маркет %s не запустился: %s", m.name, m.last_error)
-        await asyncio.gather(*(_start(m) for m in self.markets.values()))
+        await asyncio.gather(*(_start(m) for m in self.markets.values()
+                               if m.cfg.enabled and not m.ready))
 
     async def run(self) -> None:
         await self.start_markets()
@@ -225,10 +227,14 @@ class Engine:
         await asyncio.gather(*tasks)
 
     async def _housekeeping(self) -> None:
-        last_reauth = time.time()
+        last_reauth = last_retry = time.time()
         while True:
             await self.rates.refresh()
             await asyncio.sleep(60)
+            # маркеты, которые не стартовали (нет входа в аккаунт, сбой сети), пробуем снова
+            if time.time() - last_retry > 300:
+                last_retry = time.time()
+                await self.start_markets()
             if time.time() - last_reauth < 3600:
                 continue
             last_reauth = time.time()

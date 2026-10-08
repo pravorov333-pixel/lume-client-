@@ -1,0 +1,7 @@
+config.yaml
+*.session
+*.db
+.venv
+tests
+__pycache__
+.pytest_cache

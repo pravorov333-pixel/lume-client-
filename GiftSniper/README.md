@@ -35,14 +35,35 @@ ROI          = профит / (цена_покупки + переводы)
 > ⚠️ **Комиссии в `config.example.yaml` примерные.** Маркеты их меняют, поэтому перед реальными покупками сверьте
 > `sell_fee`, `price_markup`, `deposit_cost_ton` и `withdraw_cost_ton` с тем, что показывают сами маркеты.
 
-## Установка
+## Запуск с телефона (без компьютера)
+
+Боту нужен сервер, который работает круглосуточно. Проще всего — [Railway](https://railway.com): там всё делается из браузера телефона.
+
+1. **Бот.** В Telegram откройте @BotFather → `/newbot` → придумайте имя → скопируйте токен.
+2. **Ключи API.** Откройте https://my.telegram.org → войдите по номеру → *API development tools* →
+   создайте приложение (название любое) → запомните `api_id` и `api_hash`.
+3. **Сервер.** railway.com → *Login with GitHub* → *New Project* → *Deploy from GitHub repo* →
+   выберите этот репозиторий. Затем в настройках сервиса:
+   - *Settings → Source → Root Directory*: `GiftSniper` (и нужную ветку);
+   - *Variables*: `BOT_TOKEN` = токен из шага 1;
+   - *Volumes*: добавьте том и смонтируйте в `/data` (там хранятся вход в аккаунт и настройки).
+   Railway сам соберёт `Dockerfile` и запустит бота.
+4. **В боте:** `/start` (первый, кто написал, становится владельцем) → `/api <api_id> <api_hash>` →
+   `/login` → кнопка «Отправить мой номер» → код из Telegram **через пробелы** (`1 2 3 4 5`) →
+   облачный пароль, если он есть. После этого бот подключит маркеты и начнёт присылать находки.
+5. Настройки меняются командой `/set` (список — `/settings`), например
+   `/set min_profit 1`, `/set channel @mychannel`, `/set digest 60`, `/set dry_run off`.
+
+Подойдёт и любой VPS с Docker: `docker build -t giftsniper . && docker run -d -e BOT_TOKEN=... -v gs:/data giftsniper`.
+
+## Установка на компьютере
 
 ```bash
 cd GiftSniper
 python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp config.example.yaml config.yaml                     # заполнить api_id, api_hash, bot_token, admin_ids
-python -m giftsniper login                             # один раз: телефон + код из Telegram
+python -m giftsniper login                             # или войти потом через /login в боте
 ```
 
 - `api_id` и `api_hash` берутся на https://my.telegram.org. Аккаунт нужен, чтобы открывать мини-аппы маркетов
@@ -60,7 +81,8 @@ python -m giftsniper arb --top 20                  # разовая таблиц
 python -m giftsniper floor "Plush Pepe" --model Gold
 ```
 
-Команды бота: `/floor`, `/arb`, `/snipe on|off`, `/autobuy on|off`, `/finds`, `/status`, `/digest`.
+Команды бота: `/menu`, `/floor`, `/arb`, `/snipe on|off`, `/autobuy on|off`, `/settings`, `/set`, `/finds`,
+`/status`, `/digest`, `/login`, `/logout`.
 
 ## Структура
 
@@ -89,7 +111,8 @@ tests/                 pytest
 - **Аккаунт.** Слишком частые запросы к Telegram вызывают FloodWait, поэтому маркет Telegram опрашивается
   по кругу и понемногу (`watch`, `collections_per_cycle`). Автоматизация может нарушать правила
   отдельных маркетов: решение и ответственность за ним остаются за вами.
-- Файл `*.session` даёт полный доступ к вашему Telegram-аккаунту. Никому его не передавайте.
+- База (`giftsniper.db` / том `/data`) хранит сессию вашего Telegram-аккаунта — это полный доступ к нему.
+  Не давайте никому доступ к серверу и токену бота. Бот отвечает только владельцу.
 
 ## Тесты
 

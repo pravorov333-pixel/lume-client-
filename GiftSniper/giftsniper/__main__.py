@@ -14,6 +14,7 @@ import logging
 import re
 from html import unescape
 
+from . import settings
 from .config import load_config
 from .engine import Engine
 from .format import fmt_compare, fmt_opp, fmt_spreads
@@ -21,57 +22,61 @@ from .http import Http
 from .markets import REGISTRY, Ctx
 from .rates import Rates
 from .storage import Store
-from .tgauth import make_client
+from .tgauth import Account
 
 
 def plain(html: str) -> str:
     return unescape(re.sub(r"<[^>]+>", "", html))
 
 
-async def build_engine(cfg) -> tuple[Engine, object, Http]:
-    tg = None
-    if cfg.api_id and cfg.api_hash:
-        tg = make_client(cfg)
-        await tg.connect()
-        if not await tg.is_user_authorized():
-            await tg.disconnect()
-            raise SystemExit("Сессия не авторизована — запустите: python -m giftsniper login")
+async def build_engine(cfg) -> tuple[Engine, Account, Http]:
+    store = Store(cfg.db_path)
+    settings.load_saved(cfg, store)          # настройки, изменённые через /set
     http = Http(proxy=cfg.proxy)
     rates = Rates(cfg.rates, http)
     await rates.refresh(force=True)
-    ctx = Ctx(tg=tg, rates=rates, proxy=cfg.proxy)
-    markets = {n: REGISTRY[n](m, ctx) for n, m in cfg.markets.items() if m.enabled and n in REGISTRY}
-    engine = Engine(cfg, markets, Store(cfg.db_path), rates)
-    return engine, tg, http
+    ctx = Ctx(tg=None, rates=rates, proxy=cfg.proxy)
+    account = Account(cfg, store, ctx)
+    try:
+        await account.connect()                # подхватит сохранённую сессию, если есть
+    except Exception as e:
+        logging.getLogger("main").warning("Telegram: %s", e)
+    markets = {n: REGISTRY[n](m, ctx) for n, m in cfg.markets.items() if n in REGISTRY}
+    engine = Engine(cfg, markets, store, rates)
+    return engine, account, http
 
 
-async def shutdown(engine: Engine, tg, http: Http) -> None:
+async def shutdown(engine: Engine, account: Account, http: Http) -> None:
     for m in engine.markets.values():
         try:
             await m.close()
         except Exception:
             pass
     await http.close()
-    if tg:
-        await tg.disconnect()
+    await account.close()
 
 
 async def cmd_login(cfg) -> None:
-    tg = make_client(cfg)
-    await tg.start()
-    me = await tg.get_me()
-    print(f"Готово: вошли как {me.first_name} (id {me.id}). Сессия: {cfg.session}.session")
-    await tg.disconnect()
+    """Вход из консоли (альтернатива /login в боте)."""
+    engine, account, http = await build_engine(cfg)
+    try:
+        if not account.has_api:
+            raise SystemExit("Нужны api_id и api_hash (config.yaml или TG_API_ID/TG_API_HASH)")
+        await account.client.start()
+        account._finish()
+        print(f"Готово: вошли как {await account.me()}. Сессия сохранена в {cfg.db_path}")
+    finally:
+        await shutdown(engine, account, http)
 
 
 async def cmd_run(cfg, with_bot: bool) -> None:
-    engine, tg, http = await build_engine(cfg)
+    engine, account, http = await build_engine(cfg)
     try:
         if with_bot:
-            if not cfg.bot_token or not cfg.admin_ids:
-                raise SystemExit("Для режима run нужны bot_token и admin_ids в config.yaml")
+            if not cfg.bot_token:
+                raise SystemExit("Нужен BOT_TOKEN (от @BotFather) — в config.yaml или переменной окружения")
             from .bot import build
-            bot, dp, background = build(engine)
+            bot, dp, background = build(engine, account)
             await asyncio.gather(engine.run(), dp.start_polling(bot), *background)
         else:
             async def show(opp):
@@ -83,26 +88,26 @@ async def cmd_run(cfg, with_bot: bool) -> None:
             engine.on_message = say
             await engine.run()
     finally:
-        await shutdown(engine, tg, http)
+        await shutdown(engine, account, http)
 
 
 async def cmd_arb(cfg, top: int) -> None:
-    engine, tg, http = await build_engine(cfg)
+    engine, account, http = await build_engine(cfg)
     try:
         await engine.start_markets()
         print(plain(fmt_spreads(await engine.spreads(), top)))
     finally:
-        await shutdown(engine, tg, http)
+        await shutdown(engine, account, http)
 
 
 async def cmd_floor(cfg, collection: str, model: str | None) -> None:
-    engine, tg, http = await build_engine(cfg)
+    engine, account, http = await build_engine(cfg)
     try:
         await engine.start_markets()
         book = await engine.book(collection, model)
         print(plain(fmt_compare(collection, model, book, engine.live, cfg.sniper.undercut)))
     finally:
-        await shutdown(engine, tg, http)
+        await shutdown(engine, account, http)
 
 
 def main() -> None:

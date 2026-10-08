@@ -255,3 +255,51 @@ def test_autobuy_budget_is_atomic(tmp_path):
         await eng.buy(opps[0], manual=True)   # повторная покупка того же лота игнорируется
     asyncio.run(run())
     assert len(a.bought) == 1
+
+
+def test_settings_apply_and_reload(tmp_path):
+    from giftsniper import settings
+    store = Store(str(tmp_path / "s.db"))
+    cfg = load_config(tmp_path / "missing.yaml")
+    assert settings.apply(cfg, store, "min_profit", "1,5") == "1.5"
+    assert settings.apply(cfg, store, "min_roi", "12%") == "12%"
+    assert settings.apply(cfg, store, "dry_run", "off") == "off"
+    assert settings.apply(cfg, store, "fee_portals", "4") == "4%"
+    assert settings.apply(cfg, store, "ab_tonnel", "on") == "on"
+    assert settings.apply(cfg, store, "channel", "@mychan") == "@mychan"
+    with pytest.raises(KeyError):
+        settings.apply(cfg, store, "nope", "1")
+    with pytest.raises(ValueError):
+        settings.apply(cfg, store, "level", "abc")
+    fresh = load_config(tmp_path / "missing.yaml")
+    settings.load_saved(fresh, store)
+    assert fresh.sniper.min_profit_ton == 1.5
+    assert fresh.sniper.min_roi == pytest.approx(0.12)
+    assert fresh.autobuy.dry_run is False
+    assert fresh.markets["portals"].sell_fee == pytest.approx(0.04)
+    assert fresh.markets["tonnel"].autobuy is True
+    assert fresh.channel_id == "@mychan"
+    assert "min_profit" in settings.describe(fresh)
+
+
+def test_bot_builds(tmp_path):
+    from giftsniper.bot import build
+    from giftsniper.markets.base import Ctx
+    from giftsniper.tgauth import Account
+    cfg = load_config(tmp_path / "missing.yaml")
+    cfg.bot_token = "123456:" + "A" * 35
+    store = Store(str(tmp_path / "b.db"))
+    rates = Rates(cfg.rates)
+    eng = Engine(cfg, {}, store, rates)
+    acc = Account(cfg, store, Ctx(tg=None, rates=rates))
+    assert not acc.has_api
+    store.set("api_id", "1")
+    store.set("api_hash", "x")
+    assert acc.has_api and acc.api == (1, "x")
+
+    async def run():
+        bot, dp, bg = build(eng, acc)
+        for c in bg:
+            c.close()
+        await bot.session.close()
+    asyncio.run(run())

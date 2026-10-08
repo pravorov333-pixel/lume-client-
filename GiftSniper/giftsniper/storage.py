@@ -7,7 +7,7 @@ import time
 
 class Store:
     def __init__(self, path: str):
-        self.db = sqlite3.connect(path)
+        self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS seen (
                 market TEXT, listing_id TEXT, price REAL, ts REAL,
@@ -15,10 +15,27 @@ class Store:
             CREATE TABLE IF NOT EXISTS finds (
                 ts REAL, market TEXT, listing_id TEXT, title TEXT,
                 price_ton REAL, exit_market TEXT, profit_ton REAL, roi REAL);
+            CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
             CREATE TABLE IF NOT EXISTS purchases (
                 ts REAL, market TEXT, listing_id TEXT, title TEXT,
                 price_ton REAL, status TEXT, info TEXT);
         """)
+
+    # ---- key-value: сессия Telegram, настройки из бота ---------------------
+    def get(self, key: str, default: str | None = None) -> str | None:
+        row = self.db.execute("SELECT v FROM kv WHERE k = ?", (key,)).fetchone()
+        return row[0] if row else default
+
+    def set(self, key: str, value: str | None) -> None:
+        if value is None:
+            self.db.execute("DELETE FROM kv WHERE k = ?", (key,))
+        else:
+            self.db.execute("INSERT OR REPLACE INTO kv VALUES (?, ?)", (key, value))
+        self.db.commit()
+
+    def items(self, prefix: str) -> dict[str, str]:
+        rows = self.db.execute("SELECT k, v FROM kv WHERE k LIKE ?", (prefix + "%",)).fetchall()
+        return {k[len(prefix):]: v for k, v in rows}
 
     def is_new(self, market: str, listing_id: str, price: float) -> bool:
         """True, если такой лот с такой ценой ещё не встречался (и запоминает его)."""
