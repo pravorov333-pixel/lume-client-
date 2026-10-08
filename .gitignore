@@ -9,6 +9,7 @@
 !/LumeClient/
 !/LumeClient1165/
 !/LumeLauncher/
+!/GiftSniper/
 
 # ── Build artifacts / dependencies (don't commit) ────────────
 # Gradle (mod projects)
@@ -27,6 +28,15 @@ LumeClient1165/run/
 LumeLauncher/node_modules/
 LumeLauncher/dist/
 LumeLauncher/out/
+
+# Gift Sniper: секреты, сессии, база
+GiftSniper/config.yaml
+GiftSniper/*.session
+GiftSniper/*.session-journal
+GiftSniper/*.db
+GiftSniper/.venv/
+__pycache__/
+.pytest_cache/
 
 # ── OS / editor junk ─────────────────────────────────────────
 *.log

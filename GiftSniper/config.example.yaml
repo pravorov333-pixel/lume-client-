@@ -1,0 +1,82 @@
+# Скопируйте в config.yaml и заполните. config.yaml и *.session в git не попадают.
+
+# Telegram-аккаунт (https://my.telegram.org → API development tools).
+# Нужен для: авторизации в мини-аппах Portals/MRKT/Tonnel и для маркета Telegram.
+api_id: 0
+api_hash: ""
+session: giftsniper          # файл сессии giftsniper.session
+
+# Бот для алертов (@BotFather) и кто им может управлять
+bot_token: ""
+admin_ids: [123456789]       # ваш Telegram user id
+alert_chat_ids: []           # куда слать снайпы (пусто = админам в личку)
+
+# Канал для арбитражного дайджеста (бот должен быть админом канала)
+channel_id: null             # например -1001234567890 или "@mychannel"
+digest_interval_min: 0       # 0 = только вручную командой /digest
+digest_top: 10
+
+proxy: null                  # "http://user:pass@host:port" — если маркеты режут ваш IP
+db_path: giftsniper.db
+
+sniper:
+  poll_interval: 4           # сек между опросами каждого маркета
+  min_profit_ton: 0.5        # алерт, если чистая прибыль ≥ ...
+  min_roi: 0.08              # ... и доходность ≥ 8%
+  max_price_ton: 50          # не смотреть лоты дороже
+  undercut: 0.01             # продаём на 1% ниже флора, чтобы ушло быстро
+  match_level: model         # model — сравнивать с флором той же модели; collection — с флором коллекции
+  floor_ttl: 60              # сек кэша флоров
+  min_floor_depth: 2         # сколько чужих лотов должно быть на маркете продажи
+  collections_whitelist: []  # ["Plush Pepe", "Durov's Cap"] — только эти
+  collections_blacklist: []
+
+autobuy:
+  enabled: false             # можно включить и командой /autobuy on
+  dry_run: true              # true = только пишет «купил бы», денег не тратит
+  max_price_ton: 5
+  daily_budget_ton: 20
+  max_buys_per_hour: 3
+  min_profit_ton: 1.0
+  min_roi: 0.15
+
+rates:
+  ton_usd: 3.0               # запасной курс (обычно берётся с tonapi/coingecko)
+  star_buy_usd: 0.015        # почём вы покупаете Stars
+  star_sell_usd: 0.013       # почём выводятся Stars (Fragment)
+
+# Комиссии ориентировочные — сверьте с маркетами и поправьте!
+#   sell_fee          — доля, которую маркет удерживает с продавца
+#   price_markup      — наценка покупателя сверху цены продавца (у Tonnel ~10%)
+#   deposit_cost_ton  — стоимость завести подарок на маркет (перевод из Telegram)
+#   withdraw_cost_ton — стоимость вывести подарок с маркета в Telegram
+#   autobuy           — разрешить автопокупку именно на этом маркете
+#   init_data         — можно вставить initData вручную (или env PORTALS_INIT_DATA и т.п.)
+markets:
+  portals:
+    enabled: true
+    sell_fee: 0.05
+    deposit_cost_ton: 0.1
+    withdraw_cost_ton: 0.1
+    autobuy: false
+  mrkt:
+    enabled: true
+    sell_fee: 0.0
+    deposit_cost_ton: 0.1
+    withdraw_cost_ton: 0.1
+    autobuy: false
+  tonnel:
+    enabled: true
+    sell_fee: 0.0
+    price_markup: 0.10
+    deposit_cost_ton: 0.1
+    withdraw_cost_ton: 0.1
+    autobuy: false
+  telegram:
+    enabled: true
+    autobuy: false
+    sell_currency: STARS      # STARS или TON — в какой валюте будете перепродавать
+    stars_receive_share: 0.80 # доля продавца при продаже за Stars (уточняется из app config)
+    ton_receive_share: 0.95
+    watch: []                 # коллекции для опроса; пусто = все по кругу (медленно, есть лимиты)
+    collections_per_cycle: 4  # сколько коллекций опрашивать за цикл
